@@ -1,0 +1,17 @@
+# Binaries and build artifacts
+/tlua
+/tlua.exe
+*.exe
+*.test
+*.out
+
+# Compiler output (see tlua.json outDir)
+/dist/
+
+# OS / editor clutter
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
