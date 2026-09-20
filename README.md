@@ -1,6 +1,6 @@
 # TypeLua — 有类型的 Lua（TypeScript for Lua），Go 实现
 
-Lua 超集 + 静态类型 + 类型擦除编译到地道 Lua。目标：**功能完整、行为可预测、少 bug**。
+Lua 超集 + 静态类型 + 擦除编译到地道 Lua；另有小体积 `class` 运行时（5.1 兼容元表）。目标：**功能完整、行为可预测、少 bug**。
 
 ## 快速开始
 
@@ -27,6 +27,7 @@ go build -o tlua ./cmd/tlua
 | `stdlib` | `table/string/math/io/os`（动态垫片+自建类型边界） |
 | `lua54` | `<const>`/`<close>`/`goto`/位运算/`//`/长串 |
 | `compat` | 5.1/LuaJIT 兼容子集（`--target 5.1` 验证） |
+| `class` | 类：继承/抽象/可见性/静态/泛型/`super`（真机运行验证） |
 
 ## tlua.json
 
@@ -52,6 +53,12 @@ enum Color { Red = "red", Blue = "blue" }
 local c: Color = Color.Red
 local x: number | nil = nil
 if x ~= nil then print(x + 1) end
+
+class Dog extends Animal {
+  constructor(name: string) super(name) end,
+  speak(): string return "woof" end,
+}
+local d = Dog.new("rex")
 ```
 
 ## 工程结构（对标 tsc）
