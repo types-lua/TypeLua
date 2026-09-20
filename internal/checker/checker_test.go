@@ -101,6 +101,63 @@ end
 `)
 }
 
+func TestNarrowingMembers(t *testing.T) {
+	// The motivating case: no need to copy `node.next` into a local first.
+	expectOK(t, `
+local function get(n: { next?: { v: number } }): number
+  if n.next == nil then
+    return -1
+  end
+  return n.next.v
+end
+`)
+	expectOK(t, `
+local function get(n: { next?: { v: number } }): number
+  if n.next ~= nil then
+    return n.next.v
+  end
+  return -1
+end
+`)
+	// String-index form narrows the same member.
+	expectOK(t, `
+local function get(n: { next?: { v: number } }): number
+  if n["next"] ~= nil then
+    return n.next.v
+  end
+  return -1
+end
+`)
+	// `type()` comparisons narrow members too.
+	expectOK(t, `
+local function f(t: { v: number | string }): string
+  if type(t.v) == "string" then
+    return t.v
+  else
+    return "n"
+  end
+end
+`)
+	// Nested paths narrow through each level.
+	expectOK(t, `
+local function get(n: { inner: { next?: { v: number } } }): number
+  if n.inner.next ~= nil then
+    return n.inner.next.v
+  end
+  return -1
+end
+`)
+	// A nil-narrowed member rejects field access.
+	expectErr(t, `
+local function get(n: { next?: { v: number } }): number
+  if n.next == nil then
+    return n.next.v
+  end
+  return -1
+end
+`)
+}
+
 func TestMultiReturn(t *testing.T) {
 	expectOK(t, `
 local function divmod(a: number, b: number): (number, number) return a, b end

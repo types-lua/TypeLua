@@ -55,3 +55,12 @@ print(isMissing(nil), isMissing("a"))
 local scores: map<string, number> = { a = 1 }
 print(getOrThrow(scores, "a"))
 print(asNumber(10))
+
+-- Member narrowing: `node.next` needs no local copy first.
+local function head(n: { v: number, next?: { v: number } }): number
+  if n.next == nil then
+    return n.v
+  end
+  return n.next.v
+end
+print(head({ v = 1 }))

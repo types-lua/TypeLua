@@ -2324,11 +2324,23 @@ func (c *Checker) narrowCond(cond ast.Expr, truthy bool) map[string]types.Type {
 			if id, ok := asIdent(b.R); ok && isNilLit(b.L) {
 				return c.narrowNil(id, wantTruthy)
 			}
+			// Member paths (`node.next == nil`): refine the root.
+			if root, fields, ok := narrowPath(b.L); ok && len(fields) > 0 && isNilLit(b.R) {
+				return c.narrowNilPath(root, fields, wantTruthy)
+			}
+			if root, fields, ok := narrowPath(b.R); ok && len(fields) > 0 && isNilLit(b.L) {
+				return c.narrowNilPath(root, fields, wantTruthy)
+			}
 			// `type(x) == "s"` / `~=`.
 			if tn, lit, ok := asTypeofCompare(b); ok {
 				isEqualOp := b.Op == token.Eq
 				narrowTo := (isEqualOp == truthy)
 				return c.narrowTypeof(tn, lit, narrowTo)
+			}
+			if root, fields, lit, ok := asTypeofPathCompare(b); ok {
+				isEqualOp := b.Op == token.Eq
+				narrowTo := (isEqualOp == truthy)
+				return c.narrowTypeofPath(root, fields, lit, narrowTo)
 			}
 		}
 		// `a and b`: in true branch both true; in false unknown.
@@ -2350,6 +2362,124 @@ func (c *Checker) narrowCond(cond ast.Expr, truthy bool) map[string]types.Type {
 	return map[string]types.Type{}
 }
 
+// narrowPath decomposes a narrowable lvalue (`x`, `x.y`, `x["y"]`) into
+// its root variable and field chain. Anything else reports ok=false.
+func narrowPath(e ast.Expr) (root string, fields []string, ok bool) {
+	switch n := e.(type) {
+	case *ast.Ident:
+		return n.Name, nil, true
+	case *ast.ParenExpr:
+		return narrowPath(n.E)
+	case *ast.FieldExpr:
+		r, fs, ok := narrowPath(n.Obj)
+		if !ok {
+			return "", nil, false
+		}
+		return r, append(fs, n.Field.Name), true
+	case *ast.IndexExpr:
+		sl, isStr := n.Key.(*ast.StringLit)
+		if !isStr {
+			return "", nil, false
+		}
+		s, _ := parseStringLiteral(sl.Literal)
+		s = strings.Trim(s, `"'`)
+		r, fs, ok := narrowPath(n.Obj)
+		if !ok {
+			return "", nil, false
+		}
+		return r, append(fs, s), true
+	}
+	return "", nil, false
+}
+
+// refineRootType rebuilds t with the member at fields narrowed by refine
+// (which maps the effective member type to its narrowed form, as field
+// access would observe it). Only plain objects and class instances are
+// rebuilt; maps, enums, primitives, or a missing field report ok=false
+// and the condition simply does not narrow.
+func refineRootType(t types.Type, fields []string, refine func(types.Type) (types.Type, bool)) (types.Type, bool) {
+	if len(fields) == 0 {
+		return refine(t)
+	}
+	switch x := t.(type) {
+	case *types.Union:
+		var rs []types.Type
+		changed := false
+		for _, m := range x.Types {
+			r, ok := refineRootType(m, fields, refine)
+			if !ok {
+				rs = append(rs, m)
+				continue
+			}
+			changed = true
+			rs = append(rs, r)
+		}
+		if !changed {
+			return t, false
+		}
+		return types.NewUnion(rs), true
+	case *types.Object:
+		f, ok := x.Fields[fields[0]]
+		if !ok {
+			return t, false
+		}
+		ft, opt, ok := refineMemberField(f.Type, f.Optional, fields[1:], refine)
+		if !ok {
+			return t, false
+		}
+		cp := *x
+		cp.Fields = make(map[string]types.Field, len(x.Fields))
+		for k, v := range x.Fields {
+			cp.Fields[k] = v
+		}
+		nf := f
+		nf.Type, nf.Optional = ft, opt
+		cp.Fields[fields[0]] = nf
+		return &cp, true
+	case *types.Class:
+		cf, ok := x.Fields[fields[0]]
+		if !ok {
+			return t, false
+		}
+		ft, opt, ok := refineMemberField(cf.Type, cf.Optional, fields[1:], refine)
+		if !ok {
+			return t, false
+		}
+		cp := *x
+		cp.Fields = make(map[string]types.ClassField, len(x.Fields))
+		for k, v := range x.Fields {
+			cp.Fields[k] = v
+		}
+		ncf := cf
+		ncf.Type, ncf.Optional = ft, opt
+		cp.Fields[fields[0]] = ncf
+		return &cp, true
+	}
+	return t, false
+}
+
+// refineMemberField narrows one field's effective access type (adding `nil`
+// for optional fields, as field access observes), folding the result back
+// into (type, optional) storage form.
+func refineMemberField(ft types.Type, optional bool, rest []string, refine func(types.Type) (types.Type, bool)) (types.Type, bool, bool) {
+	eff := ft
+	if optional {
+		eff = types.NewUnion([]types.Type{ft, types.Nil})
+	}
+	sub, ok := refineRootType(eff, rest, refine)
+	if !ok {
+		return nil, false, false
+	}
+	if !optional {
+		return sub, false, true
+	}
+	stripped, hadNil := types.RemoveNil(sub)
+	if !hadNil {
+		return sub, false, true
+	}
+	return stripped, true, true
+}
+
 func asIdent(e ast.Expr) (string, bool) {
 	if id, ok := e.(*ast.Ident); ok {
 		return id.Name, true
@@ -2362,38 +2492,56 @@ func isNilLit(e ast.Expr) bool {
 	return ok
 }
 
+// matchTypeofCall matches `type(arg) == "lit"` shapes, returning the
+// inspected argument expression and the literal text.
+func matchTypeofCall(call, lit ast.Expr) (ast.Expr, string, bool) {
+	ce, ok := call.(*ast.CallExpr)
+	if !ok {
+		return nil, "", false
+	}
+	fn, ok := ce.Func.(*ast.Ident)
+	if !ok || fn.Name != "type" || len(ce.Args) != 1 {
+		return nil, "", false
+	}
+	sl, ok := lit.(*ast.StringLit)
+	if !ok {
+		return nil, "", false
+	}
+	s, _ := parseStringLiteral(sl.Literal)
+	// Strip quotes if our fallback left them.
+	s = strings.Trim(s, `"'`)
+	// Long-string edge: ignore.
+	return ce.Args[0], s, true
+}
+
 // asTypeofCompare matches `type(x) == "lit"` forms, returning (varname, literal, true).
 func asTypeofCompare(b *ast.BinOpExpr) (string, string, bool) {
-	try := func(call ast.Expr, lit ast.Expr) (string, string, bool) {
-		ce, ok := call.(*ast.CallExpr)
-		if !ok {
-			return "", "", false
+	if arg, s, ok := matchTypeofCall(b.L, b.R); ok {
+		if name, isId := asIdent(arg); isId {
+			return name, s, true
 		}
-		fn, ok := ce.Func.(*ast.Ident)
-		if !ok || fn.Name != "type" || len(ce.Args) != 1 {
-			return "", "", false
-		}
-		id, ok := ce.Args[0].(*ast.Ident)
-		if !ok {
-			return "", "", false
-		}
-		sl, ok := lit.(*ast.StringLit)
-		if !ok {
-			return "", "", false
-		}
-		s, _ := parseStringLiteral(sl.Literal)
-		// Strip quotes if our fallback left them.
-		s = strings.Trim(s, `"'`)
-		// Long-string edge: ignore.
-		return id.Name, s, true
 	}
-	if n, l, ok := try(b.L, b.R); ok {
-		return n, l, true
-	}
-	if n, l, ok := try(b.R, b.L); ok {
-		return n, l, true
+	if arg, s, ok := matchTypeofCall(b.R, b.L); ok {
+		if name, isId := asIdent(arg); isId {
+			return name, s, true
+		}
 	}
 	return "", "", false
+}
+
+// asTypeofPathCompare matches `type(path.to.member) == "lit"` forms.
+func asTypeofPathCompare(b *ast.BinOpExpr) (string, []string, string, bool) {
+	if arg, s, ok := matchTypeofCall(b.L, b.R); ok {
+		if root, fields, isPath := narrowPath(arg); isPath && len(fields) > 0 {
+			return root, fields, s, true
+		}
+	}
+	if arg, s, ok := matchTypeofCall(b.R, b.L); ok {
+		if root, fields, isPath := narrowPath(arg); isPath && len(fields) > 0 {
+			return root, fields, s, true
+		}
+	}
+	return "", nil, "", false
 }
 
 func (c *Checker) narrowNil(name string, isNil bool) map[string]types.Type {
@@ -2401,17 +2549,42 @@ func (c *Checker) narrowNil(name string, isNil bool) map[string]types.Type {
 	if sym == nil {
 		return map[string]types.Type{}
 	}
-	if isNil {
-		return map[string]types.Type{name: types.Nil}
-	}
-	stripped, hadNil := types.RemoveNil(sym.Type)
-	if !hadNil {
+	t, ok := narrowNilOfType(sym.Type, isNil)
+	if !ok {
 		return map[string]types.Type{}
+	}
+	return map[string]types.Type{name: t}
+}
+
+// narrowNilOfType narrows a type by nil-ness (shared by variable and
+// member narrowing).
+func narrowNilOfType(cur types.Type, isNil bool) (types.Type, bool) {
+	if isNil {
+		return types.Nil, true
+	}
+	stripped, hadNil := types.RemoveNil(cur)
+	if !hadNil {
+		return nil, false
 	}
 	if stripped.Kind() == types.KNever {
 		stripped = types.Never
 	}
-	return map[string]types.Type{name: stripped}
+	return stripped, true
+}
+
+// narrowNilPath narrows the member at fields of the root variable.
+func (c *Checker) narrowNilPath(root string, fields []string, isNil bool) map[string]types.Type {
+	sym := c.cur().lookupVar(root)
+	if sym == nil {
+		return map[string]types.Type{}
+	}
+	refined, ok := refineRootType(sym.Type, fields, func(cur types.Type) (types.Type, bool) {
+		return narrowNilOfType(cur, isNil)
+	})
+	if !ok {
+		return map[string]types.Type{}
+	}
+	return map[string]types.Type{root: refined}
 }
 
 func (c *Checker) narrowTypeof(name, lit string, toType bool) map[string]types.Type {
@@ -2419,21 +2592,47 @@ func (c *Checker) narrowTypeof(name, lit string, toType bool) map[string]types.T
 	if sym == nil {
 		return map[string]types.Type{}
 	}
+	t, ok := narrowTypeofOfType(sym.Type, lit, toType)
+	if !ok {
+		return map[string]types.Type{}
+	}
+	return map[string]types.Type{name: t}
+}
+
+// narrowTypeofPath narrows the member at fields of the root variable by a
+// `type(...)` comparison.
+func (c *Checker) narrowTypeofPath(root string, fields []string, lit string, toType bool) map[string]types.Type {
+	sym := c.cur().lookupVar(root)
+	if sym == nil {
+		return map[string]types.Type{}
+	}
+	refined, ok := refineRootType(sym.Type, fields, func(cur types.Type) (types.Type, bool) {
+		return narrowTypeofOfType(cur, lit, toType)
+	})
+	if !ok {
+		return map[string]types.Type{}
+	}
+	return map[string]types.Type{root: refined}
+}
+
+// narrowTypeofOfType narrows a type by a `type(x)` literal comparison
+// (shared by variable and member narrowing).
+func narrowTypeofOfType(cur types.Type, lit string, toType bool) (types.Type, bool) {
 	prim := typeofLiteralToType(lit)
 	if prim == nil {
-		return map[string]types.Type{}
+		return nil, false
 	}
 	if toType {
 		// Intersect? If orig is union containing prim, narrow to prim (or member).
 		// If orig is any, narrow to prim.
-		if isAnyLike(sym.Type) {
-			return map[string]types.Type{name: prim}
+		if isAnyLike(cur) {
+			return prim, true
 		}
 		// If prim assignable to orig, narrow to prim; else if orig assignable to prim? Keep prim? Else unreachable (Never) — still narrow to prim to surface downstream? Use prim.
-		return map[string]types.Type{name: prim}
+		return prim, true
 	}
 	// Exclude: remove prim from union.
-	if u, ok := sym.Type.(*types.Union); ok {
+	if u, ok := cur.(*types.Union); ok {
 		var rest []types.Type
 		for _, m := range u.Types {
 			if m.String() == prim.String() {
@@ -2446,15 +2645,15 @@ func (c *Checker) narrowTypeof(name, lit string, toType bool) map[string]types.T
 			rest = append(rest, m)
 		}
 		if len(rest) != len(u.Types) {
-			return map[string]types.Type{name: types.NewUnion(rest)}
+			return types.NewUnion(rest), true
 		}
-		return map[string]types.Type{}
+		return nil, false
 	}
-	if sym.Type.String() == prim.String() {
+	if cur.String() == prim.String() {
 		// `type(x) ~= "string"` but x: string => unreachable else? Narrow to Never.
-		return map[string]types.Type{name: types.Never}
+		return types.Never, true
 	}
-	return map[string]types.Type{}
+	return nil, false
 }
 
 func typeofLiteralToType(s string) types.Type {
