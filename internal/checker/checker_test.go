@@ -231,3 +231,47 @@ local a: A = b`)
 class S { private constructor() end }
 local s = S.new()`)
 }
+
+func TestConditionalOK(t *testing.T) {
+	expectOK(t, `
+type El<T> = T extends (infer U)[] ? U : T
+local a: El<number[]> = 1
+local b: El<string> = "s"
+local c: El<string | number[]> = 1
+`)
+	expectOK(t, `
+type Head<T> = T extends [infer H, ...unknown[]] ? H : never
+local h: Head<[string, number]> = "a"
+`)
+	expectOK(t, `
+type Chain<T> = T extends string ? (T extends "a" ? 1 : 2) : 3
+local x: Chain<"a"> = 1
+local y: Chain<number> = 3
+`)
+	expectOK(t, `
+class Box<T> {
+  v: T,
+  constructor(v: T) self.v = v end,
+}
+type Unbox<T> = T extends Box<infer U> ? U : never
+local u: Unbox<Box<number>> = 1
+`)
+}
+
+func TestConditionalErr(t *testing.T) {
+	// Wrong branch values.
+	expectErr(t, `
+type El<T> = T extends (infer U)[] ? U : T
+local a: El<number[]> = "s"`)
+	// infer outside an extends clause.
+	expectErr(t, `local x: infer U = 1`)
+	expectErr(t, `type F<T> = T extends string ? string : infer U`)
+	// Boxed vs unboxed mismatch through a class pattern.
+	expectErr(t, `
+class Box<T> {
+  v: T,
+  constructor(v: T) self.v = v end,
+}
+type Unbox<T> = T extends Box<infer U> ? U : never
+local u: Unbox<Box<number>> = "s"`)
+}

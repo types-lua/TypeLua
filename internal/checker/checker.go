@@ -137,6 +137,8 @@ type Checker struct {
 	loopDepth  int
 	// Enclosing classes for self/super/visibility.
 	classStack []*classCtx
+	// >0 while resolving an extends clause (where `infer` may appear).
+	extendsDepth int
 }
 
 type gotoRef struct {
@@ -978,6 +980,14 @@ func (c *Checker) resolveTypeWithSub(n ast.TypeNode, sub map[string]types.Type) 
 	case *ast.KeyofType:
 		e := c.resolveTypeWithSub(t.Elem, sub)
 		return c.resolveKeyof(e, t.Span())
+	case *ast.InferType:
+		if c.extendsDepth == 0 {
+			c.errorf("TL3601", t.Span(), "'infer' is only allowed in the extends clause of a conditional type")
+			return types.Any
+		}
+		return &types.InferParam{Name: t.Name.Name}
+	case *ast.ConditionalType:
+		return c.resolveConditional(t, sub)
 	default:
 		c.errorf("TL3100", n.Span(), "unsupported type node %T", n)
 		return types.Any
@@ -1019,9 +1029,17 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 		}
 	}
 	// Qualified names: not supported in v1 (modules).
-	if strings.Contains(t.Name, ".") {
+	if strings.Contains(t.Name, ".") && t.Name != "..." {
 		c.errorf("TL3101", t.Span(), "qualified type '%s' is not supported", t.Name)
 		return types.Any
+	}
+	// `...T` rest marker (tuple patterns, vararg positions).
+	if t.Name == "..." {
+		if len(t.Args) != 1 {
+			c.errorf("TL3102", t.Span(), "'...' expects 1 type argument, got %d", len(t.Args))
+			return types.Any
+		}
+		return &types.Ref{Name: "...", Args: []types.Type{c.resolveTypeWithSub(t.Args[0], sub)}}
 	}
 	// Generic param substitution.
 	if s, ok := sub[t.Name]; ok && len(t.Args) == 0 {
@@ -1165,6 +1183,45 @@ func (c *Checker) resolveFuncType(t *ast.FuncType, sub map[string]types.Type) ty
 		rs = append(rs, c.resolveTypeWithSub(r, sub))
 	}
 	return &types.Func{Params: ps, HasVarArg: hasVA, VarArg: va, Returns: rs}
+}
+
+// resolveConditional resolves `Check extends Extends ? True : False`.
+// Distributive evaluation mirrors TS: a naked type-parameter check
+// distributes over unions once instantiated; anything still generic
+// stays deferred (permissive in assignability until then).
+func (c *Checker) resolveConditional(n *ast.ConditionalType, sub map[string]types.Type) types.Type {
+	check := c.resolveTypeWithSub(n.Check, sub)
+	c.extendsDepth++
+	ext := c.resolveTypeWithSub(n.Extends, sub)
+	c.extendsDepth--
+	// `infer U` names bind in the true branch only (like TS).
+	sub2 := make(map[string]types.Type, len(sub)+2)
+	for k, v := range sub {
+		sub2[k] = v
+	}
+	for name := range collectInferNames(n.Extends, nil) {
+		sub2[name] = &types.InferParam{Name: name}
+	}
+	trueB := c.resolveTypeWithSub(n.True, sub2)
+	falseB := c.resolveTypeWithSub(n.False, sub)
+	distributive := isNakedTypeParam(n.Check, c, sub)
+	cond := &types.Conditional{Check: check, Extends: ext, TrueBranch: trueB, FalseBranch: falseB, Distributive: distributive}
+	if r, ok := types.TryEvalConditional(cond, c.opt.toTypes()); ok {
+		return r
+	}
+	return cond
+}
+
+// isNakedTypeParam reports `T` (bare parameter reference, no args).
+func isNakedTypeParam(n ast.TypeNode, c *Checker, sub map[string]types.Type) bool {
+	nt, ok := n.(*ast.NamedType)
+	if !ok || len(nt.Args) > 0 || strings.Contains(nt.Name, ".") {
+		return false
+	}
+	if _, ok := sub[nt.Name]; ok {
+		return true
+	}
+	return c.lookupTParam(nt.Name) != nil
 }
 
 func (c *Checker) resolveTypeof(t *ast.TypeofType) types.Type {
@@ -1945,6 +2002,18 @@ func inferInto(param, arg types.Type, sub map[string]types.Type) {
 			return
 		}
 		sub[p.Name] = arg
+	case *types.InferParam:
+		// Inference positions (e.g. conditional checks) bind like params.
+		if existing, ok := sub[p.Name]; ok {
+			if existing.String() != arg.String() {
+				sub[p.Name] = types.NewUnion([]types.Type{existing, arg})
+			}
+			return
+		}
+		sub[p.Name] = arg
+	case *types.Conditional:
+		// Infer through the check pattern (`Elem<T>` from `[1, 2]`).
+		inferInto(p.Check, arg, sub)
 	case *types.Array:
 		switch a := arg.(type) {
 		case *types.Array:
@@ -3671,4 +3740,66 @@ func exprUsesSelf(e ast.Expr) bool {
 		*ast.BoolLit, *ast.NilLit, *ast.VarArg:
 	}
 	return false
+}
+
+// collectInferNames gathers `infer U` names in an extends clause.
+// Nested conditionals bind their own scope and are not descended into.
+func collectInferNames(n ast.TypeNode, into map[string]bool) map[string]bool {
+	if into == nil {
+		into = map[string]bool{}
+	}
+	switch t := n.(type) {
+	case *ast.InferType:
+		into[t.Name.Name] = true
+	case *ast.UnionType:
+		for _, m := range t.Types {
+			collectInferNames(m, into)
+		}
+	case *ast.IntersectionType:
+		for _, m := range t.Types {
+			collectInferNames(m, into)
+		}
+	case *ast.ArrayType:
+		collectInferNames(t.Elem, into)
+	case *ast.OptionalType:
+		collectInferNames(t.Elem, into)
+	case *ast.ParenType:
+		collectInferNames(t.Elem, into)
+	case *ast.TupleType:
+		for _, e := range t.Elems {
+			collectInferNames(e, into)
+		}
+	case *ast.TableType:
+		for _, f := range t.Fields {
+			if f.IsIndexer {
+				collectInferNames(f.IndexKey, into)
+				collectInferNames(f.IndexVal, into)
+			} else if f.IsMethod && f.MethodSig != nil {
+				collectInferNames(f.MethodSig, into)
+			} else if f.Type != nil {
+				collectInferNames(f.Type, into)
+			}
+		}
+	case *ast.FuncType:
+		for _, p := range t.Params {
+			if p.Type != nil {
+				collectInferNames(p.Type, into)
+			}
+		}
+		if t.VarArgType != nil {
+			collectInferNames(t.VarArgType, into)
+		}
+		for _, r := range t.Returns {
+			collectInferNames(r, into)
+		}
+	case *ast.NamedType:
+		for _, a := range t.Args {
+			collectInferNames(a, into)
+		}
+	case *ast.KeyofType:
+		collectInferNames(t.Elem, into)
+	case *ast.ConditionalType:
+		// Own scope; skip.
+	}
+	return into
 }
