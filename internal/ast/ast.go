@@ -283,6 +283,7 @@ type ClassDecl struct {
 	Exported  bool
 	Declared  bool
 	Abstract  bool
+	IsLocal   bool // `local class` (or class in non-global scope intent)
 	S         token.Span
 }
 

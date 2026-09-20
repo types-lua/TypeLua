@@ -88,3 +88,28 @@ func TestParseRegression(t *testing.T) {
 	mustParse(t, `local t = type(x)`)
 	mustParse(t, `local typeAlias = 1`)
 }
+
+func TestParseClass(t *testing.T) {
+	f := mustParse(t, `
+class Point {
+  x: number = 0,
+  constructor(x: number) self.x = x end,
+  move(dx: number): void self.x = dx end,
+}`)
+	decl, ok := f.Block.Stmts[0].(*ast.ClassDecl)
+	if !ok {
+		t.Fatalf("not classdecl %T", f.Block.Stmts[0])
+	}
+	if decl.Name.Name != "Point" || len(decl.Members) != 3 {
+		t.Fatalf("bad class %+v", decl)
+	}
+	mustParse(t, `abstract class A extends B implements I { abstract m(): void }`)
+	mustParse(t, `class C<T> extends B<T> { v: T, static make(v: T): C<T> return C.new(v) end }`)
+	mustParse(t, `local class L { private x: number = 1 }`)
+	mustParse(t, `export class E { protected static n: integer = 0 }`)
+	mustParse(t, `declare class D { title: string, render(): string }`)
+	// Errors recover: missing end / bad member.
+	if _, diags := ParseFile("t.tl", `class Broken { x: number = }`); len(diags) == 0 {
+		t.Fatalf("expected errors")
+	}
+}

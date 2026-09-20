@@ -243,8 +243,11 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseGoto()
 	case token.ColonColon:
 		return p.parseLabel()
-	case token.TypeKw, token.InterfaceKw, token.EnumKw:
+	case token.TypeKw, token.InterfaceKw, token.EnumKw, token.ClassKw, token.AbstractKw:
 		if p.isTypeDeclStart() {
+			if p.at(token.ClassKw) || p.at(token.AbstractKw) {
+				return p.parseClassDecl(false, false, false)
+			}
 			return p.parseTypeDecl(false, false)
 		}
 		return p.parseExprStmtOrAssign()
@@ -469,6 +472,12 @@ func (p *Parser) parseLocal() ast.Stmt {
 			}
 		}
 	}
+	if p.at(token.ClassKw) && p.peek(1).Kind == token.Ident {
+		return p.parseClassDecl(false, false, true)
+	}
+	if p.at(token.AbstractKw) && p.peek(1).Kind == token.ClassKw && p.peek(2).Kind == token.Ident {
+		return p.parseClassDecl(false, false, true)
+	}
 	// local name [attr] [: type] [, ...] [= exprlist]
 	var names []*ast.Ident
 	var attrs []string
@@ -534,6 +543,15 @@ func (p *Parser) parseAttr() string {
 
 func (p *Parser) parseExport() ast.Stmt {
 	start := p.next()
+	if p.at(token.ClassKw) || (p.at(token.AbstractKw) && p.peek(1).Kind == token.ClassKw) {
+		d := p.parseClassDecl(true, false, false)
+		if cd, ok := d.(*ast.ClassDecl); ok {
+			sp := cd.Span()
+			sp.Start = start.Span.Start
+			cd.S = sp
+		}
+		return d
+	}
 	if p.at(token.TypeKw) || p.at(token.InterfaceKw) || p.at(token.EnumKw) {
 		d := p.parseTypeDecl(true, false)
 		// Fix span to include export.
@@ -574,6 +592,15 @@ func (p *Parser) parseExport() ast.Stmt {
 func (p *Parser) parseDeclare() ast.Stmt {
 	start := p.next()
 	// declare only applies to type-space decls (no runtime emit).
+	if p.at(token.ClassKw) || (p.at(token.AbstractKw) && p.peek(1).Kind == token.ClassKw) {
+		d := p.parseClassDecl(false, true, false)
+		if cd, ok := d.(*ast.ClassDecl); ok {
+			sp := cd.Span()
+			sp.Start = start.Span.Start
+			cd.S = sp
+		}
+		return d
+	}
 	if p.at(token.TypeKw) || p.at(token.InterfaceKw) || p.at(token.EnumKw) {
 		d := p.parseTypeDecl(false, true)
 		sp := d.Span()
@@ -719,6 +746,225 @@ func (p *Parser) parseTypeDecl(exported, declared bool) ast.Stmt {
 		return &ast.EnumDecl{Name: name, Members: members, Exported: exported, Declared: declared, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
 	return nil
+}
+
+// parseClassDecl parses:
+//   [abstract] class Name<T> [extends Base] [implements I, ...] { members }
+// Members are fields (`[mods] name[: T] [= init]`), methods
+// (`[mods] name<T>(params)[: R | -> R] body end`) and at most one
+// `constructor(params) body end`. In `declare` classes and on `abstract`
+// members there is no body.
+func (p *Parser) parseClassDecl(exported, declared, isLocal bool) ast.Stmt {
+	start := p.cur()
+	abstract := false
+	if p.at(token.AbstractKw) {
+		p.next()
+		abstract = true
+	}
+	if _, ok := p.expect(token.ClassKw, "'class'"); !ok {
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
+	name := p.parseIdent()
+	if name == nil {
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
+	var generics []*ast.GenericParam
+	if p.at(token.Lt) {
+		generics = p.parseGenericParams()
+	}
+	var extends ast.TypeNode
+	if p.at(token.ExtendsKw) {
+		p.next()
+		extends = p.parseType()
+	}
+	var implements []ast.TypeNode
+	if p.at(token.ImplementsKw) {
+		p.next()
+		for {
+			implements = append(implements, p.parseType())
+			if !p.at(token.Comma) {
+				break
+			}
+			p.next()
+		}
+	}
+	if _, ok := p.expect(token.LBrace, "'{'"); !ok {
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
+	var members []*ast.ClassMember
+	for !p.at(token.RBrace) && !p.at(token.EOF) {
+		if p.at(token.Comma) || p.at(token.Semi) {
+			p.next()
+			continue
+		}
+		m := p.parseClassMember(declared)
+		if m == nil {
+			p.synchronizeClassMember()
+			continue
+		}
+		members = append(members, m)
+		if p.at(token.Comma) || p.at(token.Semi) {
+			p.next()
+		}
+	}
+	p.expect(token.RBrace, "'}'")
+	sp := token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
+	return &ast.ClassDecl{Name: name, Generics: generics, Extends: extends, Implements: implements, Members: members, Exported: exported, Declared: declared, Abstract: abstract, IsLocal: isLocal, S: sp}
+}
+
+func (p *Parser) parseClassMember(declared bool) *ast.ClassMember {
+	start := p.cur()
+	vis := ast.Public
+	visSeen := false
+	isStatic, isReadonly, isAbstract := false, false, false
+loop:
+	for {
+		switch {
+		case p.at(token.PublicKw):
+			if visSeen {
+				p.errorf("TL2030", p.cur().Span, "duplicate visibility modifier")
+			}
+			p.next()
+			vis, visSeen = ast.Public, true
+		case p.at(token.PrivateKw):
+			if visSeen {
+				p.errorf("TL2030", p.cur().Span, "duplicate visibility modifier")
+			}
+			p.next()
+			vis, visSeen = ast.Private, true
+		case p.at(token.ProtectedKw):
+			if visSeen {
+				p.errorf("TL2030", p.cur().Span, "duplicate visibility modifier")
+			}
+			p.next()
+			vis, visSeen = ast.Protected, true
+		case p.at(token.StaticKw):
+			if isStatic {
+				p.errorf("TL2031", p.cur().Span, "duplicate 'static' modifier")
+			}
+			p.next()
+			isStatic = true
+		case p.at(token.ReadonlyKw):
+			if isReadonly {
+				p.errorf("TL2031", p.cur().Span, "duplicate 'readonly' modifier")
+			}
+			p.next()
+			isReadonly = true
+		case p.at(token.AbstractKw):
+			if isAbstract {
+				p.errorf("TL2031", p.cur().Span, "duplicate 'abstract' modifier")
+			}
+			p.next()
+			isAbstract = true
+		default:
+			break loop
+		}
+	}
+	name := p.parseIdentAllowSoft()
+	if name == nil {
+		return nil
+	}
+	isCtor := name.Name == "constructor"
+	// Method or constructor: `name<T>(params)`.
+	if p.at(token.LParen) || p.at(token.Lt) {
+		var generics []*ast.GenericParam
+		if p.at(token.Lt) {
+			save := p.pos
+			nd := len(p.diags)
+			g := p.parseGenericParams()
+			if g != nil && p.at(token.LParen) {
+				generics = g
+			} else {
+				p.pos = save
+				p.diags = p.diags[:nd]
+			}
+		}
+		if _, ok := p.expect(token.LParen, "'('"); !ok {
+			return nil
+		}
+		params, hasVA, vaName, vaTy := p.parseParams()
+		p.expect(token.RParen, "')'")
+		var retTy ast.TypeNode
+		if !isCtor {
+			if p.at(token.Arrow) {
+				p.next()
+				retTy = p.parseReturnType()
+			} else if p.at(token.Colon) {
+				p.next()
+				retTy = p.parseType()
+			}
+		} else if p.at(token.Arrow) || p.at(token.Colon) {
+			sp := p.cur().Span
+			p.errorf("TL2032", sp, "constructor must not declare a return type")
+			p.next()
+			_ = p.parseType()
+		}
+		kind := ast.ClassMethod
+		if isCtor {
+			kind = ast.ClassConstructor
+		}
+		m := &ast.ClassMember{Kind: kind, Name: name, Visibility: vis, IsStatic: isStatic, IsReadonly: isReadonly, IsAbstract: isAbstract, Generics: generics, Params: params, HasVarArg: hasVA, VarArgName: vaName, VarArgType: vaTy, ReturnType: retTy, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+		if declared || isAbstract {
+			m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
+			return m
+		}
+		if p.at(token.Comma) || p.at(token.Semi) || p.at(token.RBrace) {
+			p.errorf("TL2033", p.cur().Span, "method '%s' must have a body ending with 'end'", name.Name)
+			m.Body = &ast.Block{S: token.Span{Start: p.prevEnd(), End: p.prevEnd(), File: p.file}}
+			m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
+			return m
+		}
+		m.Body = p.parseBlock()
+		p.expect(token.End, "'end'")
+		m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
+		return m
+	}
+	// Field: `name[: T] [= init]`.
+	if isCtor {
+		p.errorf("TL2034", name.Span(), "'constructor' must be declared as a method")
+		return nil
+	}
+	var fty ast.TypeNode
+	if p.at(token.Colon) {
+		p.next()
+		fty = p.parseType()
+	}
+	var init ast.Expr
+	if p.at(token.Assign) {
+		if declared {
+			p.errorf("TL2035", p.cur().Span, "field '%s' must not have an initializer in a 'declare' class", name.Name)
+		}
+		p.next()
+		init = p.parseExpr()
+	}
+	if fty == nil && init == nil {
+		p.errorf("TL2036", name.Span(), "field '%s' needs a type annotation or an initializer", name.Name)
+		fty = &ast.NamedType{Name: "any", S: name.Span()}
+	}
+	if isAbstract {
+		p.errorf("TL2037", start.Span, "only methods can be 'abstract'")
+	}
+	return &ast.ClassMember{Kind: ast.ClassField, Name: name, Visibility: vis, IsStatic: isStatic, IsReadonly: isReadonly, FieldType: fty, Init: init, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+}
+
+func (p *Parser) synchronizeClassMember() {
+	for {
+		k := p.cur().Kind
+		if k == token.EOF || k == token.RBrace {
+			return
+		}
+		if k == token.Comma || k == token.Semi {
+			p.next()
+			return
+		}
+		if k == token.Ident || isSoftKw(k) {
+			return
+		}
+		p.next()
+	}
 }
 
 func (p *Parser) parseInterfaceField() *ast.InterfaceField {
@@ -1739,7 +1985,8 @@ func (p *Parser) synchronize() {
 		switch k {
 		case token.Local, token.Function, token.If, token.While, token.Repeat,
 			token.For, token.Do, token.Return, token.Break, token.Goto,
-			token.TypeKw, token.InterfaceKw, token.EnumKw, token.ExportKw, token.DeclareKw:
+			token.TypeKw, token.InterfaceKw, token.EnumKw, token.ClassKw,
+			token.AbstractKw, token.ExportKw, token.DeclareKw:
 			return
 		}
 		p.next()
