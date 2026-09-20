@@ -638,6 +638,27 @@ type KeyofType struct {
 func (*KeyofType) typeNode()          {}
 func (n *KeyofType) Span() token.Span { return n.S }
 
+// ConditionalType is `Check extends Extends ? True : False`.
+type ConditionalType struct {
+	Check   TypeNode
+	Extends TypeNode
+	True    TypeNode
+	False   TypeNode
+	S       token.Span
+}
+
+func (*ConditionalType) typeNode()          {}
+func (n *ConditionalType) Span() token.Span { return n.S }
+
+// InferType is `infer U` (only meaningful in an extends clause).
+type InferType struct {
+	Name *Ident
+	S    token.Span
+}
+
+func (*InferType) typeNode()          {}
+func (n *InferType) Span() token.Span { return n.S }
+
 // IsLValue reports whether e can appear on the left of `=`.
 func IsLValue(e Expr) bool {
 	switch e.(type) {

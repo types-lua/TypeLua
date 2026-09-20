@@ -113,3 +113,23 @@ class Point {
 		t.Fatalf("expected errors")
 	}
 }
+
+func TestParseConditional(t *testing.T) {
+	f := mustParse(t, `type X<T> = T extends string ? true : false`)
+	alias, ok := f.Block.Stmts[0].(*ast.TypeAliasDecl)
+	if !ok {
+		t.Fatalf("not alias %T", f.Block.Stmts[0])
+	}
+	if _, ok := alias.Type.(*ast.ConditionalType); !ok {
+		t.Fatalf("not conditional %T", alias.Type)
+	}
+	// `?` after a type stays Optional when no `: true-branch` follows.
+	mustParse(t, `local x: number? = nil`)
+	mustParse(t, `local y: string | nil = nil`)
+	// infer, nesting, chaining, tuples with rest.
+	mustParse(t, `type E<T> = T extends (infer U)[] ? U : T`)
+	mustParse(t, `type H<T> = T extends [infer H, ...unknown[]] ? H : never`)
+	mustParse(t, `type C<T> = T extends string ? (T extends "a" ? 1 : 2) : 3`)
+	mustParse(t, `type P<T> = T extends string ? 1 : T extends number ? 2 : 3`)
+	mustParse(t, `type R<T> = T extends (...args: any[]) -> infer R ? R : never`)
+}

@@ -9,11 +9,12 @@ import (
 
 // Parser is a recursive-descent parser with Pratt expressions and recovery.
 type Parser struct {
-	toks      []token.Token
-	pos       int
-	file      string
-	diags     []diag.Diagnostic
-	pendingGt int // split >> into two >
+	toks         []token.Token
+	pos          int
+	file         string
+	diags        []diag.Diagnostic
+	pendingGt    int // split >> into two >
+	extendsDepth int // >0 while parsing an extends clause (for `infer`)
 }
 
 func ParseFile(filename, src string) (*ast.File, []diag.Diagnostic) {
@@ -1096,7 +1097,7 @@ func isSoftKw(k token.Kind) bool {
 	case token.TypeKw, token.InterfaceKw, token.EnumKw, token.ExportKw, token.DeclareKw,
 		token.KeyofKw, token.TypeofKw, token.IsKw, token.ReadonlyKw, token.AsKw, token.ExtendsKw,
 		token.ClassKw, token.SuperKw, token.StaticKw, token.PrivateKw, token.PublicKw,
-		token.ProtectedKw, token.AbstractKw, token.ImplementsKw:
+		token.ProtectedKw, token.AbstractKw, token.ImplementsKw, token.InferKw:
 		return true
 	}
 	return false
@@ -1532,7 +1533,56 @@ func (p *Parser) parseReturnType() ast.TypeNode {
 
 // ---------- types ----------
 
-func (p *Parser) parseType() ast.TypeNode { return p.parseUnion() }
+func (p *Parser) parseType() ast.TypeNode { return p.parseConditional() }
+
+// parseConditional parses `Check extends Extends ? True : False`
+// (right-associative on both branches, like TS). The `?` collides with
+// the Optional postfix `T?`; isConditionalQ disambiguates.
+func (p *Parser) parseConditional() ast.TypeNode {
+	check := p.parseUnion()
+	if check == nil || !p.at(token.ExtendsKw) {
+		return check
+	}
+	p.next() // extends
+	p.extendsDepth++
+	ext := p.parseUnion()
+	p.extendsDepth--
+	if ext == nil {
+		return check
+	}
+	if _, ok := p.expect(token.Question, "'?'"); !ok {
+		return check
+	}
+	trueBranch := p.parseConditional()
+	if trueBranch == nil {
+		return check
+	}
+	if _, ok := p.expect(token.Colon, "':'"); !ok {
+		return check
+	}
+	falseBranch := p.parseConditional()
+	if falseBranch == nil {
+		return check
+	}
+	return &ast.ConditionalType{Check: check, Extends: ext, True: trueBranch, False: falseBranch, S: token.Span{Start: check.Span().Start, End: p.prevEnd(), File: p.file}}
+}
+
+// isConditionalQ reports whether the current `?` opens conditional branches
+// (`? True :`) rather than forming Optional `T?`. Speculative and side
+// effect free: restores position and diagnostics either way.
+func (p *Parser) isConditionalQ() bool {
+	if !p.at(token.Question) {
+		return false
+	}
+	savePos, saveDiags := p.pos, len(p.diags)
+	saveGt := p.pendingGt
+	p.next() // ?
+	branch := p.parseType()
+	ok := branch != nil && p.at(token.Colon)
+	p.pos, p.pendingGt = savePos, saveGt
+	p.diags = p.diags[:saveDiags]
+	return ok
+}
 
 func (p *Parser) parseUnion() ast.TypeNode {
 	first := p.parseIntersection()
@@ -1573,6 +1623,10 @@ func (p *Parser) parseTypePostfix() ast.TypeNode {
 	}
 	for {
 		if p.at(token.Question) {
+			// `? True :` belongs to an enclosing conditional, not Optional.
+			if p.isConditionalQ() {
+				break
+			}
 			q := p.next()
 			t = &ast.OptionalType{Elem: t, S: token.Span{Start: t.Span().Start, End: q.Span.End, File: p.file}}
 			continue
@@ -1616,9 +1670,10 @@ func (p *Parser) parsePrimaryType() ast.TypeNode {
 		p.next()
 		return &ast.NamedType{Name: "nil", S: c.Span}
 	case token.DotDotDot:
-		// `...T` vararg type (only meaningful in func signatures; keep as named wrapper).
+		// `...T` rest marker (tuple patterns, vararg positions).
+		// Takes a full postfix type so `...unknown[]` means rest-of-unknown.
 		p.next()
-		elem := p.parsePrimaryType()
+		elem := p.parseTypePostfix()
 		return &ast.NamedType{Name: "...", Args: []ast.TypeNode{elem}, S: token.Span{Start: c.Span.Start, End: p.prevEnd(), File: p.file}}
 	case token.KeyofKw:
 		start := p.next()
@@ -1630,6 +1685,13 @@ func (p *Parser) parsePrimaryType() ast.TypeNode {
 		e := p.parseExpr()
 		p.expect(token.RParen, "')'")
 		return &ast.TypeofType{Expr: e, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+	case token.InferKw:
+		start := p.next()
+		name := p.parseIdent()
+		if name == nil {
+			return &ast.NamedType{Name: "any", S: start.Span}
+		}
+		return &ast.InferType{Name: name, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	case token.Ident:
 		return p.parseNamedType()
 	default:
