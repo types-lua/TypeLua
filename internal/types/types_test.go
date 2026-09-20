@@ -97,3 +97,37 @@ func TestClassNominal(t *testing.T) {
 		t.Fatalf("class instance should be a table")
 	}
 }
+
+func evalTo(t *testing.T, check, pattern Type, tB, fB Type, dist bool, want string) {
+	t.Helper()
+	got := EvalConditional(check, pattern, tB, fB, dist, Options{StrictNilChecks: true})
+	if got.String() != want {
+		t.Fatalf("got %s want %s", got.String(), want)
+	}
+}
+
+func TestConditionalEval(t *testing.T) {
+	strArr := &Array{Elem: String}
+	// Plain branch selection.
+	evalTo(t, String, String, Number, Boolean, false, "number")
+	evalTo(t, Number, String, Number, Boolean, false, "boolean")
+	// infer binds array elements.
+	evalTo(t, &Array{Elem: Integer}, &Array{Elem: &InferParam{Name: "U"}},
+		&InferParam{Name: "U"}, Never, false, "integer")
+	// Naked-param distribution over unions.
+	evalTo(t, NewUnion([]Type{String, &Array{Elem: Integer}}), &Array{Elem: &InferParam{Name: "U"}},
+		&InferParam{Name: "U"}, String, true, "integer | string")
+	_ = strArr
+	// Tuple head pattern.
+	head := &Tuple{Elems: []Type{&InferParam{Name: "H"}, &Ref{Name: "...", Args: []Type{&Array{Elem: Unknown}}}}}
+	evalTo(t, &Tuple{Elems: []Type{String, Number}}, head, &InferParam{Name: "H"}, Never, false, "string")
+	// Still-generic checks stay deferred.
+	def := &Conditional{Check: &GenericParam{Name: "T"}, Extends: String, TrueBranch: Number, FalseBranch: Boolean, Distributive: true}
+	if _, ok := TryEvalConditional(def, Options{StrictNilChecks: true}); ok {
+		t.Fatalf("generic check must stay deferred")
+	}
+	// Deferred conditionals are permissive in assignability (generic code).
+	if !IsAssignable(Number, def, Options{StrictNilChecks: true}) {
+		t.Fatalf("concrete should flow into deferred conditional")
+	}
+}
