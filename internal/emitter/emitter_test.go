@@ -49,3 +49,38 @@ func TestNeAlias(t *testing.T) {
 		t.Fatalf("empty")
 	}
 }
+
+func TestEmitClass(t *testing.T) {
+	out := emit(t, `
+class Dog extends Animal {
+  constructor(name: string) super(name) end,
+  speak(): string return "woof" end,
+}`)
+	for _, want := range []string{
+		"local Dog = setmetatable",
+		"__index = Animal",
+		"function Dog.new(...)",
+		"getmetatable(Dog).__call",
+		"function Dog:constructor(name)",
+		"Animal.constructor(self, name)",
+		"function Dog:speak()",
+	} {
+		if !contains(out, want) {
+			t.Fatalf("emit missing %q:\n%s", want, out)
+		}
+	}
+	// declare classes erase fully.
+	out = emit(t, `declare class D { m(): string }`)
+	if out != "" {
+		t.Fatalf("declare should erase, got %q", out)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

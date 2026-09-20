@@ -26,9 +26,22 @@ func EmitFile(f *ast.File, opt Options) string {
 }
 
 type emitter struct {
-	opt    Options
-	buf    strings.Builder
-	indent int
+	opt        Options
+	buf        strings.Builder
+	indent     int
+	classStack []classEmitCtx
+}
+
+type classEmitCtx struct {
+	name string
+	base string // "" if none
+}
+
+func (e *emitter) curClass() *classEmitCtx {
+	if len(e.classStack) == 0 {
+		return nil
+	}
+	return &e.classStack[len(e.classStack)-1]
 }
 
 func (e *emitter) write(s string) { e.buf.WriteString(s) }
@@ -101,6 +114,7 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		e.emitParams(n.Func)
 		e.write(")")
 		e.nl()
+		e.emitVarArgPrelude(n.Func.Params, n.Func.HasVarArg, n.Func.VarArgName, e.indent+1)
 		e.emitBlock(n.Func.Body, e.indent+1)
 		e.pad()
 		e.write("end")
@@ -127,6 +141,7 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		e.write(")")
 		e.nl()
 		if params != nil {
+			e.emitVarArgPrelude(params.Params, params.HasVarArg, params.VarArgName, e.indent+1)
 			e.emitBlock(params.Body, e.indent+1)
 		}
 		e.pad()
@@ -253,6 +268,8 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		// Type-only: erased.
 	case *ast.EnumDecl:
 		e.emitEnum(n)
+	case *ast.ClassDecl:
+		e.emitClass(n)
 	default:
 		e.pad()
 		e.write("-- unsupported: %T")
@@ -290,6 +307,21 @@ func (e *emitter) emitParams(fn *ast.FuncLit) {
 		}
 		e.write("...")
 	}
+}
+
+// emitVarArgPrelude materializes a named rest parameter (`...nums`).
+// Lua drops the name, so `local nums = {...}` rebinds it for the body.
+func (e *emitter) emitVarArgPrelude(params []*ast.Param, hasVA bool, vaName *ast.Ident, ind int) {
+	if !hasVA || vaName == nil {
+		return
+	}
+	_ = params
+	saved := e.indent
+	e.indent = ind
+	e.pad()
+	e.write("local " + vaName.Name + " = {...}")
+	e.nl()
+	e.indent = saved
 }
 
 func (e *emitter) emitEnum(n *ast.EnumDecl) {
@@ -436,9 +468,10 @@ func (e *emitter) emitExpr(x ast.Expr) {
 		e.emitParams(n)
 		e.write(")")
 		// Body on same line if tiny? Always block for simplicity.
-		// Inline single-return for readability: if body is just `return x`, emit inline? Keep multiline via temp? Simpler: emit with indent 0 newlines? Use current indent+1 with manual newlines.
-		// To avoid indent complexity for inline funcs, emit compact when body small.
-		if isSmallBody(n.Body) {
+		// Inline single-return for readability, unless a named rest
+		// parameter needs its rebinding prelude (forces multiline).
+		needsPrelude := n.HasVarArg && n.VarArgName != nil
+		if isSmallBody(n.Body) && !needsPrelude {
 			if n.Body.Ret != nil && len(n.Body.Ret.Exprs) > 0 {
 				e.write(" return ")
 				for i, x := range n.Body.Ret.Exprs {
@@ -455,6 +488,7 @@ func (e *emitter) emitExpr(x ast.Expr) {
 			}
 		} else {
 			e.nl()
+			e.emitVarArgPrelude(n.Params, n.HasVarArg, n.VarArgName, e.indent+1)
 			e.emitBlock(n.Body, e.indent+1)
 			e.pad()
 			e.write("end")
@@ -468,6 +502,18 @@ func (e *emitter) emitExpr(x ast.Expr) {
 		e.emitExpr(n.Obj)
 		e.write("." + n.Field.Name)
 	case *ast.CallExpr:
+		// `super(...)` inside a derived method builds on the base.
+		if id, ok := n.Func.(*ast.Ident); ok && id.Name == "super" {
+			if cc := e.curClass(); cc != nil && cc.base != "" {
+				e.write(cc.base + ".constructor(self")
+				for _, a := range n.Args {
+					e.write(", ")
+					e.emitExpr(a)
+				}
+				e.write(")")
+				break
+			}
+		}
 		e.emitExpr(n.Func)
 		e.write("(")
 		for i, a := range n.Args {
@@ -478,6 +524,18 @@ func (e *emitter) emitExpr(x ast.Expr) {
 		}
 		e.write(")")
 	case *ast.MethodCallExpr:
+		// `super:m(...)` dispatches to the base with the current self.
+		if id, ok := n.Obj.(*ast.Ident); ok && id.Name == "super" {
+			if cc := e.curClass(); cc != nil && cc.base != "" {
+				e.write(cc.base + "." + n.Method.Name + "(self")
+				for _, a := range n.Args {
+					e.write(", ")
+					e.emitExpr(a)
+				}
+				e.write(")")
+				break
+			}
+		}
 		e.emitExpr(n.Obj)
 		e.write(":" + n.Method.Name + "(")
 		for i, a := range n.Args {
@@ -525,3 +583,232 @@ func binOpString(k interface{ String() string }) string {
 }
 
 func unOpString(k interface{ String() string }) string { return k.String() }
+
+// classBaseName extracts the runtime table for `extends` (type args erased).
+// Non-name bases were already rejected by the checker; emit defensively.
+func classBaseName(t ast.TypeNode) string {
+	nt, ok := t.(*ast.NamedType)
+	if !ok {
+		return ""
+	}
+	return nt.Name
+}
+
+// emitClass renders a class to a 5.1-compatible metatable idiom:
+//
+//	local Dog = setmetatable({}, {__index = Animal})
+//	Dog.__index = Dog
+//	Dog.count = 0
+//	function Dog.new(...)
+//	    local self = setmetatable({}, Dog)
+//	    self:constructor(...)
+//	    return self
+//	end
+//	setmetatable(Dog, {__call = function(_, ...) return Dog.new(...) end})
+//	function Dog:constructor(name) ... end
+//
+// Field initializers run inside the constructor (after super(), like TS);
+// every class gets a constructor so `Base.constructor` always exists.
+func (e *emitter) emitClass(n *ast.ClassDecl) {
+	if n.Declared {
+		return // ambient only
+	}
+	name := n.Name.Name
+	base := ""
+	if n.Extends != nil {
+		base = classBaseName(n.Extends)
+	}
+	e.classStack = append(e.classStack, classEmitCtx{name: name, base: base})
+	defer func() { e.classStack = e.classStack[:len(e.classStack)-1] }()
+
+	e.pad()
+	if base != "" {
+		e.write("local " + name + " = setmetatable({}, {__index = " + base + "})")
+	} else {
+		e.write("local " + name + " = setmetatable({}, {})")
+	}
+	e.nl()
+	e.pad()
+	e.write(name + ".__index = " + name)
+	e.nl()
+
+	// Static field initializers (the table already exists).
+	for _, m := range n.Members {
+		if m.Kind != ast.ClassField || !m.IsStatic || m.Init == nil {
+			continue
+		}
+		e.pad()
+		e.write(name + "." + m.Name.Name + " = ")
+		e.emitExpr(m.Init)
+		e.nl()
+	}
+
+	// Constructor entry point.
+	e.pad()
+	e.write("function " + name + ".new(...)")
+	e.nl()
+	e.indent++
+	e.pad()
+	if n.Abstract {
+		e.write("error(\"cannot instantiate abstract class '" + name + "'\")")
+		e.nl()
+		e.pad()
+	}
+	e.write("local self = setmetatable({}, " + name + ")")
+	e.nl()
+	e.pad()
+	e.write("self:constructor(...)")
+	e.nl()
+	e.pad()
+	e.write("return self")
+	e.nl()
+	e.indent--
+	e.pad()
+	e.write("end")
+	e.nl()
+	// Late-bind __call after `new` exists: mutating (not replacing) the
+	// metatable preserves __index, and the closure no longer sits inside
+	// the class-defining statement (robust across implementations).
+	e.pad()
+	e.write("getmetatable(" + name + ").__call = function(_, ...) return " + name + ".new(...) end")
+	e.nl()
+
+	// Constructor (explicit or synthesized).
+	var ctor *ast.ClassMember
+	for _, m := range n.Members {
+		if m.Kind == ast.ClassConstructor && m.Body != nil {
+			ctor = m
+			break
+		}
+	}
+	// Own non-static field initializers, in declaration order.
+	var inits []*ast.ClassMember
+	for _, m := range n.Members {
+		if m.Kind == ast.ClassField && !m.IsStatic && m.Init != nil {
+			inits = append(inits, m)
+		}
+	}
+	if ctor != nil {
+		e.pad()
+		e.write("function " + name + ":constructor(")
+		e.emitClassParams(ctor)
+		e.write(")")
+		e.nl()
+		// Own initializers run right after the top-level super() call,
+		// mirroring TS field-initialization order.
+		splitAt := -1
+		if base != "" && ctor.Body != nil {
+			for i, st := range ctor.Body.Stmts {
+				if es, ok := st.(*ast.ExprStmt); ok {
+					if call, ok := es.E.(*ast.CallExpr); ok {
+						if id, ok := call.Func.(*ast.Ident); ok && id.Name == "super" {
+							splitAt = i
+							break
+						}
+					}
+				}
+			}
+		}
+		e.indent++
+		if ctor.Body != nil {
+			e.emitVarArgPrelude(ctor.Params, ctor.HasVarArg, ctor.VarArgName, e.indent)
+			if splitAt < 0 {
+				e.emitClassInits(name, inits)
+			}
+			for i, st := range ctor.Body.Stmts {
+				e.emitStmt(st)
+				if i == splitAt {
+					e.emitClassInits(name, inits)
+				}
+			}
+			if ctor.Body.Ret != nil {
+				e.pad()
+				e.write("return")
+				if len(ctor.Body.Ret.Exprs) > 0 {
+					e.write(" ")
+					for i, x := range ctor.Body.Ret.Exprs {
+						if i > 0 {
+							e.write(", ")
+						}
+						e.emitExpr(x)
+					}
+				}
+				e.nl()
+			}
+		} else {
+			e.emitClassInits(name, inits)
+		}
+		e.indent--
+		e.pad()
+		e.write("end")
+		e.nl()
+	} else {
+		e.pad()
+		e.write("function " + name + ":constructor(...)")
+		e.nl()
+		e.indent++
+		if base != "" {
+			e.pad()
+			e.write(base + ".constructor(self, ...)")
+			e.nl()
+		}
+		e.emitClassInits(name, inits)
+		e.indent--
+		e.pad()
+		e.write("end")
+		e.nl()
+	}
+
+	// Methods.
+	for _, m := range n.Members {
+		if m.Kind != ast.ClassMethod {
+			continue
+		}
+		e.pad()
+		if m.IsStatic {
+			e.write("function " + name + "." + m.Name.Name + "(")
+		} else {
+			e.write("function " + name + ":" + m.Name.Name + "(")
+		}
+		e.emitClassParams(m)
+		e.write(")")
+		e.nl()
+		e.indent++
+		e.emitVarArgPrelude(m.Params, m.HasVarArg, m.VarArgName, e.indent)
+		if m.Body != nil {
+			e.emitBlock(m.Body, e.indent)
+		} else {
+			e.pad()
+			e.write("error(\"abstract method '" + name + "." + m.Name.Name + "' is not implemented\")")
+			e.nl()
+		}
+		e.indent--
+		e.pad()
+		e.write("end")
+		e.nl()
+	}
+}
+
+func (e *emitter) emitClassInits(className string, inits []*ast.ClassMember) {
+	for _, m := range inits {
+		e.pad()
+		e.write("self." + m.Name.Name + " = ")
+		e.emitExpr(m.Init)
+		e.nl()
+	}
+}
+
+func (e *emitter) emitClassParams(m *ast.ClassMember) {
+	for i, p := range m.Params {
+		if i > 0 {
+			e.write(", ")
+		}
+		e.write(p.Name.Name)
+	}
+	if m.HasVarArg {
+		if len(m.Params) > 0 {
+			e.write(", ")
+		}
+		e.write("...")
+	}
+}
