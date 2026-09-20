@@ -299,6 +299,7 @@ local x = 1
 local y = x < 2
 `)
 }
+
 func TestExplicitTypeArgsErr(t *testing.T) {
 	// Too many.
 	expectErr(t, `
@@ -340,6 +341,7 @@ local m: M = {}
 local v: number = m["k"]
 `)
 }
+
 func TestMappedIndexedErr(t *testing.T) {
 	expectErr(t, `
 type Point = { x: number, y: number }

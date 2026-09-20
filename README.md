@@ -11,7 +11,7 @@ go build -o tlua ./cmd/tlua
 ./tlua build   # -> dist/*.lua
 ```
 
-示例见 `examples/*/`（13 个文件，`tlua check` 全过），规范见 `SPEC.md`。
+示例见 `examples/*/`（17 个文件，`tlua check` 全过），规范见 `SPEC.md`。
 
 | 示例 | 覆盖 |
 |---|---|
@@ -29,6 +29,8 @@ go build -o tlua ./cmd/tlua
 | `compat` | 5.1/LuaJIT 兼容子集（`--target 5.1` 验证） |
 | `class` | 类：继承/抽象/可见性/静态/泛型/`super`（真机运行验证） |
 | `conditional` | 条件类型/`infer`：分发、元组/函数/对象/类模式（真机运行验证） |
+| `macros` | 卫生宏：表达式/语句宏、遮蔽与捕获防护（真机运行验证） |
+| `advanced` | 显式泛型实参、映射类型、索引访问（真机运行验证） |
 
 ## tlua.json
 

@@ -1,4 +1,4 @@
-# TypeLua 语言规范 v0.3
+# TypeLua 语言规范 v0.4
 
 TypeLua 是 Lua 的类型超集（对标 TypeScript 之于 JavaScript）：类型注解可擦除，编译产物为地道 Lua（默认 5.4，兼容 5.1/LuaJIT）。`class` 是唯一的例外：它生成小体积元表样板（5.1 兼容）。
 
@@ -26,6 +26,8 @@ T ::= any | unknown | never | void | nil
     | (T) | (A, B)                     -- 分组/多返回值（仅 -> 后）
     | Check extends Extends ? True : False  -- 条件类型（右结合）
     | infer U                          -- 仅 extends 子句内有效
+    | T[K]                             -- 索引访问（K 为字面量并、keyof 结果等）
+    | { [K in Keys]?: V }              -- 映射类型（可选 readonly 前缀）
     | typeof(x) | keyof T
 ```
 
@@ -35,6 +37,8 @@ T ::= any | unknown | never | void | nil
 - `map<K,V>` 点访问：`m.field` 要求 `K` 接受 `string`。
 - 条件类型：裸类型参数检查具分发性（`El<string|number[]>` 逐成员求值）；`infer` 在数组/元组/函数/对象/类模式中绑定。
 - 含未定类型参数的条件类型保持延迟，实例化（或 `Substitute` 具体化）时求值；延迟状态下子类型保持宽松（泛型代码不误报）。
+- 索引访问要求键在目标中全部存在（联合两侧逐成员解析）；缺键、`boolean` 等不可映射的域一律报错。
+- 映射的域须为字面量并、`keyof` 结果或 `string/number/integer`（后者生成索引签名）；`?` 使字段可选，`readonly` 使字段只读。
 
 ## 3. 声明
 
@@ -60,7 +64,7 @@ declare function external(s: string): number    -- .d.tl，无发射
 ```
 
 - `export`/`declare` 仅修饰声明；`declare` 无发射。
-- 泛型：`<T>`, `<T extends C>`, `<T = Default>`；调用时推断（暂不支持显式 `f<T>()`）。
+- 泛型：`<T>`, `<T extends C>`, `<T = Default>`；调用时推断，也支持显式 `f<T>()`（含 `obj:m<T>()`、`C.new<T>()`、`C<T>()`；不足位用推断/默认值补齐，超位与约束违反报错）。
 - 属性：`local x <const> = 1`，`local h <close> = ...`（`--target 5.1` 时剥离）。
 
 ## 4. 类（class 运行时）
@@ -104,13 +108,35 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 
 ## 7. 编译器
 
-- `tlua.json` 对标 `tsconfig.json`：`compilerOptions.{target,strict,strictNilChecks,noImplicitAny,outDir,rootDir}` + `include/exclude/files`。
-- 管线：lex → parse（错误恢复）→ check → emit，与 `tsc` 同构。
-- 诊断码：`TL1xxx` 词法，`TL2xxx` 语法，`TL3xxx` 类型，`TL4xxx` 工程。
+- `tlua.json` 对标 `tsconfig.json`：`compilerOptions.{target,strict,strictNilChecks,noImplicitAny,outDir,rootDir,sourceMap}` + `include/exclude/files`。
+- 管线：lex → parse（错误恢复）→ check（含宏展开）→ emit，与 `tsc` 同构。
+- 诊断码：`TL1xxx` 词法、`TL2xxx` 语法（含 `TL203x` 类成员、`TL2038` 宏形参）、`TL3xxx` 类型（含 `TL3234` 显式实参、`TL3602` 映射域、`TL3603` 索引访问、`TL37xx` 宏展开）、`TL4xxx` 工程。
 - `.d.tl` 只检查不发射。
 
-## 8. 非目标（v0.3）
+## 8. 宏（卫生 AST 宏）
 
-- 映射类型、显式泛型实参、宏、源码映射、LSP（后续版本）。
+```lua
+macro twice(x) = (x) + (x)              -- 表达式宏
+macro unless(cond, body) do             -- 语句宏
+  if not (cond) then
+    body                                -- 裸形参即拼接位
+  end
+end
+```
+
+- 检查前展开、用后擦除；支持嵌套调用、前向引用与块作用域（函数内定义的宏仅函数内可见）。
+- 卫生：宏内局部绑定逐次重命名（形参同名遮蔽亦处理），调用方标识符永不捕获；标签同步重命名；`local class` 等价冗余接受，`export/declare macro` 拒绝。
+- 语句宏只能出现在语句位置、表达式宏位的值位置混用报错；参数个数须精确匹配；递归展开报错；重复求值风险（如 `twice(f())` 求值两次）由宏作者负责，宏体条件/循环建议给参数加括号（`not` 优先级坑）。
+- 限制：宏形参仅值层面（不可用于类型位置）；不支持变长宏参。
+
+## 9. 源码映射与语言服务器
+
+- `tlua build --sourceMap`（或 `sourceMap: true`）输出 `<out>.lua.map`（V3 JSON，自带 `sourcesContent`）并在产物尾加 `--# sourceMappingURL=` 注释；映射为语句粒度 + 具名函数名。
+- `tlua lsp`（stdio）：诊断推送、悬停、跳转定义、补全（含可见变量/类型/关键字）、引用、重命名（拒绝内建与涉类型名的半截重命名）、文档符号。重命名/引用覆盖值符号；类型名与成员暂不支持（会明确报错而非静默半改）。
+
+## 10. 非目标（v0.4）
+
+- 映射 `-?`/`+readonly` 等修饰符运算、变长宏参、增量 LSP 同步（现全量）。
 - 窄化仅跟踪局部变量（`node.next` 请先存入局部变量再判断）。
 - `?` 与条件分支的歧义以后瞻消解；极端嵌套以错误恢复兜底。
+- 类型名与成员的重命名/引用（值符号已完整）。
