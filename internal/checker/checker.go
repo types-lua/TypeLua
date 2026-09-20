@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/typelua/typelua/internal/ast"
-	"github.com/typelua/typelua/internal/expand"
 	"github.com/typelua/typelua/internal/diag"
+	"github.com/typelua/typelua/internal/expand"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -47,27 +47,30 @@ type Symbol struct {
 	Span      token.Span
 	IsConst   bool
 	IsBuiltin bool
+	// SameAs links narrowing shadows (and similar ephemeral copies) back
+	// to the definition symbol for references/rename.
+	SameAs *Symbol
 	// For functions with generics.
 	GenericNames []string
 	FuncDecl     *ast.FuncLit
 }
 
 type typeEntry struct {
-	name       string
-	span       token.Span // declaration name span (for goto-definition)
-	params     []*ast.GenericParam
-	alias      *ast.TypeAliasDecl
-	iface      *ast.InterfaceDecl
-	enumDecl   *ast.EnumDecl
-	enumType   *types.Enum
-	classDecl  *ast.ClassDecl
-	classDef   *types.ClassDef
-	classBuild *classBuild
-	classShell *types.Class
+	name         string
+	span         token.Span // declaration name span (for goto-definition)
+	params       []*ast.GenericParam
+	alias        *ast.TypeAliasDecl
+	iface        *ast.InterfaceDecl
+	enumDecl     *ast.EnumDecl
+	enumType     *types.Enum
+	classDecl    *ast.ClassDecl
+	classDef     *types.ClassDef
+	classBuild   *classBuild
+	classShell   *types.Class
 	classPatches []func()
-	resolving  bool
-	cached     types.Type // for non-generic
-	cacheInst  map[string]types.Type
+	resolving    bool
+	cached       types.Type // for non-generic
+	cacheInst    map[string]types.Type
 }
 
 // classBuild is the checked definition form of a class (generic placeholders
@@ -120,10 +123,10 @@ func (s *Scope) lookupType(name string) *typeEntry {
 
 // Checker holds per-program state (single file for now; multi-file via Program).
 type Checker struct {
-	opt      Options
-	diags    []diag.Diagnostic
-	scopes   []*Scope
-	file     string
+	opt    Options
+	diags  []diag.Diagnostic
+	scopes []*Scope
+	file   string
 	// Narrowing overrides per scope depth? We implement via shadow symbols: narrowedScopes stack.
 	// Return checking.
 	retStack [][]types.Type // expected returns per function (nil = infer/any)
@@ -141,6 +144,67 @@ type Checker struct {
 	classStack []*classCtx
 	// >0 while resolving an extends clause (where `infer` may appear).
 	extendsDepth int
+	// Index collects position information for LSP when non-nil.
+	Index *SymIndex
+}
+
+// SymUse is one identifier occurrence: a use, or (IsDef) its definition.
+type SymUse struct {
+	Span  token.Span
+	Sym   *Symbol
+	Root  *Symbol
+	IsDef bool
+	// Entry is set for type-name references (aliases, interfaces...).
+	Entry *typeEntry
+}
+
+// ScopeSpan pairs a live scope with the block span that owns it.
+type ScopeSpan struct {
+	Sc   *Scope
+	Span token.Span
+}
+
+// SymIndex is the checker's position database for language servers.
+// Recording is best-effort and never affects diagnostics.
+type SymIndex struct {
+	Uses   []SymUse
+	Scopes []ScopeSpan
+}
+
+// symRoot follows SameAs links to the definition symbol.
+func symRoot(s *Symbol) *Symbol {
+	for s != nil && s.SameAs != nil {
+		s = s.SameAs
+	}
+	return s
+}
+
+func (c *Checker) recordUse(span token.Span, s *Symbol) {
+	if c.Index == nil || s == nil {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, Sym: s, Root: symRoot(s)})
+}
+
+func (c *Checker) recordDef(span token.Span, s *Symbol) {
+	if c.Index == nil || s == nil {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, Sym: s, Root: symRoot(s), IsDef: true})
+}
+
+func (c *Checker) recordTypeUse(span token.Span, e *typeEntry) {
+	if c.Index == nil || e == nil {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, Entry: e})
+}
+
+func (c *Checker) recordScope(sc *Scope, span token.Span) {
+	if c.Index == nil {
+		return
+	}
+	c.Index.Scopes = append(c.Index.Scopes, ScopeSpan{Sc: sc, Span: span})
 }
 
 type gotoRef struct {
@@ -162,16 +226,37 @@ func (c *Checker) cur() *Scope { return c.scopes[len(c.scopes)-1] }
 func (c *Checker) push()       { c.scopes = append(c.scopes, newScope(c.cur())) }
 func (c *Checker) pop()        { c.scopes = c.scopes[:len(c.scopes)-1] }
 
+// bindVar installs a binding, linking redefinitions so reference queries
+// (references/rename) unify the whole chain. Builtin shadows stay detached.
+func (c *Checker) bindVar(name string, sym *Symbol) *Symbol {
+	if old, ok := c.cur().vars[name]; ok && !old.IsBuiltin {
+		sym.SameAs = old
+	}
+	c.cur().vars[name] = sym
+	return sym
+}
+
 // CheckFile type-checks a parsed file. Returns diagnostics.
 func CheckFile(f *ast.File, opt Options) []diag.Diagnostic {
+	diags, _ := CheckFileIndexed(f, opt)
+	return diags
+}
+
+// CheckFileIndexed type-checks and additionally returns the position index
+// used by language servers. The index is always populated.
+func CheckFileIndexed(f *ast.File, opt Options) ([]diag.Diagnostic, *SymIndex) {
 	c := New(opt)
 	c.file = f.Name
 	// Macros expand before checking (definitions erase; idempotent).
 	c.diags = append(c.diags, expand.ExpandFile(f)...)
 	c.scopes = []*Scope{newScope(nil)}
 	c.defineBuiltins(c.cur())
+	c.Index = &SymIndex{}
+	if f.Block != nil {
+		c.recordScope(c.cur(), f.Block.Span())
+	}
 	c.checkBlock(f.Block)
-	return c.diags
+	return c.diags, c.Index
 }
 
 // ---------- builtins (permissive any-based to avoid false positives) ----------
@@ -266,6 +351,7 @@ func (c *Checker) checkBlock(b *ast.Block) {
 		return
 	}
 	c.collectTypes(b, c.cur())
+	c.recordScope(c.cur(), b.Span())
 	for _, st := range b.Stmts {
 		c.checkStmt(st)
 	}
@@ -404,7 +490,7 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 			// Builtins (print/next/...) may be localized, so exempt them.
 			c.errorf("TL3011", name.Span(), "redefinition of local '%s'", name.Name)
 		}
-		c.cur().vars[name.Name] = &Symbol{Name: name.Name, Kind: symVar, Type: final, Span: name.Span(), IsConst: isConst}
+		c.recordDef(name.Span(), c.bindVar(name.Name, &Symbol{Name: name.Name, Kind: symVar, Type: final, Span: name.Span(), IsConst: isConst}))
 	}
 	if len(valTypes) > len(n.Names) && len(n.Names) > 0 {
 		// Extra values dropped: allowed in Lua, no error.
@@ -482,7 +568,8 @@ func (c *Checker) checkLocalFunc(n *ast.LocalFuncDef) {
 	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
 		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
 	}
-	c.cur().vars[n.Name.Name] = &Symbol{Name: n.Name.Name, Kind: symFunc, Type: ft, Span: n.Span(), GenericNames: genericNames(n.Generics), FuncDecl: n.Func}
+	sym := c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symFunc, Type: ft, Span: n.Span(), GenericNames: genericNames(n.Generics), FuncDecl: n.Func})
+	c.recordDef(n.Name.Span(), sym)
 	c.checkFuncBody(n.Func, n.Generics, ft)
 }
 
@@ -504,9 +591,11 @@ func (c *Checker) checkGlobalFunc(n *ast.FuncDefStmt) {
 		if g := c.cur().lookupVar(name); g != nil {
 			// Redefinition of function: allow (Lua pattern), but update type.
 			g.Type = ft
+			c.recordDef(n.Name.Prefix[0].Span(), g)
 		} else {
 			// Define as global in current scope (modules use locals+return, globals rare).
-			c.cur().vars[name] = &Symbol{Name: name, Kind: symFunc, Type: ft, Span: n.Span(), GenericNames: genericNames(n.Generics), FuncDecl: n.Func}
+			sym := c.bindVar(name, &Symbol{Name: name, Kind: symFunc, Type: ft, Span: n.Span(), GenericNames: genericNames(n.Generics), FuncDecl: n.Func})
+			c.recordDef(n.Name.Prefix[0].Span(), sym)
 		}
 	} else {
 		// a.b.c or a:b — verify base exists.
@@ -693,7 +782,7 @@ func (c *Checker) checkNumericFor(n *ast.NumericFor) {
 	if n.VarTy != nil {
 		vt = c.resolveType(n.VarTy)
 	}
-	c.cur().vars[n.Var.Name] = &Symbol{Name: n.Var.Name, Kind: symVar, Type: vt, Span: n.Var.Span()}
+	c.recordDef(n.Var.Span(), c.bindVar(n.Var.Name, &Symbol{Name: n.Var.Name, Kind: symVar, Type: vt, Span: n.Var.Span()}))
 	c.checkBlock(n.Block)
 	c.pop()
 }
@@ -710,7 +799,7 @@ func (c *Checker) checkGenericFor(n *ast.GenericFor) {
 		if i < len(n.Types) && n.Types[i] != nil {
 			t = c.resolveType(n.Types[i])
 		}
-		c.cur().vars[name.Name] = &Symbol{Name: name.Name, Kind: symVar, Type: t, Span: name.Span()}
+		c.recordDef(name.Span(), c.bindVar(name.Name, &Symbol{Name: name.Name, Kind: symVar, Type: t, Span: name.Span()}))
 	}
 	c.checkBlock(n.Block)
 	c.pop()
@@ -785,7 +874,7 @@ func (c *Checker) checkEnum(n *ast.EnumDecl) {
 			fields[name] = types.Field{Type: m}
 		}
 		obj := &types.Object{Name: n.Name.Name, Fields: fields}
-		c.cur().vars[n.Name.Name] = &Symbol{Name: n.Name.Name, Kind: symVar, Type: obj, Span: n.Span()}
+		c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: obj, Span: n.Span()}))
 	}
 }
 
@@ -869,7 +958,7 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 		if i < len(ft.Params) {
 			t = ft.Params[i].Type
 		}
-		c.cur().vars[p.Name.Name] = &Symbol{Name: p.Name.Name, Kind: symParam, Type: t, Span: p.Name.Span()}
+		c.recordDef(p.Name.Span(), c.bindVar(p.Name.Name, &Symbol{Name: p.Name.Name, Kind: symParam, Type: t, Span: p.Name.Span()}))
 	}
 	if fn.IsMethod {
 		if _, ok := c.cur().vars["self"]; !ok {
@@ -886,7 +975,7 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 			} else {
 				restT = &types.Array{Elem: types.Any}
 			}
-			c.cur().vars[fn.VarArgName.Name] = &Symbol{Name: fn.VarArgName.Name, Kind: symParam, Type: restT, Span: fn.VarArgName.Span()}
+			c.recordDef(fn.VarArgName.Span(), c.bindVar(fn.VarArgName.Name, &Symbol{Name: fn.VarArgName.Name, Kind: symParam, Type: restT, Span: fn.VarArgName.Span()}))
 		}
 		c.varargStack = append(c.varargStack, ft.VarArg)
 		if ft.VarArg == nil {
@@ -1098,6 +1187,7 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 		c.errorf("TL3103", t.Span(), "undefined type '%s'", t.Name)
 		return types.Any
 	}
+	c.recordTypeUse(t.Span(), e)
 	// Self-reference while a class definition is being built: bind to the
 	// shell so recursive types (e.g. `next: Box<T> | nil`) keep working.
 	// The shell is filled in place, so later reads see complete members.
@@ -1668,6 +1758,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 	switch n := e.(type) {
 	case *ast.Ident:
 		if s := c.cur().lookupVar(n.Name); s != nil {
+			c.recordUse(n.Span(), s)
 			return s.Type
 		}
 		if n.Name == "self" {
@@ -2198,7 +2289,7 @@ func (c *Checker) applyNarrowing(cond ast.Expr, truthy bool) {
 	for name, t := range over {
 		if sym := c.cur().lookupVar(name); sym != nil {
 			// Shadow in current scope.
-			c.cur().vars[name] = &Symbol{Name: name, Kind: sym.Kind, Type: t, Span: sym.Span, IsConst: sym.IsConst, IsBuiltin: sym.IsBuiltin}
+			c.cur().vars[name] = &Symbol{Name: name, Kind: sym.Kind, Type: t, Span: sym.Span, IsConst: sym.IsConst, IsBuiltin: sym.IsBuiltin, SameAs: symRoot(sym)}
 		}
 	}
 }
@@ -3206,13 +3297,13 @@ func (c *Checker) checkClass(n *ast.ClassDecl) {
 	}
 	def := c.ensureClassDef(e)
 	if def == nil {
-		c.cur().vars[n.Name.Name] = &Symbol{Name: n.Name.Name, Kind: symVar, Type: types.Any, Span: n.Span()}
+		c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: types.Any, Span: n.Span()}))
 		return
 	}
 	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
 		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
 	}
-	c.cur().vars[n.Name.Name] = &Symbol{Name: n.Name.Name, Kind: symVar, Type: def.val, Span: n.Span()}
+	c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: def.val, Span: n.Span()}))
 	if !n.Declared {
 		c.checkClassBodies(e, n, def)
 	}
@@ -3393,7 +3484,7 @@ func (c *Checker) checkClassMethodBody(n *ast.ClassDecl, m *ast.ClassMember, ft 
 				break
 			}
 		}
-		c.cur().vars[p.Name.Name] = &Symbol{Name: p.Name.Name, Kind: symParam, Type: t, Span: p.Name.Span()}
+		c.recordDef(p.Name.Span(), c.bindVar(p.Name.Name, &Symbol{Name: p.Name.Name, Kind: symParam, Type: t, Span: p.Name.Span()}))
 	}
 	if !m.IsStatic {
 		c.cur().vars["self"] = &Symbol{Name: "self", Kind: symParam, Type: def.inst, Span: m.Span()}
@@ -3404,7 +3495,7 @@ func (c *Checker) checkClassMethodBody(n *ast.ClassDecl, m *ast.ClassMember, ft 
 			if ft.VarArg != nil {
 				restT = &types.Array{Elem: ft.VarArg}
 			}
-			c.cur().vars[m.VarArgName.Name] = &Symbol{Name: m.VarArgName.Name, Kind: symParam, Type: restT, Span: m.VarArgName.Span()}
+			c.recordDef(m.VarArgName.Span(), c.bindVar(m.VarArgName.Name, &Symbol{Name: m.VarArgName.Name, Kind: symParam, Type: restT, Span: m.VarArgName.Span()}))
 		}
 		c.varargStack = append(c.varargStack, ft.VarArg)
 		if ft.VarArg == nil {
@@ -3961,4 +4052,146 @@ func collectInferNames(n ast.TypeNode, into map[string]bool) map[string]bool {
 		// Own scope; skip.
 	}
 	return into
+}
+
+// ---------- LSP support ----------
+
+// ScopeAt returns the deepest recorded scope containing the byte offset.
+func (idx *SymIndex) ScopeAt(offset int) *Scope {
+	if idx == nil {
+		return nil
+	}
+	var best *Scope
+	bestSize := -1
+	for _, ss := range idx.Scopes {
+		if ss.Span.Start.Offset <= offset && offset < ss.Span.End.Offset {
+			size := ss.Span.End.Offset - ss.Span.Start.Offset
+			if best == nil || size < bestSize {
+				best = ss.Sc
+				bestSize = size
+			}
+		}
+	}
+	return best
+}
+
+// ParentScope returns the enclosing scope, if any.
+func (s *Scope) ParentScope() *Scope {
+	if s == nil {
+		return nil
+	}
+	return s.parent
+}
+
+// ScopeVar is one visible variable binding.
+type ScopeVar struct {
+	Name string
+	Sym  *Symbol
+}
+
+// ScopeVars lists the variables bound directly in this scope.
+func (s *Scope) ScopeVars() []ScopeVar {
+	if s == nil {
+		return nil
+	}
+	out := make([]ScopeVar, 0, len(s.vars))
+	for name, sym := range s.vars {
+		if sym == nil {
+			continue
+		}
+		out = append(out, ScopeVar{Name: name, Sym: sym})
+	}
+	return out
+}
+
+// HasType reports whether a type name is visible from this scope.
+func (s *Scope) HasType(name string) bool {
+	for sc := s; sc != nil; sc = sc.parent {
+		if _, ok := sc.types[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// ScopeTypeInfo is one visible type declaration.
+type ScopeTypeInfo struct {
+	Name string
+	Kind string
+	Span token.Span
+}
+
+// ScopeTypes lists type declarations visible from this scope (innermost
+// shadows outermost on name clashes).
+func (s *Scope) ScopeTypes() []ScopeTypeInfo {
+	if s == nil {
+		return nil
+	}
+	// Collect outward, innermost wins.
+	var chain []*Scope
+	for sc := s; sc != nil; sc = sc.parent {
+		chain = append(chain, sc)
+	}
+	seen := map[string]bool{}
+	var out []ScopeTypeInfo
+	for i := len(chain) - 1; i >= 0; i-- {
+		for name, e := range chain[i].types {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			out = append(out, ScopeTypeInfo{Name: name, Kind: e.EntryKind(), Span: e.DeclSpan()})
+		}
+	}
+	return out
+}
+
+// KindString describes a symbol for hovers and completion items.
+func (s *Symbol) KindString() string {
+	if s == nil {
+		return "variable"
+	}
+	switch s.Kind {
+	case symFunc:
+		return "function"
+	case symParam:
+		return "parameter"
+	default:
+		return "variable"
+	}
+}
+
+// TypeName returns the declared type name.
+func (e *typeEntry) TypeName() string {
+	if e == nil {
+		return ""
+	}
+	return e.name
+}
+
+// DeclSpan returns the declaration name span for goto-definition.
+func (e *typeEntry) DeclSpan() token.Span {
+	if e == nil {
+		return token.Span{}
+	}
+	return e.span
+}
+
+// EntryKind describes a type declaration for hovers.
+func (e *typeEntry) EntryKind() string {
+	if e == nil {
+		return ""
+	}
+	switch {
+	case e.alias != nil:
+		return "type"
+	case e.iface != nil:
+		return "interface"
+	case e.enumDecl != nil:
+		return "enum"
+	case e.classDecl != nil:
+		return "class"
+	default:
+		return "type"
+	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/typelua/typelua/internal/compiler"
 	"github.com/typelua/typelua/internal/config"
+	"github.com/typelua/typelua/internal/lsp"
 )
 
 const Version = "0.1.0"
@@ -37,6 +38,9 @@ func run(args []string) error {
 		return cmdCheck(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
+	case "lsp":
+		os.Exit(lsp.Run(os.Stdin, os.Stdout, Version))
+		return nil
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", args[0])
@@ -50,6 +54,7 @@ Usage:
   tlua init [--dir .]                 create tlua.json + example
   tlua check [files...]               type-check only
   tlua build [files...] [--outDir dist] [--target 5.4]
+  tlua lsp                          language server over stdio
   tlua version                        print version`)
 }
 
