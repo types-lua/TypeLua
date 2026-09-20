@@ -13,6 +13,7 @@ import (
 	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/emitter"
 	"github.com/typelua/typelua/internal/parser"
+	"github.com/typelua/typelua/internal/sourcemap"
 )
 
 // SourceFile is a loaded unit.
@@ -112,16 +113,31 @@ func (p *Program) Emit() ([]string, error) {
 		if sf.IsDecl {
 			continue
 		}
-		out := emitter.EmitFile(sf.File, opt)
+		out, mappings := emitter.EmitFileWithMap(sf.File, opt)
 		rel, err := filepath.Rel(filepath.Join(p.Cfg.Dir, p.Cfg.RootDir()), sf.Path)
 		if err != nil {
 			rel = filepath.Base(sf.Path)
 		}
+		srcRel := filepath.ToSlash(rel)
 		rel = strings.TrimSuffix(rel, ".tl") + ".lua"
 		// Handle `.d.tl` already skipped; `foo.tl` -> `foo.lua`.
 		dst := filepath.Join(outDir, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return emitted, err
+		}
+		if p.Cfg.CompilerOptions.SourceMap {
+			base := filepath.Base(dst)
+			for i := range mappings {
+				mappings[i].SrcFile = srcRel
+			}
+			raw, err := sourcemap.Encode(base, []string{srcRel}, []string{sf.Content}, nil, mappings)
+			if err != nil {
+				return emitted, err
+			}
+			if err := os.WriteFile(dst+".map", raw, 0o644); err != nil {
+				return emitted, err
+			}
+			out += "--# sourceMappingURL=" + base + ".map\n"
 		}
 		if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
 			return emitted, err

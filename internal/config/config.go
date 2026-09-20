@@ -15,6 +15,7 @@ type CompilerOptions struct {
 	NoImplicitAny   *bool  `json:"noImplicitAny"`
 	OutDir          string `json:"outDir"`
 	RootDir         string `json:"rootDir"`
+	SourceMap       bool   `json:"sourceMap"`
 }
 
 // Config is tlua.json.

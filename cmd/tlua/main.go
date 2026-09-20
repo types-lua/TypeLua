@@ -102,7 +102,7 @@ print(dist(p, { x = 4, y = 6 }))
 	return nil
 }
 
-func loadCfgFor(paths []string, outDir, target string) (*config.Config, error) {
+func loadCfgFor(paths []string, outDir, target string, sourceMap bool) (*config.Config, error) {
 	cwd, _ := os.Getwd()
 	cfgPath := config.FindUp(cwd)
 	var cfg *config.Config
@@ -127,6 +127,9 @@ func loadCfgFor(paths []string, outDir, target string) (*config.Config, error) {
 		}
 		cfg.CompilerOptions.Target = target
 	}
+	if sourceMap {
+		cfg.CompilerOptions.SourceMap = true
+	}
 	return cfg, nil
 }
 
@@ -135,7 +138,7 @@ func cmdCheck(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := loadCfgFor(fs.Args(), "", "")
+	cfg, err := loadCfgFor(fs.Args(), "", "", false)
 	if err != nil {
 		return err
 	}
@@ -158,10 +161,11 @@ func cmdBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	outDir := fs.String("outDir", "", "output directory")
 	target := fs.String("target", "", "lua target: 5.4 or 5.1")
+	sourceMap := fs.Bool("sourceMap", false, "emit .lua.map source maps")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := loadCfgFor(fs.Args(), *outDir, *target)
+	cfg, err := loadCfgFor(fs.Args(), *outDir, *target, *sourceMap)
 	if err != nil {
 		return err
 	}

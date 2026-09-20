@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/sourcemap"
 )
 
 // Options for code generation.
@@ -16,13 +17,26 @@ func DefaultOptions() Options { return Options{Target: "5.4"} }
 
 // EmitFile renders a parsed file to Lua source (type erasure).
 func EmitFile(f *ast.File, opt Options) string {
-	e := &emitter{opt: opt}
+	out, _ := EmitFileWithMap(f, opt)
+	return out
+}
+
+// EmitFileWithMap renders Lua source plus source-map entries (statement
+// granularity, rune columns). Entries are always collected; encoding
+// happens only when the caller wants a map (near-zero overhead).
+func EmitFileWithMap(f *ast.File, opt Options) (string, []sourcemap.Mapping) {
+	e := &emitter{opt: opt, line: 1}
 	e.emitBlock(f.Block, 0)
 	out := e.buf.String()
 	if out == "" || strings.HasSuffix(out, "\n") {
-		return out
+		return out, e.mappings
 	}
-	return out + "\n"
+	return out + "\n", e.mappings
+}
+
+type pendingMark struct {
+	span ast.Node
+	name string
 }
 
 type emitter struct {
@@ -30,6 +44,10 @@ type emitter struct {
 	buf        strings.Builder
 	indent     int
 	classStack []classEmitCtx
+	line       int // 1-based generated line
+	col        int // 0-based generated column (runes)
+	pending    *pendingMark
+	mappings   []sourcemap.Mapping
 }
 
 type classEmitCtx struct {
@@ -44,12 +62,65 @@ func (e *emitter) curClass() *classEmitCtx {
 	return &e.classStack[len(e.classStack)-1]
 }
 
-func (e *emitter) write(s string) { e.buf.WriteString(s) }
-func (e *emitter) nl()            { e.buf.WriteString("\n") }
+func (e *emitter) write(s string) {
+	for _, r := range s {
+		// Flush a pending statement mark on the first visible rune.
+		if e.pending != nil && r != ' ' && r != '\t' && r != '\n' && r != '\r' {
+			sp := e.pending.span.Span()
+			e.mappings = append(e.mappings, sourcemap.Mapping{
+				GenLine: e.line,
+				GenCol:  e.col,
+				SrcFile: sp.File,
+				SrcLine: sp.Start.Line - 1,
+				SrcCol:  sp.Start.Column - 1,
+				Name:    e.pending.name,
+			})
+			e.pending = nil
+		}
+		e.buf.WriteRune(r)
+		if r == '\n' {
+			e.line++
+			e.col = 0
+		} else {
+			e.col++
+		}
+	}
+}
+func (e *emitter) nl() { e.write("\n") }
 func (e *emitter) pad() {
 	for i := 0; i < e.indent; i++ {
-		e.buf.WriteString("    ")
+		e.write("    ")
 	}
+}
+
+// mark records the next visible output position for a source node.
+func (e *emitter) mark(n ast.Node, name string) {
+	e.pending = &pendingMark{span: n, name: name}
+}
+
+// stmtName extracts a debug name for function definitions.
+func stmtName(st ast.Stmt) string {
+	switch n := st.(type) {
+	case *ast.LocalFuncDef:
+		return n.Name.Name
+	case *ast.FuncDefStmt:
+		if n.Name != nil {
+			s := ""
+			for i, p := range n.Name.Prefix {
+				if i > 0 {
+					s += "."
+				}
+				s += p.Name
+			}
+			if n.Name.Method != nil {
+				s += ":" + n.Name.Method.Name
+			}
+			return s
+		}
+	case *ast.ClassDecl:
+		return n.Name.Name
+	}
+	return ""
 }
 
 func (e *emitter) emitBlock(b *ast.Block, ind int) {
@@ -62,6 +133,7 @@ func (e *emitter) emitBlock(b *ast.Block, ind int) {
 		e.emitStmt(st)
 	}
 	if b.Ret != nil {
+		e.mark(b.Ret, "")
 		e.pad()
 		e.write("return")
 		if len(b.Ret.Exprs) > 0 {
@@ -79,9 +151,11 @@ func (e *emitter) emitBlock(b *ast.Block, ind int) {
 }
 
 func (e *emitter) emitStmt(st ast.Stmt) {
+	e.mark(st, stmtName(st))
 	switch n := st.(type) {
 	case *ast.EmptyStmt:
 		// Skip (avoid clutter), but keep `;` if it was intentional? Drop.
+		e.pending = nil
 	case *ast.ExprStmt:
 		e.pad()
 		e.emitExpr(n.E)
@@ -266,6 +340,7 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		e.nl()
 	case *ast.TypeAliasDecl, *ast.InterfaceDecl, *ast.MacroDef:
 		// Type-only / compile-time: erased.
+		e.pending = nil
 	case *ast.EnumDecl:
 		e.emitEnum(n)
 	case *ast.ClassDecl:
@@ -611,6 +686,7 @@ func classBaseName(t ast.TypeNode) string {
 // every class gets a constructor so `Base.constructor` always exists.
 func (e *emitter) emitClass(n *ast.ClassDecl) {
 	if n.Declared {
+		e.pending = nil
 		return // ambient only
 	}
 	name := n.Name.Name
@@ -638,6 +714,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 			continue
 		}
 		e.pad()
+		e.mark(m, "")
 		e.write(name + "." + m.Name.Name + " = ")
 		e.emitExpr(m.Init)
 		e.nl()
@@ -645,6 +722,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 
 	// Constructor entry point.
 	e.pad()
+	e.mark(n, name+".new")
 	e.write("function " + name + ".new(...)")
 	e.nl()
 	e.indent++
@@ -690,6 +768,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 	}
 	if ctor != nil {
 		e.pad()
+		e.mark(ctor, name+":constructor")
 		e.write("function " + name + ":constructor(")
 		e.emitClassParams(ctor)
 		e.write(")")
@@ -722,6 +801,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 				}
 			}
 			if ctor.Body.Ret != nil {
+				e.mark(ctor.Body.Ret, "")
 				e.pad()
 				e.write("return")
 				if len(ctor.Body.Ret.Exprs) > 0 {
@@ -744,6 +824,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 		e.nl()
 	} else {
 		e.pad()
+		e.mark(n, name+":constructor")
 		e.write("function " + name + ":constructor(...)")
 		e.nl()
 		e.indent++
@@ -766,8 +847,10 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 		}
 		e.pad()
 		if m.IsStatic {
+			e.mark(m, name+"."+m.Name.Name)
 			e.write("function " + name + "." + m.Name.Name + "(")
 		} else {
+			e.mark(m, name+":"+m.Name.Name)
 			e.write("function " + name + ":" + m.Name.Name + "(")
 		}
 		e.emitClassParams(m)
@@ -792,6 +875,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 func (e *emitter) emitClassInits(className string, inits []*ast.ClassMember) {
 	for _, m := range inits {
 		e.pad()
+		e.mark(m, "")
 		e.write("self." + m.Name.Name + " = ")
 		e.emitExpr(m.Init)
 		e.nl()
