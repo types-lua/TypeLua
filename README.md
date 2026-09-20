@@ -28,6 +28,7 @@ go build -o tlua ./cmd/tlua
 | `lua54` | `<const>`/`<close>`/`goto`/位运算/`//`/长串 |
 | `compat` | 5.1/LuaJIT 兼容子集（`--target 5.1` 验证） |
 | `class` | 类：继承/抽象/可见性/静态/泛型/`super`（真机运行验证） |
+| `conditional` | 条件类型/`infer`：分发、元组/函数/对象/类模式（真机运行验证） |
 
 ## tlua.json
 

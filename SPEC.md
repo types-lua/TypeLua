@@ -1,4 +1,4 @@
-# TypeLua 语言规范 v0.2
+# TypeLua 语言规范 v0.3
 
 TypeLua 是 Lua 的类型超集（对标 TypeScript 之于 JavaScript）：类型注解可擦除，编译产物为地道 Lua（默认 5.4，兼容 5.1/LuaJIT）。`class` 是唯一的例外：它生成小体积元表样板（5.1 兼容）。
 
@@ -24,6 +24,8 @@ T ::= any | unknown | never | void | nil
     | { f: T, g?: U, [K]: V, m(a: T): R }  -- 表类型
     | (x: T, y?: U, ...rest: V[]) -> R -- 函数类型
     | (T) | (A, B)                     -- 分组/多返回值（仅 -> 后）
+    | Check extends Extends ? True : False  -- 条件类型（右结合）
+    | infer U                          -- 仅 extends 子句内有效
     | typeof(x) | keyof T
 ```
 
@@ -31,12 +33,16 @@ T ::= any | unknown | never | void | nil
 - `T?` = `T | nil`；`strictNilChecks` 下 `nil` 不可赋给其他类型。
 - 函数多返回值：`-> (A, B)`；调用时仅末尾表达式可展开。
 - `map<K,V>` 点访问：`m.field` 要求 `K` 接受 `string`。
+- 条件类型：裸类型参数检查具分发性（`El<string|number[]>` 逐成员求值）；`infer` 在数组/元组/函数/对象/类模式中绑定。
+- 含未定类型参数的条件类型保持延迟，实例化（或 `Substitute` 具体化）时求值；延迟状态下子类型保持宽松（泛型代码不误报）。
 
 ## 3. 声明
 
 ```lua
 type Point = { x: number, y: number }
 type List<T> = { head: T, tail: List<T> | nil }
+type Element<T> = T extends (infer U)[] ? U : T
+type Head<T> = T extends [infer H, ...unknown[]] ? H : never
 
 interface Named { name: string, greet(msg: string): string }
 interface Employee extends Named { id: integer }
@@ -103,7 +109,8 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 - 诊断码：`TL1xxx` 词法，`TL2xxx` 语法，`TL3xxx` 类型，`TL4xxx` 工程。
 - `.d.tl` 只检查不发射。
 
-## 8. 非目标（v0.2）
+## 8. 非目标（v0.3）
 
-- `infer`/条件类型、显式泛型实参、宏、源码映射、LSP（后续版本）。
+- 映射类型、显式泛型实参、宏、源码映射、LSP（后续版本）。
 - 窄化仅跟踪局部变量（`node.next` 请先存入局部变量再判断）。
+- `?` 与条件分支的歧义以后瞻消解；极端嵌套以错误恢复兜底。
