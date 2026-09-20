@@ -35,6 +35,8 @@ const (
 	KEnum
 	KGenericParam
 	KRef
+	KClass
+	KClassValue
 )
 
 type Type interface {
@@ -42,10 +44,31 @@ type Type interface {
 	String() string
 }
 
+// Access is member visibility (classes only; plain objects are always public).
+type Access int
+
+const (
+	Public Access = iota
+	Private
+	Protected
+)
+
+func (a Access) String() string {
+	switch a {
+	case Private:
+		return "private"
+	case Protected:
+		return "protected"
+	}
+	return "public"
+}
+
 type Field struct {
 	Type     Type
 	Optional bool
 	Readonly bool
+	Access   Access
+	Owner    *ClassDef // defining class for class members; nil otherwise
 }
 
 type Indexer struct {
@@ -265,6 +288,70 @@ func (t *Ref) String() string {
 		ps[i] = a.String()
 	}
 	return t.Name + "<" + strings.Join(ps, ", ") + ">"
+}
+
+// ClassField is a single class member (field or method).
+type ClassField struct {
+	Type     Type
+	Optional bool // fields only; methods are never optional
+	Readonly bool
+	Access   Access
+	IsMethod bool
+	Abstract bool
+	Owner    *ClassDef // class that declared this member (for visibility)
+}
+
+// ClassDef is the identity of a class declaration. All instantiations of
+// a generic class share one Def; nominal assignability compares Defs.
+type ClassDef struct {
+	Name string
+}
+
+// Class is a nominal instance type. Two class types are assignable only
+// along the inheritance chain; against plain objects/interfaces the
+// public members are checked structurally.
+type Class struct {
+	Def        *ClassDef
+	Name       string
+	Args       []Type // instantiation arguments for generic classes
+	Params     []string
+	Fields     map[string]ClassField // instance members (fields + methods)
+	Base       *Class
+	IsAbstract bool
+}
+
+func (t *Class) Kind() Kind { return KClass }
+func (t *Class) String() string {
+	if len(t.Args) == 0 {
+		return t.Name
+	}
+	ps := make([]string, len(t.Args))
+	for i, a := range t.Args {
+		ps[i] = a.String()
+	}
+	return t.Name + "<" + strings.Join(ps, ", ") + ">"
+}
+
+// ObjectView exposes public instance members structurally (for
+// interface conformance checks).
+func (t *Class) ObjectView() *Object { return classObjectView(t) }
+
+// ClassValue is the runtime class table: constructor plus statics.
+// Calling it (or its `new` method) creates an instance.
+type ClassValue struct {
+	Class       *Class // instance type produced (generic definition form)
+	Constructor *Func  // nil only for declare stubs (treated as any)
+	CtorAccess  Access // visibility of the constructor
+	Statics     map[string]ClassField
+	Abstract    bool
+}
+
+func (t *ClassValue) Kind() Kind { return KClassValue }
+func (t *ClassValue) String() string {
+	if t.Class != nil {
+		return "typeof " + t.Class.Name
+	}
+	return "class"
 }
 
 // ---------- constructors ----------
@@ -562,6 +649,34 @@ func assignable(from, to Type, opt Options, seen map[[2]string]bool) bool {
 		return false
 	}
 
+	// Classes (nominal instance types).
+	if fc, ok := from.(*Class); ok {
+		switch tt := to.(type) {
+		case *Class:
+			return classAssignable(fc, tt, opt, seen)
+		case *Object:
+			return classSatisfiesObject(fc, tt, opt, seen)
+		case *Primitive:
+			return tt.K == KTable
+		}
+		return false
+	}
+	if _, ok := to.(*Class); ok {
+		return false
+	}
+	// Class values only alias the same class.
+	if fv, ok := from.(*ClassValue); ok {
+		if tv, ok := to.(*ClassValue); ok {
+			return fv.Class != nil && tv.Class != nil &&
+				fv.Class.Def != nil && fv.Class.Def == tv.Class.Def &&
+				classArgsAssignable(fv.Class.Args, tv.Class.Args, opt, seen)
+		}
+		return false
+	}
+	if _, ok := to.(*ClassValue); ok {
+		return false
+	}
+
 	// Array.
 	if fa, ok := from.(*Array); ok {
 		switch tt := to.(type) {
@@ -585,6 +700,10 @@ func assignable(from, to Type, opt Options, seen map[[2]string]bool) bool {
 				}
 			}
 			return true
+		}
+		if fo, ok := from.(*Object); ok {
+			// `{}` is a valid empty array at runtime.
+			return len(fo.Fields) == 0 && len(fo.Indexers) == 0
 		}
 		return false
 	}
@@ -732,6 +851,54 @@ func primAssignable(from, to *Primitive) bool {
 		return true
 	}
 	return false
+}
+
+// classArgsAssignable checks generic arguments covariantly.
+func classArgsAssignable(from, to []Type, opt Options, seen map[[2]string]bool) bool {
+	if len(from) != len(to) {
+		return false
+	}
+	for i := range from {
+		if !assignable(from[i], to[i], opt, seen) {
+			return false
+		}
+	}
+	return true
+}
+
+// classAssignable walks the inheritance chain: a subclass instance is
+// assignable to its ancestors (with compatible type arguments).
+func classAssignable(from, to *Class, opt Options, seen map[[2]string]bool) bool {
+	visited := map[*Class]bool{}
+	for c := from; c != nil; c = c.Base {
+		if visited[c] {
+			return false
+		}
+		visited[c] = true
+		if c.Def != nil && to.Def != nil && c.Def == to.Def {
+			return classArgsAssignable(c.Args, to.Args, opt, seen)
+		}
+		if c.Def == nil && to.Def == nil && c.Name != "" && c.Name == to.Name {
+			return classArgsAssignable(c.Args, to.Args, opt, seen)
+		}
+	}
+	return false
+}
+
+// classObjectView exposes public instance members structurally.
+func classObjectView(c *Class) *Object {
+	o := &Object{Fields: map[string]Field{}}
+	for n, f := range c.Fields {
+		if f.Access != Public {
+			continue
+		}
+		o.Fields[n] = Field{Type: f.Type, Optional: f.Optional, Readonly: f.Readonly, Access: Public}
+	}
+	return o
+}
+
+func classSatisfiesObject(from *Class, to *Object, opt Options, seen map[[2]string]bool) bool {
+	return objectAssignable(classObjectView(from), to, opt, seen)
 }
 
 func unionOf(elems []Type) Type {
@@ -927,6 +1094,36 @@ func funcAssignable(from, to *Func, opt Options, seen map[[2]string]bool) bool {
 
 // Substitute replaces generic params by args.
 func Substitute(t Type, sub map[string]Type) Type {
+	return substitute(t, sub, &substCtx{memo: map[subKey]Type{}, fp: subFingerprint(sub)})
+}
+
+type subKey struct {
+	ptr any
+	fp  string
+}
+
+type substCtx struct {
+	memo map[subKey]Type
+	fp   string
+}
+
+func subFingerprint(sub map[string]Type) string {
+	names := make([]string, 0, len(sub))
+	for n := range sub {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var sb strings.Builder
+	for _, n := range names {
+		sb.WriteString(n)
+		sb.WriteByte('=')
+		sb.WriteString(sub[n].String())
+		sb.WriteByte(';')
+	}
+	return sb.String()
+}
+
+func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 	switch x := t.(type) {
 	case *GenericParam:
 		if s, ok := sub[x.Name]; ok {
@@ -936,49 +1133,95 @@ func Substitute(t Type, sub map[string]Type) Type {
 	case *Union:
 		ns := make([]Type, len(x.Types))
 		for i, m := range x.Types {
-			ns[i] = Substitute(m, sub)
+			ns[i] = substitute(m, sub, ctx)
 		}
 		return NewUnion(ns)
 	case *Intersection:
 		ns := make([]Type, len(x.Types))
 		for i, m := range x.Types {
-			ns[i] = Substitute(m, sub)
+			ns[i] = substitute(m, sub, ctx)
 		}
 		return NewIntersection(ns)
 	case *Array:
-		return &Array{Elem: Substitute(x.Elem, sub)}
+		return &Array{Elem: substitute(x.Elem, sub, ctx)}
 	case *Map:
-		return &Map{Key: Substitute(x.Key, sub), Value: Substitute(x.Value, sub)}
+		return &Map{Key: substitute(x.Key, sub, ctx), Value: substitute(x.Value, sub, ctx)}
 	case *Tuple:
 		ns := make([]Type, len(x.Elems))
 		for i, e := range x.Elems {
-			ns[i] = Substitute(e, sub)
+			ns[i] = substitute(e, sub, ctx)
 		}
 		return &Tuple{Elems: ns}
 	case *Func:
 		ps := make([]FuncParam, len(x.Params))
 		for i, p := range x.Params {
-			ps[i] = FuncParam{Name: p.Name, Type: Substitute(p.Type, sub), Optional: p.Optional}
+			ps[i] = FuncParam{Name: p.Name, Type: substitute(p.Type, sub, ctx), Optional: p.Optional}
 		}
 		var va Type
 		if x.VarArg != nil {
-			va = Substitute(x.VarArg, sub)
+			va = substitute(x.VarArg, sub, ctx)
 		}
 		rs := make([]Type, len(x.Returns))
 		for i, r := range x.Returns {
-			rs[i] = Substitute(r, sub)
+			rs[i] = substitute(r, sub, ctx)
 		}
 		return &Func{Params: ps, HasVarArg: x.HasVarArg, VarArg: va, Returns: rs}
 	case *Object:
 		nf := map[string]Field{}
 		for n, f := range x.Fields {
-			nf[n] = Field{Type: Substitute(f.Type, sub), Optional: f.Optional, Readonly: f.Readonly}
+			nf[n] = Field{Type: substitute(f.Type, sub, ctx), Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, Owner: f.Owner}
 		}
 		var nix []Indexer
 		for _, ix := range x.Indexers {
-			nix = append(nix, Indexer{Key: Substitute(ix.Key, sub), Value: Substitute(ix.Value, sub)})
+			nix = append(nix, Indexer{Key: substitute(ix.Key, sub, ctx), Value: substitute(ix.Value, sub, ctx)})
 		}
 		return &Object{Name: x.Name, Fields: nf, Indexers: nix}
+	case *Class:
+		// Recursive classes (e.g. `next: Chain<T>`) would diverge under
+		// naive substitution; build the copy once and fill it in place.
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
+		na := make([]Type, len(x.Args))
+		for i, a := range x.Args {
+			na[i] = substitute(a, sub, ctx)
+		}
+		out := &Class{Def: x.Def, Name: x.Name, Args: na, Params: x.Params, Fields: map[string]ClassField{}, Base: nil, IsAbstract: x.IsAbstract}
+		ctx.memo[key] = out
+		for n, f := range x.Fields {
+			out.Fields[n] = ClassField{Type: substitute(f.Type, sub, ctx), Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, IsMethod: f.IsMethod, Abstract: f.Abstract, Owner: f.Owner}
+		}
+		if x.Base != nil {
+			if b, ok := substitute(x.Base, sub, ctx).(*Class); ok {
+				out.Base = b
+			} else {
+				out.Base = x.Base
+			}
+		}
+		return out
+	case *ClassValue:
+		var nc *Class
+		if x.Class != nil {
+			if c, ok := substitute(x.Class, sub, ctx).(*Class); ok {
+				nc = c
+			} else {
+				nc = x.Class
+			}
+		}
+		var ctor *Func
+		if x.Constructor != nil {
+			if f, ok := substitute(x.Constructor, sub, ctx).(*Func); ok {
+				ctor = f
+			} else {
+				ctor = x.Constructor
+			}
+		}
+		ns := map[string]ClassField{}
+		for n, f := range x.Statics {
+			ns[n] = ClassField{Type: substitute(f.Type, sub, ctx), Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, IsMethod: f.IsMethod, Abstract: f.Abstract, Owner: f.Owner}
+		}
+		return &ClassValue{Class: nc, Constructor: ctor, CtorAccess: x.CtorAccess, Statics: ns, Abstract: x.Abstract}
 	case *Ref:
 		na := make([]Type, len(x.Args))
 		for i, a := range x.Args {

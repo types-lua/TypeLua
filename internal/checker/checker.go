@@ -58,9 +58,34 @@ type typeEntry struct {
 	iface      *ast.InterfaceDecl
 	enumDecl   *ast.EnumDecl
 	enumType   *types.Enum
+	classDecl  *ast.ClassDecl
+	classDef   *types.ClassDef
+	classBuild *classBuild
+	classShell *types.Class
+	classPatches []func()
 	resolving  bool
 	cached     types.Type // for non-generic
 	cacheInst  map[string]types.Type
+}
+
+// classBuild is the checked definition form of a class (generic placeholders
+// intact so call-site inference keeps working).
+type classBuild struct {
+	inst *types.Class
+	val  *types.ClassValue
+	sigs map[*ast.ClassMember]*classMemberSig
+}
+
+// classCtx tracks the enclosing class while checking method bodies.
+type classCtx struct {
+	def           *types.ClassDef
+	name          string
+	inst          *types.Class // definition-form instance (placeholders)
+	base          *types.Class
+	baseVal       *types.ClassValue
+	inStatic      bool
+	inConstructor bool
+	retDepth      int // len(retStack) at method entry; super only applies at this depth
 }
 
 type Scope struct {
@@ -110,6 +135,8 @@ type Checker struct {
 	// Inferred returns for unannotated functions (collect).
 	inferStack [][]types.Type
 	loopDepth  int
+	// Enclosing classes for self/super/visibility.
+	classStack []*classCtx
 }
 
 type gotoRef struct {
@@ -218,6 +245,12 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 			} else {
 				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
+		case *ast.ClassDecl:
+			if _, ok := sc.types[n.Name.Name]; !ok {
+				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, classDecl: n, cacheInst: map[string]types.Type{}}
+			} else {
+				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
+			}
 		}
 	}
 }
@@ -297,6 +330,8 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 		c.checkInterface(n)
 	case *ast.EnumDecl:
 		c.checkEnum(n)
+	case *ast.ClassDecl:
+		c.checkClass(n)
 	default:
 		c.errorf("TL3000", st.Span(), "unsupported statement %T", st)
 	}
@@ -404,13 +439,21 @@ func widenInferred(t types.Type) types.Type {
 	case *types.Object:
 		nf := map[string]types.Field{}
 		for n, f := range x.Fields {
-			nf[n] = types.Field{Type: widenInferred(f.Type), Optional: f.Optional, Readonly: f.Readonly}
+			nf[n] = types.Field{Type: widenInferred(f.Type), Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, Owner: f.Owner}
 		}
 		var nix []types.Indexer
 		for _, ix := range x.Indexers {
 			nix = append(nix, types.Indexer{Key: widenInferred(ix.Key), Value: widenInferred(ix.Value)})
 		}
 		return &types.Object{Name: x.Name, Fields: nf, Indexers: nix}
+	case *types.Class:
+		na := make([]types.Type, len(x.Args))
+		for i, a := range x.Args {
+			na[i] = widenInferred(a)
+		}
+		return &types.Class{Def: x.Def, Name: x.Name, Args: na, Params: x.Params, Fields: x.Fields, Base: x.Base, IsAbstract: x.IsAbstract}
+	case *types.ClassValue:
+		return x
 	default:
 		return widen(t)
 	}
@@ -511,10 +554,14 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 				}
 				want = types.Any
 			} else {
-				if f.Readonly {
-					readonly = true
+				if !c.checkAccess(f.Access, f.Owner, t.Span(), "field '"+t.Field.Name+"'") {
+					want = types.Any
+				} else {
+					if f.Readonly {
+						readonly = true
+					}
+					want = f.Type
 				}
-				want = f.Type
 			}
 		case *ast.IndexExpr:
 			ot := c.checkExpr(t.Obj)
@@ -1011,6 +1058,27 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 		c.errorf("TL3103", t.Span(), "undefined type '%s'", t.Name)
 		return types.Any
 	}
+	// Self-reference while a class definition is being built: bind to the
+	// shell so recursive types (e.g. `next: Box<T> | nil`) keep working.
+	// The shell is filled in place, so later reads see complete members.
+	if e.classDecl != nil && e.resolving && e.classShell != nil {
+		var sargs []types.Type
+		for _, a := range t.Args {
+			sargs = append(sargs, c.resolveTypeWithSub(a, sub))
+		}
+		if isIdentityClassArgs(e, sargs) {
+			return e.classShell
+		}
+		inst := &types.Class{Def: e.classDef, Name: e.name, Args: sargs, Params: classParamNames(e.params), Fields: map[string]types.ClassField{}}
+		sub2 := c.classSubFromTypes(e, sargs, t.Span())
+		e.classPatches = append(e.classPatches, func() {
+			if full, ok := types.Substitute(e.classShell, sub2).(*types.Class); ok {
+				inst.Fields = full.Fields
+				inst.Base = full.Base
+			}
+		})
+		return inst
+	}
 	var args []types.Type
 	for _, a := range t.Args {
 		args = append(args, c.resolveTypeWithSub(a, sub))
@@ -1136,6 +1204,18 @@ func (c *Checker) resolveKeyof(e types.Type, sp token.Span) types.Type {
 		return types.Number
 	case *types.Map:
 		return x.Key
+	case *types.Class:
+		var ms []types.Type
+		for name, f := range x.Fields {
+			if f.Access != types.Public {
+				continue
+			}
+			ms = append(ms, &types.Literal{Value: strconv.Quote(name), Base: types.String})
+		}
+		if len(ms) == 0 {
+			return types.Never
+		}
+		return types.NewUnion(ms)
 	default:
 		if isAnyLike(e) {
 			return types.Any
@@ -1164,6 +1244,25 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 		e.enumType = et
 		e.resolving = false
 		return et
+	}
+	// Classes: definition is built once (generic placeholders intact);
+	// every reference substitutes arguments (defaults/unknown filled).
+	if e.classDecl != nil {
+		def := c.ensureClassDef(e)
+		if def == nil {
+			return types.Any
+		}
+		if len(e.params) == 0 {
+			if len(args) > 0 {
+				c.errorf("TL3107", useSpan, "type '%s' takes no type arguments, got %d", e.name, len(args))
+			}
+			return def.inst
+		}
+		sub := c.classSubFromTypes(e, args, useSpan)
+		if inst, ok := types.Substitute(def.inst, sub).(*types.Class); ok {
+			return inst
+		}
+		return def.inst
 	}
 	// Build substitution for generic params.
 	sub := map[string]types.Type{}
@@ -1384,11 +1483,38 @@ func (c *Checker) checkExpr(e ast.Expr) types.Type {
 func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 	switch n := e.(type) {
 	case *ast.CallExpr:
+		// `Point.new(...)` gets instantiation checks (abstract/private).
+		if fe, ok := n.Func.(*ast.FieldExpr); ok && fe.Field.Name == "new" {
+			if id, ok := fe.Obj.(*ast.Ident); ok {
+				if s := c.cur().lookupVar(id.Name); s != nil {
+					if cv, ok := s.Type.(*types.ClassValue); ok {
+						return c.checkClassInstantiate(cv, n.Args, n.Span())
+					}
+				}
+			}
+		}
+		if id, ok := n.Func.(*ast.Ident); ok && id.Name == "super" && c.cur().lookupVar("super") == nil {
+			return c.checkSuperCall(n)
+		}
 		return c.checkCall(n.Func.Span(), c.checkExpr(n.Func), n.Args, n.Span())
 	case *ast.MethodCallExpr:
+		if id, ok := n.Obj.(*ast.Ident); ok && id.Name == "super" && c.cur().lookupVar("super") == nil {
+			return c.checkSuperMethod(n)
+		}
+		// `Point:new(...)` routes to instantiation checks.
+		if id, ok := n.Obj.(*ast.Ident); ok && n.Method.Name == "new" {
+			if s := c.cur().lookupVar(id.Name); s != nil {
+				if cv, ok := s.Type.(*types.ClassValue); ok {
+					return c.checkClassInstantiate(cv, n.Args, n.Span())
+				}
+			}
+		}
 		ot := c.checkExpr(n.Obj)
-		mt := c.lookupMethod(ot, n.Method.Name, n.Span())
-		return c.checkCall(n.Span(), mt, n.Args, n.Span())
+		mf := c.lookupMethodField(ot, n.Method.Name, n.Span())
+		if !c.checkAccess(mf.Access, mf.Owner, n.Span(), "method '"+n.Method.Name+"'") {
+			return []types.Type{types.Any}
+		}
+		return c.checkCall(n.Span(), mf.Type, n.Args, n.Span())
 	case *ast.VarArg:
 		vt := c.currentVarArg()
 		if vt == nil {
@@ -1415,6 +1541,14 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 	case *ast.Ident:
 		if s := c.cur().lookupVar(n.Name); s != nil {
 			return s.Type
+		}
+		if n.Name == "self" {
+			c.errorf("TL3201", n.Span(), "'self' is only available inside methods")
+			return types.Any
+		}
+		if n.Name == "super" {
+			c.errorf("TL3301", n.Span(), "'super' can only be used inside methods of a derived class")
+			return types.Any
 		}
 		c.errorf("TL3201", n.Span(), "undefined variable '%s'", n.Name)
 		return types.Any
@@ -1460,6 +1594,9 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 	case *ast.FieldExpr:
 		ot := c.checkExpr(n.Obj)
 		if f, ok := lookupField(ot, n.Field.Name); ok {
+			if !c.checkAccess(f.Access, f.Owner, n.Span(), "field '"+n.Field.Name+"'") {
+				return types.Any
+			}
 			if f.Optional {
 				return types.NewUnion([]types.Type{f.Type, types.Nil})
 			}
@@ -1670,6 +1807,18 @@ func (c *Checker) lookupMethod(ot types.Type, name string, sp token.Span) types.
 	return types.Any
 }
 
+// lookupMethodField is lookupMethod with visibility metadata for access checks.
+func (c *Checker) lookupMethodField(ot types.Type, name string, sp token.Span) types.Field {
+	if f, ok := lookupField(ot, name); ok {
+		return f
+	}
+	if isAnyLike(ot) {
+		return types.Field{Type: types.Any}
+	}
+	c.errorf("TL3230", sp, "type '%s' has no method '%s'", ot.String(), name)
+	return types.Field{Type: types.Any}
+}
+
 // checkCall checks a call and returns multi return types.
 func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, callSpan token.Span) []types.Type {
 	if isAnyLike(fnT) {
@@ -1677,6 +1826,10 @@ func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, 
 			c.checkExpr(a)
 		}
 		return []types.Type{types.Any}
+	}
+	// Calling the class itself instantiates it (`Point(...)` via __call).
+	if cv, ok := fnT.(*types.ClassValue); ok {
+		return c.checkClassInstantiate(cv, args, callSpan)
 	}
 	fn, ok := fnT.(*types.Func)
 	if !ok {
@@ -2213,12 +2366,36 @@ func lookupField(ot types.Type, name string) (types.Field, bool) {
 			return types.Field{Type: x.Value}, true
 		}
 		return types.Field{}, false
+	case *types.Class:
+		// Instance members (flattened to include inherited, minus privates).
+		if f, ok := x.Fields[name]; ok {
+			return types.Field{Type: f.Type, Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, Owner: f.Owner}, true
+		}
+		return types.Field{}, false
+	case *types.ClassValue:
+		if f, ok := x.Statics[name]; ok {
+			return types.Field{Type: f.Type, Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, Owner: f.Owner}, true
+		}
+		if name == "new" {
+			if x.Constructor == nil {
+				return types.Field{Type: types.Any, Access: x.CtorAccess, Owner: classDefOf(x)}, true
+			}
+			return types.Field{Type: &types.Func{Params: x.Constructor.Params, HasVarArg: x.Constructor.HasVarArg, VarArg: x.Constructor.VarArg, Returns: []types.Type{x.Class}}, Access: x.CtorAccess, Owner: classDefOf(x)}, true
+		}
+		return types.Field{}, false
 	case *types.Primitive:
 		if x.K == types.KTable {
 			return types.Field{Type: types.Any}, true
 		}
 	}
 	return types.Field{}, false
+}
+
+func classDefOf(v *types.ClassValue) *types.ClassDef {
+	if v == nil || v.Class == nil {
+		return nil
+	}
+	return v.Class.Def
 }
 
 func indexResult(ot, kt types.Type) types.Type {
@@ -2309,4 +2486,1189 @@ func indexResult(ot, kt types.Type) types.Type {
 		}
 	}
 	return nil
+}
+
+// ---------- classes ----------
+
+func classParamNames(gs []*ast.GenericParam) []string {
+	var out []string
+	for _, g := range gs {
+		out = append(out, g.Name.Name)
+	}
+	return out
+}
+
+// isIdentityClassArgs reports whether resolved args are exactly the entry's
+// own type parameters (self-reference to the current instantiation).
+func isIdentityClassArgs(e *typeEntry, sargs []types.Type) bool {
+	if len(sargs) != len(e.params) {
+		return len(sargs) == 0 && len(e.params) == 0
+	}
+	for i, p := range e.params {
+		gp, ok := sargs[i].(*types.GenericParam)
+		if !ok || gp.Name != p.Name.Name {
+			return false
+		}
+	}
+	return true
+}
+
+// classSubFromTypes builds the param->arg substitution with arity,
+// default and constraint diagnostics.
+func (c *Checker) classSubFromTypes(e *typeEntry, tys []types.Type, span token.Span) map[string]types.Type {
+	sub := map[string]types.Type{}
+	if len(tys) > len(e.params) {
+		c.errorf("TL3107", span, "type '%s' expects %d argument(s), got %d", e.name, len(e.params), len(tys))
+	}
+	for i, p := range e.params {
+		var a types.Type
+		if i < len(tys) {
+			a = tys[i]
+		} else if p.Default != nil {
+			a = c.resolveType(p.Default)
+		} else {
+			a = types.Unknown
+		}
+		if p.Constraint != nil {
+			con := c.resolveType(p.Constraint)
+			if !types.IsAssignable(a, con, c.opt.toTypes()) {
+				c.errorf("TL3108", span, "type argument '%s' does not satisfy constraint '%s'", a.String(), con.String())
+			}
+		}
+		sub[p.Name.Name] = a
+	}
+	return sub
+}
+
+func (c *Checker) classSubFromNodes(e *typeEntry, nodes []ast.TypeNode, span token.Span) map[string]types.Type {
+	var tys []types.Type
+	for _, n := range nodes {
+		tys = append(tys, c.resolveType(n))
+	}
+	return c.classSubFromTypes(e, tys, span)
+}
+
+func (c *Checker) currentClass() *classCtx {
+	if len(c.classStack) == 0 {
+		return nil
+	}
+	return c.classStack[len(c.classStack)-1]
+}
+
+// checkAccess enforces private/protected visibility. Public (or non-class)
+// members are always accessible.
+func (c *Checker) checkAccess(acc types.Access, owner *types.ClassDef, sp token.Span, what string) bool {
+	if acc == types.Public || owner == nil {
+		return true
+	}
+	cur := c.currentClass()
+	if cur == nil {
+		c.errorf("TL3310", sp, "%s is %s and cannot be accessed outside the class body", what, acc)
+		return false
+	}
+	if acc == types.Private {
+		if cur.def == owner {
+			return true
+		}
+		c.errorf("TL3310", sp, "%s is private to class '%s'", what, owner.Name)
+		return false
+	}
+	if cur.def == owner || isSubclassOf(cur.inst, owner) {
+		return true
+	}
+	c.errorf("TL3310", sp, "%s is protected and cannot be accessed here", what)
+	return false
+}
+
+func isSubclassOf(inst *types.Class, owner *types.ClassDef) bool {
+	seen := map[*types.Class]bool{}
+	for cl := inst; cl != nil; cl = cl.Base {
+		if seen[cl] {
+			return false
+		}
+		seen[cl] = true
+		if cl.Def == owner {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureClassDef builds (once) the checked definition form of a class:
+// instance shape with generic placeholders intact for call-site inference.
+func (c *Checker) ensureClassDef(e *typeEntry) *classBuild {
+	if e.classBuild != nil {
+		return e.classBuild
+	}
+	if e.classDecl == nil || e.resolving {
+		return nil
+	}
+	e.resolving = true
+	if e.classDef == nil {
+		e.classDef = &types.ClassDef{Name: e.name}
+	}
+	b := c.buildClassDef(e)
+	e.resolving = false
+	for _, p := range e.classPatches {
+		p()
+	}
+	e.classPatches = nil
+	if b != nil {
+		e.classBuild = b
+	}
+	return b
+}
+
+// resolveBaseRef resolves an `extends` clause to an instantiated base
+// instance plus its (substituted) class value for statics/constructor.
+func (c *Checker) resolveBaseRef(node ast.TypeNode, selfName string) (*types.Class, *types.ClassValue) {
+	nt, ok := node.(*ast.NamedType)
+	if !ok || strings.Contains(nt.Name, ".") {
+		c.errorf("TL3131", node.Span(), "extends must name a class (e.g. `extends Animal`)")
+		return nil, nil
+	}
+	e := c.cur().lookupType(nt.Name)
+	if e == nil || e.classDecl == nil {
+		bt := c.resolveType(node)
+		if _, ok := bt.(*types.Class); !ok && !isAnyLike(bt) {
+			c.errorf("TL3131", node.Span(), "class can only extend another class, got '%s'", bt.String())
+		}
+		return nil, nil
+	}
+	def := c.ensureClassDef(e)
+	if def == nil {
+		c.errorf("TL3132", node.Span(), "cyclic inheritance involving '%s'", nt.Name)
+		return nil, nil
+	}
+	sub := c.classSubFromNodes(e, nt.Args, node.Span())
+	inst, _ := types.Substitute(def.inst, sub).(*types.Class)
+	val, _ := types.Substitute(def.val, sub).(*types.ClassValue)
+	if inst.Def == e.classDef && e.name == selfName && len(nt.Args) == 0 {
+		// Direct self-extension is reported by the caller chain walk;
+		// keep the reference so the walk can see it.
+	}
+	return inst, val
+}
+
+// classMemberSig is the resolved signature of one member (pass 1 output).
+type classMemberSig struct {
+	member    *ast.ClassMember
+	fieldType types.Type // fields: declared type (nil => infer in pass 2)
+	funcType  *types.Func
+}
+
+func astVisibility(v ast.Visibility) types.Access {
+	switch v {
+	case ast.Private:
+		return types.Private
+	case ast.Protected:
+		return types.Protected
+	}
+	return types.Public
+}
+
+// buildClassDef resolves signatures (no bodies): base chain, flattened
+// members, statics, constructor, override and implements checks.
+func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
+	n := e.classDecl
+	def := e.classDef
+	c.pushTParams(n.Generics)
+	defer c.popTParams()
+
+	shell := &types.Class{Def: def, Name: n.Name.Name, Params: classParamNames(n.Generics), Fields: map[string]types.ClassField{}, IsAbstract: n.Abstract}
+	// Definition-form args are the params themselves so substitution
+	// (`Box.new(v)` inside `static wrap<U>`) tracks instantiations.
+	for _, pn := range shell.Params {
+		shell.Args = append(shell.Args, &types.GenericParam{Name: pn})
+	}
+	e.classShell = shell
+
+	// Duplicate and reserved member names.
+	seen := map[string]bool{}
+	processed := map[string]bool{}
+	var ctorMember *ast.ClassMember
+	for _, m := range n.Members {
+		if seen[m.Name.Name] {
+			c.errorf("TL3320", m.Span(), "duplicate class member '%s'", m.Name.Name)
+			continue
+		}
+		seen[m.Name.Name] = true
+		if m.Kind == ast.ClassConstructor {
+			if ctorMember != nil {
+				c.errorf("TL3321", m.Span(), "duplicate constructor")
+				continue
+			}
+			ctorMember = m
+		}
+		if m.Name.Name == "new" || m.Name.Name == "__index" {
+			c.errorf("TL3322", m.Name.Span(), "'%s' is reserved by the class runtime", m.Name.Name)
+			continue
+		}
+		if m.Kind == ast.ClassField && m.Name.Name == "constructor" {
+			c.errorf("TL3322", m.Name.Span(), "'constructor' must be declared as a method")
+			continue
+		}
+		if m.Kind == ast.ClassConstructor && m.IsStatic {
+			c.errorf("TL3323", m.Span(), "constructor cannot be 'static'")
+		}
+		if m.Kind == ast.ClassConstructor && m.IsReadonly {
+			c.errorf("TL3323", m.Span(), "constructor cannot be 'readonly'")
+		}
+		if m.Kind == ast.ClassConstructor && m.IsAbstract {
+			c.errorf("TL3323", m.Span(), "constructor cannot be 'abstract'")
+		}
+		if m.Kind == ast.ClassMethod && m.IsReadonly {
+			c.errorf("TL3323", m.Span(), "methods cannot be 'readonly'")
+		}
+		if m.IsAbstract && m.Kind == ast.ClassField {
+			// Parser already reports TL2037; don't cascade.
+		} else if m.IsAbstract && !n.Abstract && !n.Declared {
+			c.errorf("TL3324", m.Span(), "abstract member '%s' requires an 'abstract class'", m.Name.Name)
+		}
+		if m.IsAbstract && m.Visibility == ast.Private {
+			c.errorf("TL3324", m.Span(), "abstract member '%s' cannot be private", m.Name.Name)
+		}
+		processed[m.Name.Name] = true
+	}
+
+	// Base class.
+	var baseInst *types.Class
+	var baseVal *types.ClassValue
+	if n.Extends != nil {
+		baseInst, baseVal = c.resolveBaseRef(n.Extends, n.Name.Name)
+		// Indirect cycles: walk with a visited set so a malformed chain
+		// can never hang the checker.
+		seenChain := map[*types.Class]bool{shell: true}
+		for b := baseInst; b != nil; b = b.Base {
+			if seenChain[b] {
+				c.errorf("TL3130", n.Extends.Span(), "cyclic inheritance involving class '%s'", n.Name.Name)
+				baseInst, baseVal = nil, nil
+				break
+			}
+			seenChain[b] = true
+			if b.Def == def {
+				c.errorf("TL3130", n.Extends.Span(), "class '%s' cannot extend itself", n.Name.Name)
+				baseInst, baseVal = nil, nil
+				break
+			}
+		}
+	}
+	shell.Base = baseInst
+	if baseInst != nil {
+		for name, f := range baseInst.Fields {
+			if f.Access == types.Private {
+				continue
+			}
+			shell.Fields[name] = f
+		}
+	}
+	if baseVal != nil && baseVal.CtorAccess == types.Private {
+		c.errorf("TL3325", n.Extends.Span(), "cannot extend class '%s' with a private constructor", baseInst.Name)
+	}
+
+	statics := map[string]types.ClassField{}
+	if baseVal != nil {
+		for name, f := range baseVal.Statics {
+			if f.Access == types.Private {
+				continue
+			}
+			statics[name] = f
+		}
+	}
+
+	sigs := map[*ast.ClassMember]*classMemberSig{}
+	ownInstance := map[string]types.ClassField{}
+	ownStatics := map[string]types.ClassField{}
+
+	memberFunc := func(m *ast.ClassMember) *types.Func {
+		c.pushTParams(m.Generics)
+		defer c.popTParams()
+		var params []types.FuncParam
+		for _, p := range m.Params {
+			var t types.Type = types.Any
+			if p.Type != nil {
+				t = c.resolveType(p.Type)
+			} else if c.opt.NoImplicitAny {
+				c.errorf("TL3040", p.Span(), "parameter '%s' implicitly has 'any' type", p.Name.Name)
+			}
+			params = append(params, types.FuncParam{Name: p.Name.Name, Type: t})
+		}
+		var va types.Type
+		if m.HasVarArg {
+			if m.VarArgType != nil {
+				va = c.resolveType(m.VarArgType)
+				if arr, ok := va.(*types.Array); ok {
+					va = arr.Elem
+				}
+			} else {
+				va = types.Any
+			}
+		}
+		var rets []types.Type
+		if m.ReturnType != nil {
+			rets = flattenReturns(c.resolveType(m.ReturnType))
+			if rets == nil {
+				rets = []types.Type{}
+			}
+		} else {
+			rets = []types.Type{types.Any}
+		}
+		return &types.Func{Params: params, HasVarArg: m.HasVarArg, VarArg: va, Returns: rets}
+	}
+
+	for _, m := range n.Members {
+		if !processed[m.Name.Name] {
+			continue
+		}
+		// Only the first declaration of a name counts (dupes reported above).
+		if _, done := sigs[m]; done {
+			continue
+		}
+		// Mark first occurrence: find it by pointer identity against members.
+		first := true
+		for _, o := range n.Members {
+			if o == m {
+				break
+			}
+			if o.Name.Name == m.Name.Name {
+				first = false
+				break
+			}
+		}
+		if !first {
+			continue
+		}
+		acc := astVisibility(m.Visibility)
+		switch m.Kind {
+		case ast.ClassField:
+			var ft types.Type
+			if m.FieldType != nil {
+				ft = c.resolveType(m.FieldType)
+			}
+			cf := types.ClassField{Type: ft, Readonly: m.IsReadonly, Access: acc, Owner: def}
+			sigs[m] = &classMemberSig{member: m, fieldType: ft}
+			if m.IsStatic {
+				statics[m.Name.Name] = cf
+				ownStatics[m.Name.Name] = cf
+			} else {
+				shell.Fields[m.Name.Name] = cf
+				ownInstance[m.Name.Name] = cf
+			}
+		case ast.ClassMethod:
+			ft := memberFunc(m)
+			cf := types.ClassField{Type: ft, Access: acc, IsMethod: true, Abstract: m.IsAbstract, Owner: def}
+			sigs[m] = &classMemberSig{member: m, funcType: ft}
+			if m.IsStatic {
+				statics[m.Name.Name] = cf
+				ownStatics[m.Name.Name] = cf
+			} else {
+				shell.Fields[m.Name.Name] = cf
+				ownInstance[m.Name.Name] = cf
+			}
+		case ast.ClassConstructor:
+			sigs[m] = &classMemberSig{member: m, funcType: memberFunc(m)}
+		}
+	}
+
+	// Override compatibility against the direct base.
+	if baseInst != nil {
+		for name, sub := range ownInstance {
+			if bf, ok := baseInst.Fields[name]; ok && bf.Access != types.Private {
+				checkMemberOverride(c, ownMemberSpan(n, name, false), name, sub, bf)
+			}
+		}
+	}
+	if baseVal != nil {
+		for name, sub := range ownStatics {
+			if bf, ok := baseVal.Statics[name]; ok && bf.Access != types.Private {
+				checkMemberOverride(c, ownMemberSpan(n, name, true), name, sub, bf)
+			}
+		}
+	}
+
+	// Abstract members must be implemented by concrete classes.
+	// (Present-but-incompatible members are already reported by the
+	// override check above, so only missing/still-abstract ones remain.)
+	if !n.Abstract && !n.Declared && baseInst != nil {
+		for name, bf := range baseInst.Fields {
+			if !bf.Abstract || bf.Access == types.Private {
+				continue
+			}
+			sub, ok := ownInstance[name]
+			if !ok || sub.Abstract {
+				c.errorf("TL3351", n.Name.Span(), "class '%s' must implement abstract member '%s'", n.Name.Name, name)
+			}
+		}
+	}
+
+	// Implements: structural check of public members.
+	for _, impl := range n.Implements {
+		t := c.resolveType(impl)
+		io, ok := t.(*types.Object)
+		if !ok {
+			if !isAnyLike(t) {
+				c.errorf("TL3352", impl.Span(), "class can only implement an interface or object type, got '%s'", t.String())
+			}
+			continue
+		}
+		if !types.IsAssignable(shell.ObjectView(), io, c.opt.toTypes()) {
+			c.errorf("TL3352", impl.Span(), "class '%s' does not implement '%s'", n.Name.Name, t.String())
+		}
+	}
+
+	// Constructor value (always present so `Base.constructor` exists).
+	var ctorFunc *types.Func
+	ctorAccess := types.Public
+	if ctorMember != nil {
+		ctorFunc = sigs[ctorMember].funcType
+		ctorAccess = astVisibility(ctorMember.Visibility)
+		// Constructor params are the value; returns are unused.
+		ctorFunc = &types.Func{Params: ctorFunc.Params, HasVarArg: ctorFunc.HasVarArg, VarArg: ctorFunc.VarArg}
+	} else if n.Declared {
+		ctorFunc = &types.Func{HasVarArg: true, VarArg: types.Any}
+	} else if baseVal != nil && baseVal.Constructor != nil {
+		ctorFunc = baseVal.Constructor
+		ctorAccess = baseVal.CtorAccess
+	} else {
+		ctorFunc = &types.Func{}
+	}
+
+	val := &types.ClassValue{Class: shell, Constructor: ctorFunc, CtorAccess: ctorAccess, Statics: statics, Abstract: n.Abstract}
+	return &classBuild{inst: shell, val: val, sigs: sigs}
+}
+
+func accessRank(a types.Access) int {
+	switch a {
+	case types.Public:
+		return 2
+	case types.Protected:
+		return 1
+	}
+	return 0
+}
+
+func checkMemberOverride(c *Checker, sp token.Span, name string, sub, base types.ClassField) {
+	kind := "field"
+	if sub.IsMethod {
+		kind = "method"
+	}
+	if sub.IsMethod != base.IsMethod {
+		c.errorf("TL3350", sp, "cannot override %s '%s' with a %s", fieldKind(base), name, kind)
+		return
+	}
+	if sub.Type != nil && base.Type != nil && !types.IsAssignable(sub.Type, base.Type, c.opt.toTypes()) {
+		c.errorf("TL3350", sp, "%s '%s' is incompatible with the base declaration", kind, name)
+	}
+	if accessRank(sub.Access) < accessRank(base.Access) {
+		c.errorf("TL3350", sp, "%s '%s' cannot reduce visibility to %s", kind, name, sub.Access)
+	}
+}
+
+// ownMemberSpan finds the declaration span of an own member for diagnostics.
+func ownMemberSpan(n *ast.ClassDecl, name string, isStatic bool) token.Span {
+	for _, m := range n.Members {
+		if m.Name.Name == name && m.IsStatic == isStatic && m.Kind != ast.ClassConstructor {
+			return m.Span()
+		}
+	}
+	return n.Span()
+}
+
+func fieldKind(f types.ClassField) string {
+	if f.IsMethod {
+		return "method"
+	}
+	return "field"
+}
+
+func (c *Checker) checkClass(n *ast.ClassDecl) {
+	e := c.cur().lookupType(n.Name.Name)
+	if e == nil || e.classDecl != n {
+		return // duplicate already reported
+	}
+	def := c.ensureClassDef(e)
+	if def == nil {
+		c.cur().vars[n.Name.Name] = &Symbol{Name: n.Name.Name, Kind: symVar, Type: types.Any, Span: n.Span()}
+		return
+	}
+	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
+		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
+	}
+	c.cur().vars[n.Name.Name] = &Symbol{Name: n.Name.Name, Kind: symVar, Type: def.val, Span: n.Span()}
+	if !n.Declared {
+		c.checkClassBodies(e, n, def)
+	}
+}
+
+// checkClassBodies is pass 2: field initializers (inferring unannotated
+// fields) and method/constructor bodies with self/super in scope.
+func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBuild) {
+	c.pushTParams(n.Generics)
+	defer c.popTParams()
+
+	baseInst := def.inst.Base
+	var baseVal *types.ClassValue
+	if n.Extends != nil {
+		// Already resolved during build; re-derive cheaply for context.
+		if nt, ok := n.Extends.(*ast.NamedType); ok {
+			if be := c.cur().lookupType(nt.Name); be != nil && be.classDecl != nil {
+				if bd := c.ensureClassDef(be); bd != nil {
+					sub := c.classSubFromNodes(be, nt.Args, n.Extends.Span())
+					if v, ok := types.Substitute(bd.val, sub).(*types.ClassValue); ok {
+						baseVal = v
+					}
+				}
+			}
+		}
+	}
+
+	// Field initializers (statics have no self; instance fields do).
+	for _, m := range n.Members {
+		if m.Kind != ast.ClassField || m.Init == nil {
+			continue
+		}
+		sig := def.sigs[m]
+		if sig == nil {
+			continue
+		}
+		if m.IsStatic {
+			got := c.checkExpr(m.Init)
+			if sig.fieldType != nil {
+				if !types.IsAssignable(got, sig.fieldType, c.opt.toTypes()) {
+					c.errorf("TL3010", m.Init.Span(), "type '%s' is not assignable to type '%s'", got.String(), sig.fieldType.String())
+				}
+			} else {
+				ft := widenInferred(got)
+				sig.fieldType = ft
+				if entry, ok := def.val.Statics[m.Name.Name]; ok {
+					entry.Type = ft
+					def.val.Statics[m.Name.Name] = entry
+				}
+			}
+			continue
+		}
+		c.push()
+		c.cur().vars["self"] = &Symbol{Name: "self", Kind: symParam, Type: def.inst, Span: m.Span()}
+		c.classStack = append(c.classStack, &classCtx{def: def.inst.Def, name: n.Name.Name, inst: def.inst, base: baseInst, baseVal: baseVal})
+		got := c.checkExpr(m.Init)
+		want := sig.fieldType
+		if want == nil && baseInst != nil {
+			// Overriding an inherited field: the base type governs.
+			if bf, ok := baseInst.Fields[m.Name.Name]; ok && bf.Access != types.Private && bf.Type != nil {
+				want = bf.Type
+			}
+		}
+		if want != nil {
+			if !types.IsAssignable(got, want, c.opt.toTypes()) {
+				c.errorf("TL3010", m.Init.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
+			}
+		} else {
+			ft := widenInferred(got)
+			sig.fieldType = ft
+			def.inst.Fields[m.Name.Name] = types.ClassField{Type: ft, Readonly: m.IsReadonly, Access: astVisibility(m.Visibility), Owner: def.inst.Def}
+		}
+		c.classStack = c.classStack[:len(c.classStack)-1]
+		c.pop()
+	}
+
+	// Method and constructor bodies.
+	for _, m := range n.Members {
+		if m.Kind == ast.ClassField || m.Body == nil {
+			continue
+		}
+		sig := def.sigs[m]
+		if sig == nil || sig.funcType == nil {
+			continue
+		}
+		c.checkClassMethodBody(n, m, sig.funcType, def, baseInst, baseVal)
+	}
+
+	// Constructor rules (explicit constructors only; synthesized ones
+	// forward to base by construction).
+	var ctor *ast.ClassMember
+	for _, m := range n.Members {
+		if m.Kind == ast.ClassConstructor && m.Body != nil {
+			ctor = m
+			break
+		}
+	}
+	required := []string{}
+	for _, m := range n.Members {
+		if m.Kind != ast.ClassField || m.IsStatic || m.Init != nil {
+			continue
+		}
+		if sig := def.sigs[m]; sig != nil && sig.fieldType == types.Nil {
+			continue // `x: nil` is trivially satisfied
+		}
+		required = append(required, m.Name.Name)
+	}
+	if ctor == nil {
+		for _, name := range required {
+			c.errorf("TL3340", n.Name.Span(), "field '%s' needs an initializer or an explicit constructor", name)
+		}
+	} else {
+		assigned := map[string]bool{}
+		collectSelfAssigns(ctor.Body, assigned)
+		for _, name := range required {
+			if !assigned[name] {
+				c.errorf("TL3340", ctor.Span(), "constructor does not assign required field '%s'", name)
+			}
+		}
+		if baseInst != nil && baseNeedsConstruction(e, baseInst, baseVal) {
+			if !blockHasSuperCall(ctor.Body) {
+				c.errorf("TL3342", ctor.Span(), "constructor of derived class '%s' must call 'super(...)'", n.Name.Name)
+			} else if idx := topLevelSuperIndex(ctor.Body); idx >= 0 {
+				for i, st := range ctor.Body.Stmts {
+					if i >= idx {
+						break
+					}
+					if stmtUsesSelf(st) {
+						c.errorf("TL3343", st.Span(), "cannot use 'self' before 'super(...)'")
+						break
+					}
+				}
+			}
+		}
+	}
+}
+
+// baseNeedsConstruction reports whether a derived constructor must call super().
+func baseNeedsConstruction(e *typeEntry, baseInst *types.Class, baseVal *types.ClassValue) bool {
+	_ = e
+	if baseVal != nil && baseVal.Constructor != nil {
+		for _, p := range baseVal.Constructor.Params {
+			if !p.Optional && !types.ContainsNil(p.Type) {
+				return true
+			}
+		}
+		if baseVal.Constructor.HasVarArg {
+			return false
+		}
+		// Explicit non-trivial constructor still needs the call so its body runs.
+		return len(baseVal.Constructor.Params) > 0
+	}
+	return false
+}
+
+// checkClassMethodBody checks one method/constructor body with self/super.
+func (c *Checker) checkClassMethodBody(n *ast.ClassDecl, m *ast.ClassMember, ft *types.Func, def *classBuild, baseInst *types.Class, baseVal *types.ClassValue) {
+	isCtor := m.Kind == ast.ClassConstructor
+	c.pushTParams(n.Generics)
+	defer c.popTParams()
+	c.pushTParams(m.Generics)
+	defer c.popTParams()
+	c.push()
+	defer c.pop()
+	c.labelStack = append(c.labelStack, map[string]token.Span{})
+	defer func() { c.labelStack = c.labelStack[:len(c.labelStack)-1] }()
+	c.gotoList = append(c.gotoList, nil)
+	defer func() { c.gotoList = c.gotoList[:len(c.gotoList)-1] }()
+
+	for _, p := range m.Params {
+		if p.Name.Name == "self" || p.Name.Name == "super" {
+			c.errorf("TL3341", p.Name.Span(), "parameter cannot be named '%s' in a method", p.Name.Name)
+		}
+		var t types.Type = types.Any
+		for _, fp := range ft.Params {
+			if fp.Name == p.Name.Name {
+				t = fp.Type
+				break
+			}
+		}
+		c.cur().vars[p.Name.Name] = &Symbol{Name: p.Name.Name, Kind: symParam, Type: t, Span: p.Name.Span()}
+	}
+	if !m.IsStatic {
+		c.cur().vars["self"] = &Symbol{Name: "self", Kind: symParam, Type: def.inst, Span: m.Span()}
+	}
+	if m.HasVarArg {
+		if m.VarArgName != nil {
+			restT := types.Type(&types.Array{Elem: types.Any})
+			if ft.VarArg != nil {
+				restT = &types.Array{Elem: ft.VarArg}
+			}
+			c.cur().vars[m.VarArgName.Name] = &Symbol{Name: m.VarArgName.Name, Kind: symParam, Type: restT, Span: m.VarArgName.Span()}
+		}
+		c.varargStack = append(c.varargStack, ft.VarArg)
+		if ft.VarArg == nil {
+			c.varargStack[len(c.varargStack)-1] = types.Any
+		}
+	} else {
+		c.varargStack = append(c.varargStack, nil)
+	}
+	defer func() { c.varargStack = c.varargStack[:len(c.varargStack)-1] }()
+
+	if isCtor {
+		c.retStack = append(c.retStack, []types.Type{})
+	} else if m.ReturnType != nil {
+		c.retStack = append(c.retStack, ft.Returns)
+	} else {
+		c.retStack = append(c.retStack, nil)
+	}
+	defer func() { c.retStack = c.retStack[:len(c.retStack)-1] }()
+	c.inferStack = append(c.inferStack, nil)
+	defer func() { c.inferStack = c.inferStack[:len(c.inferStack)-1] }()
+
+	c.classStack = append(c.classStack, &classCtx{def: def.inst.Def, name: n.Name.Name, inst: def.inst, base: baseInst, baseVal: baseVal, inStatic: m.IsStatic, inConstructor: isCtor, retDepth: len(c.retStack)})
+	defer func() { c.classStack = c.classStack[:len(c.classStack)-1] }()
+
+	c.checkBlock(m.Body)
+	gotos := c.gotoList[len(c.gotoList)-1]
+	labels := c.labelStack[len(c.labelStack)-1]
+	for _, g := range gotos {
+		if _, ok := labels[g.name]; !ok {
+			c.errorf("TL3050", g.span, "undefined label '%s'", g.name)
+		}
+	}
+}
+
+// checkClassInstantiate checks `Point(...)` / `Point.new(...)`.
+func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, span token.Span) []types.Type {
+	name := "class"
+	if cv.Class != nil && cv.Class.Name != "" {
+		name = "'" + cv.Class.Name + "'"
+	}
+	if cv.Abstract {
+		c.errorf("TL3330", span, "cannot instantiate abstract class %s", name)
+		// Don't cascade arity noise on top of the root cause.
+		for _, a := range args {
+			c.checkExpr(a)
+		}
+		if cv.Class != nil {
+			return []types.Type{cv.Class}
+		}
+		return []types.Type{types.Any}
+	}
+	if cv.CtorAccess != types.Public {
+		cur := c.currentClass()
+		allowed := false
+		if cur != nil && cv.Class != nil {
+			if cv.CtorAccess == types.Private && cur.def == cv.Class.Def {
+				allowed = true
+			}
+			if cv.CtorAccess == types.Protected && (cur.def == cv.Class.Def || isSubclassOf(cur.inst, cv.Class.Def)) {
+				allowed = true
+			}
+		}
+		if !allowed {
+			c.errorf("TL3331", span, "constructor of %s is %s", name, cv.CtorAccess)
+		}
+	}
+	if cv.Constructor == nil {
+		for _, a := range args {
+			c.checkExpr(a)
+		}
+		if cv.Class != nil {
+			return []types.Type{cv.Class}
+		}
+		return []types.Type{types.Any}
+	}
+	fn := &types.Func{Params: cv.Constructor.Params, HasVarArg: cv.Constructor.HasVarArg, VarArg: cv.Constructor.VarArg, Returns: []types.Type{cv.Class}}
+	return c.checkCall(span, fn, args, span)
+}
+
+// checkSuperCall checks `super(...)` (base constructor on self).
+func (c *Checker) checkSuperCall(n *ast.CallExpr) []types.Type {
+	ctx := c.currentClass()
+	if ctx == nil || ctx.base == nil || len(c.retStack) != ctx.retDepth {
+		c.errorf("TL3301", n.Span(), "'super' can only be used inside methods of a derived class")
+		for _, a := range n.Args {
+			c.checkExpr(a)
+		}
+		return []types.Type{types.Any}
+	}
+	if ctx.inStatic {
+		c.errorf("TL3302", n.Span(), "'super' cannot be used in a static method (use the base class name)")
+		for _, a := range n.Args {
+			c.checkExpr(a)
+		}
+		return []types.Type{types.Any}
+	}
+	if !ctx.inConstructor {
+		c.errorf("TL3302", n.Span(), "'super(...)' can only be called in a constructor (use 'super:method()' in methods)")
+		for _, a := range n.Args {
+			c.checkExpr(a)
+		}
+		return []types.Type{types.Any}
+	}
+	baseCtor := ctx.baseVal.Constructor
+	if baseCtor == nil {
+		for _, a := range n.Args {
+			c.checkExpr(a)
+		}
+		return []types.Type{types.Void}
+	}
+	c.checkCall(n.Span(), baseCtor, n.Args, n.Span())
+	return []types.Type{types.Void}
+}
+
+// checkSuperMethod checks `super:method(...)` (base method on self).
+func (c *Checker) checkSuperMethod(n *ast.MethodCallExpr) []types.Type {
+	ctx := c.currentClass()
+	if ctx == nil || ctx.base == nil || len(c.retStack) != ctx.retDepth {
+		c.errorf("TL3301", n.Span(), "'super' can only be used inside methods of a derived class")
+		for _, a := range n.Args {
+			c.checkExpr(a)
+		}
+		return []types.Type{types.Any}
+	}
+	if ctx.inStatic {
+		c.errorf("TL3302", n.Span(), "'super' cannot be used in a static method (use the base class name)")
+		for _, a := range n.Args {
+			c.checkExpr(a)
+		}
+		return []types.Type{types.Any}
+	}
+	// Walk the base chain for the method (instance methods only).
+	for b := ctx.base; b != nil; b = b.Base {
+		if f, ok := b.Fields[n.Method.Name]; ok && f.IsMethod {
+			if f.Access == types.Private {
+				c.errorf("TL3310", n.Span(), "method '%s' is private to class '%s'", n.Method.Name, b.Name)
+				return []types.Type{types.Any}
+			}
+			if mt, ok := f.Type.(*types.Func); ok {
+				return c.checkCall(n.Span(), mt, n.Args, n.Span())
+			}
+			for _, a := range n.Args {
+				c.checkExpr(a)
+			}
+			return []types.Type{types.Any}
+		}
+	}
+	// Static with the same name? Point the user at it.
+	if ctx.baseVal != nil {
+		if _, ok := ctx.baseVal.Statics[n.Method.Name]; ok {
+			c.errorf("TL3303", n.Span(), "'%s' is static; call it on the base class by name", n.Method.Name)
+			for _, a := range n.Args {
+				c.checkExpr(a)
+			}
+			return []types.Type{types.Any}
+		}
+	}
+	c.errorf("TL3230", n.Span(), "type '%s' has no method '%s'", ctx.base.String(), n.Method.Name)
+	for _, a := range n.Args {
+		c.checkExpr(a)
+	}
+	return []types.Type{types.Any}
+}
+
+// ---------- class constructor analysis walkers ----------
+// These skip nested function/class bodies: only code running during
+// construction itself counts for coverage and super() placement.
+
+func isSuperCall(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	id, ok := call.Func.(*ast.Ident)
+	return ok && id.Name == "super"
+}
+
+func blockHasSuperCall(b *ast.Block) bool {
+	if b == nil {
+		return false
+	}
+	for _, st := range b.Stmts {
+		if stmtHasSuperCall(st) {
+			return true
+		}
+	}
+	if b.Ret != nil {
+		for _, e := range b.Ret.Exprs {
+			if exprHasSuperCall(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// topLevelSuperIndex finds a direct `super(...)` statement in a constructor
+// body for self-before-super ordering. -1 when nested only.
+func topLevelSuperIndex(b *ast.Block) int {
+	if b == nil {
+		return -1
+	}
+	for i, st := range b.Stmts {
+		if es, ok := st.(*ast.ExprStmt); ok && isSuperCall(es.E) {
+			return i
+		}
+	}
+	return -1
+}
+
+func stmtHasSuperCall(st ast.Stmt) bool {
+	switch n := st.(type) {
+	case *ast.ExprStmt:
+		return exprHasSuperCall(n.E)
+	case *ast.AssignStmt:
+		for _, t := range n.Targets {
+			if exprHasSuperCall(t) {
+				return true
+			}
+		}
+		for _, v := range n.Values {
+			if exprHasSuperCall(v) {
+				return true
+			}
+		}
+	case *ast.LocalAssign:
+		for _, v := range n.Values {
+			if exprHasSuperCall(v) {
+				return true
+			}
+		}
+	case *ast.DoBlock:
+		return blockHasSuperCall(n.Block)
+	case *ast.IfStmt:
+		if exprHasSuperCall(n.Cond) || blockHasSuperCall(n.Then) {
+			return true
+		}
+		for _, ei := range n.Elseifs {
+			if exprHasSuperCall(ei.Cond) || blockHasSuperCall(ei.Block) {
+				return true
+			}
+		}
+		if n.Else != nil && blockHasSuperCall(n.Else) {
+			return true
+		}
+	case *ast.WhileStmt:
+		return exprHasSuperCall(n.Cond) || blockHasSuperCall(n.Block)
+	case *ast.RepeatStmt:
+		return blockHasSuperCall(n.Block) || exprHasSuperCall(n.Cond)
+	case *ast.NumericFor:
+		return exprHasSuperCall(n.Start) || exprHasSuperCall(n.End) ||
+			(n.Step != nil && exprHasSuperCall(n.Step)) || blockHasSuperCall(n.Block)
+	case *ast.GenericFor:
+		for _, e := range n.Exprs {
+			if exprHasSuperCall(e) {
+				return true
+			}
+		}
+		return blockHasSuperCall(n.Block)
+	}
+	return false
+}
+
+func exprHasSuperCall(e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.CallExpr:
+		if isSuperCall(e) {
+			return true
+		}
+		if exprHasSuperCall(n.Func) {
+			return true
+		}
+		for _, a := range n.Args {
+			if exprHasSuperCall(a) {
+				return true
+			}
+		}
+	case *ast.MethodCallExpr:
+		if exprHasSuperCall(n.Obj) {
+			return true
+		}
+		for _, a := range n.Args {
+			if exprHasSuperCall(a) {
+				return true
+			}
+		}
+	case *ast.BinOpExpr:
+		return exprHasSuperCall(n.L) || exprHasSuperCall(n.R)
+	case *ast.UnOpExpr:
+		return exprHasSuperCall(n.X)
+	case *ast.ParenExpr:
+		return exprHasSuperCall(n.E)
+	case *ast.IndexExpr:
+		return exprHasSuperCall(n.Obj) || exprHasSuperCall(n.Key)
+	case *ast.FieldExpr:
+		return exprHasSuperCall(n.Obj)
+	case *ast.TableLit:
+		for _, f := range n.Fields {
+			if f.KeyX != nil && exprHasSuperCall(f.KeyX) {
+				return true
+			}
+			if exprHasSuperCall(f.Val) {
+				return true
+			}
+		}
+	case *ast.CastExpr:
+		return exprHasSuperCall(n.E)
+	case *ast.NonNullExpr:
+		return exprHasSuperCall(n.E)
+	case *ast.FuncLit, *ast.Ident, *ast.NumberLit, *ast.StringLit,
+		*ast.BoolLit, *ast.NilLit, *ast.VarArg:
+	}
+	return false
+}
+
+// collectSelfAssigns gathers `self.name = ...` targets (construction-time).
+func collectSelfAssigns(b *ast.Block, into map[string]bool) {
+	if b == nil {
+		return
+	}
+	for _, st := range b.Stmts {
+		collectStmtSelfAssigns(st, into)
+	}
+}
+
+func collectStmtSelfAssigns(st ast.Stmt, into map[string]bool) {
+	switch n := st.(type) {
+	case *ast.AssignStmt:
+		for _, t := range n.Targets {
+			if fe, ok := t.(*ast.FieldExpr); ok {
+				if id, ok := fe.Obj.(*ast.Ident); ok && id.Name == "self" {
+					into[fe.Field.Name] = true
+				}
+			}
+		}
+	case *ast.DoBlock:
+		collectSelfAssigns(n.Block, into)
+	case *ast.IfStmt:
+		collectSelfAssigns(n.Then, into)
+		for _, ei := range n.Elseifs {
+			collectSelfAssigns(ei.Block, into)
+		}
+		if n.Else != nil {
+			collectSelfAssigns(n.Else, into)
+		}
+	case *ast.WhileStmt:
+		collectSelfAssigns(n.Block, into)
+	case *ast.RepeatStmt:
+		collectSelfAssigns(n.Block, into)
+	case *ast.NumericFor:
+		collectSelfAssigns(n.Block, into)
+	case *ast.GenericFor:
+		collectSelfAssigns(n.Block, into)
+	}
+}
+
+// stmtUsesSelf reports textual `self` use (for super-before-self).
+func stmtUsesSelf(st ast.Stmt) bool {
+	switch n := st.(type) {
+	case *ast.ExprStmt:
+		return exprUsesSelf(n.E)
+	case *ast.AssignStmt:
+		for _, t := range n.Targets {
+			if exprUsesSelf(t) {
+				return true
+			}
+		}
+		for _, v := range n.Values {
+			if exprUsesSelf(v) {
+				return true
+			}
+		}
+	case *ast.LocalAssign:
+		for _, v := range n.Values {
+			if exprUsesSelf(v) {
+				return true
+			}
+		}
+	case *ast.DoBlock:
+		return blockUsesSelf(n.Block)
+	case *ast.IfStmt:
+		if exprUsesSelf(n.Cond) || blockUsesSelf(n.Then) {
+			return true
+		}
+		for _, ei := range n.Elseifs {
+			if exprUsesSelf(ei.Cond) || blockUsesSelf(ei.Block) {
+				return true
+			}
+		}
+		if n.Else != nil && blockUsesSelf(n.Else) {
+			return true
+		}
+	case *ast.WhileStmt:
+		return exprUsesSelf(n.Cond) || blockUsesSelf(n.Block)
+	case *ast.RepeatStmt:
+		return blockUsesSelf(n.Block) || exprUsesSelf(n.Cond)
+	case *ast.NumericFor:
+		return exprUsesSelf(n.Start) || exprUsesSelf(n.End) ||
+			(n.Step != nil && exprUsesSelf(n.Step)) || blockUsesSelf(n.Block)
+	case *ast.GenericFor:
+		for _, e := range n.Exprs {
+			if exprUsesSelf(e) {
+				return true
+			}
+		}
+		return blockUsesSelf(n.Block)
+	case *ast.ReturnStmt:
+		for _, e := range n.Exprs {
+			if exprUsesSelf(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func blockUsesSelf(b *ast.Block) bool {
+	if b == nil {
+		return false
+	}
+	for _, st := range b.Stmts {
+		if stmtUsesSelf(st) {
+			return true
+		}
+	}
+	if b.Ret != nil {
+		for _, e := range b.Ret.Exprs {
+			if exprUsesSelf(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprUsesSelf(e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.Ident:
+		return n.Name == "self"
+	case *ast.CallExpr:
+		if exprUsesSelf(n.Func) {
+			return true
+		}
+		for _, a := range n.Args {
+			if exprUsesSelf(a) {
+				return true
+			}
+		}
+	case *ast.MethodCallExpr:
+		if exprUsesSelf(n.Obj) {
+			return true
+		}
+		for _, a := range n.Args {
+			if exprUsesSelf(a) {
+				return true
+			}
+		}
+	case *ast.BinOpExpr:
+		return exprUsesSelf(n.L) || exprUsesSelf(n.R)
+	case *ast.UnOpExpr:
+		return exprUsesSelf(n.X)
+	case *ast.ParenExpr:
+		return exprUsesSelf(n.E)
+	case *ast.IndexExpr:
+		return exprUsesSelf(n.Obj) || exprUsesSelf(n.Key)
+	case *ast.FieldExpr:
+		return exprUsesSelf(n.Obj)
+	case *ast.TableLit:
+		for _, f := range n.Fields {
+			if f.KeyX != nil && exprUsesSelf(f.KeyX) {
+				return true
+			}
+			if exprUsesSelf(f.Val) {
+				return true
+			}
+		}
+	case *ast.CastExpr:
+		return exprUsesSelf(n.E)
+	case *ast.NonNullExpr:
+		return exprUsesSelf(n.E)
+	case *ast.FuncLit, *ast.NumberLit, *ast.StringLit,
+		*ast.BoolLit, *ast.NilLit, *ast.VarArg:
+	}
+	return false
 }

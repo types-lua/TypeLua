@@ -66,3 +66,34 @@ func TestAssignable(t *testing.T) {
 		t.Fatalf("union order-insensitive")
 	}
 }
+
+func TestClassNominal(t *testing.T) {
+	opt := Options{StrictNilChecks: true}
+	defA := &ClassDef{Name: "A"}
+	defB := &ClassDef{Name: "B"}
+	a1 := &Class{Def: defA, Name: "A", Fields: map[string]ClassField{}}
+	a2 := &Class{Def: defA, Name: "A", Fields: map[string]ClassField{}}
+	b := &Class{Def: defB, Name: "B", Fields: map[string]ClassField{}}
+	sub := &Class{Def: &ClassDef{Name: "Sub"}, Name: "Sub", Fields: map[string]ClassField{}, Base: a1}
+	if !IsAssignable(a1, a2, opt) {
+		t.Fatalf("same class should be assignable")
+	}
+	if !IsAssignable(sub, a1, opt) {
+		t.Fatalf("subclass should be assignable to base")
+	}
+	if IsAssignable(a1, sub, opt) {
+		t.Fatalf("base must not flow into subclass")
+	}
+	if IsAssignable(a1, b, opt) {
+		t.Fatalf("unrelated same-shape classes must be incompatible")
+	}
+	// Class instances satisfy object shapes structurally.
+	obj := &Object{Fields: map[string]Field{"x": {Type: Number}}}
+	withX := &Class{Def: defA, Name: "A", Fields: map[string]ClassField{"x": {Type: Number}}}
+	if !IsAssignable(withX, obj, opt) {
+		t.Fatalf("class should satisfy matching interface")
+	}
+	if !IsAssignable(withX, Table, opt) {
+		t.Fatalf("class instance should be a table")
+	}
+}

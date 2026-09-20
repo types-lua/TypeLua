@@ -151,3 +151,83 @@ local m: map<string, number> = { score = 1 }
 local v: number = m.score
 `)
 }
+
+func TestClassOK(t *testing.T) {
+	expectOK(t, `
+class Point {
+  x: number = 0,
+  constructor(x: number) self.x = x end,
+  move(dx: number): void self.x = dx end,
+}
+local p = Point.new(1)
+p:move(2)
+local q = Point(3)
+print(q.x)
+`)
+	expectOK(t, `
+abstract class A {
+  constructor() end,
+  abstract m(): string,
+}
+class B extends A {
+  m(): string return "b" end,
+}
+local b: A = B.new()
+`)
+	expectOK(t, `
+class Box<T> {
+  v: T,
+  constructor(v: T) self.v = v end,
+  get(): T return self.v end,
+}
+local n: number = Box.new(1):get()
+`)
+	expectOK(t, `
+interface N { name: string }
+class C implements N {
+  name: string = "c",
+}
+`)
+	expectOK(t, `
+class Base {
+  protected x: integer = 1,
+  get(): integer return self.x end,
+}
+class Sub extends Base {
+  peek(): integer return self.x end,
+}`)
+}
+
+func TestClassErr(t *testing.T) {
+	// Abstract cannot be instantiated.
+	expectErr(t, `abstract class A {} local a = A.new()`)
+	// Missing abstract implementation.
+	expectErr(t, `
+abstract class A { abstract m(): void }
+class B extends A {}`)
+	// Private member access outside.
+	expectErr(t, `
+class S { private x: number = 1 }
+local s = S.new()
+print(s.x)`)
+	// Missing super() with nontrivial base.
+	expectErr(t, `
+class B { constructor(x: number) self.y = x end, y: number = 0 }
+class D extends B { constructor(x: number) self.y = x end }`)
+	// Unassigned required field.
+	expectErr(t, `class P { x: number }`)
+	// Incompatible override.
+	expectErr(t, `
+class B { m(): string return "s" end }
+class D extends B { m(): number return 1 end }`)
+	// Unrelated classes are nominally incompatible.
+	expectErr(t, `
+class A { x: number = 1 }
+class B { x: number = 2 }
+local b = B.new()
+local a: A = b`)
+	// Private constructor blocks outside instantiation.
+	expectErr(t, `
+class S { private constructor() end }
+local s = S.new()`)
+}
