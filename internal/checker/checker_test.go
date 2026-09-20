@@ -275,3 +275,43 @@ class Box<T> {
 type Unbox<T> = T extends Box<infer U> ? U : never
 local u: Unbox<Box<number>> = "s"`)
 }
+
+func TestExplicitTypeArgsOK(t *testing.T) {
+	expectOK(t, `
+local function id<T>(x: T): T return x end
+local a = id<string>("hi")
+local b = id(1)
+`)
+	expectOK(t, `
+local function withDef<T, U = number>(a: T): U return nil as any end
+local w: number = withDef<string>("hi")
+`)
+	expectOK(t, `
+class Box<T> {
+  v: T,
+  constructor(v: T) self.v = v end,
+}
+local b = Box.new<string>("hi")
+local c = Box<string>("hi")
+`)
+	expectOK(t, `
+local x = 1
+local y = x < 2
+`)
+}
+func TestExplicitTypeArgsErr(t *testing.T) {
+	// Too many.
+	expectErr(t, `
+local function id<T>(x: T): T return x end
+local b = id<number, string>(1)`)
+	// Non-generic callee.
+	expectErr(t, `local c = print<number>("hi")`)
+	// Constraint violation.
+	expectErr(t, `
+local function f<T extends number>(x: T): T return x end
+local d = f<string>("hi")`)
+	// Argument mismatch under explicit binding.
+	expectErr(t, `
+local function id<T>(x: T): T return x end
+local a: number = id<string>("hi")`)
+}

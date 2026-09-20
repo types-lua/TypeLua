@@ -181,6 +181,9 @@ type Func struct {
 	HasVarArg bool
 	VarArg    Type
 	Returns   []Type
+	// TypeParams records a generic declaration (constraints/defaults
+	// intact) so explicit type arguments can bind positionally.
+	TypeParams []*GenericParam
 }
 
 func (t *Func) Kind() Kind { return KFunc }
@@ -320,6 +323,9 @@ type Class struct {
 	Fields     map[string]ClassField // instance members (fields + methods)
 	Base       *Class
 	IsAbstract bool
+	// TypeParams holds resolved generic declarations (constraints and
+	// defaults intact) for explicit-argument checking on `new`.
+	TypeParams []*GenericParam
 }
 
 func (t *Class) Kind() Kind { return KClass }
@@ -676,9 +682,16 @@ func assignable(from, to Type, opt Options, seen map[[2]string]bool) bool {
 		}
 		return true
 	}
-	if _, ok := from.(*GenericParam); ok {
-		// A bare type param is assignable only to its constraint/unknown/any.
-		// Conservative: allow to same param.
+	if fg, ok := from.(*GenericParam); ok {
+		// Same parameter is trivially assignable (constraints may print
+		// differently per copy, so compare names, not strings).
+		if tg, ok := to.(*GenericParam); ok && tg.Name == fg.Name {
+			return true
+		}
+		// A bare type param is assignable where its constraint is.
+		if fg.Constraint != nil {
+			return assignable(fg.Constraint, to, opt, seen)
+		}
 		return from.String() == to.String()
 	}
 
@@ -1179,6 +1192,22 @@ func subFingerprint(sub map[string]Type) string {
 	return sb.String()
 }
 
+// substituteGenericParam substitutes inside a generic declaration
+// (constraint and default), preserving the parameter name.
+func substituteGenericParam(gp *GenericParam, sub map[string]Type, ctx *substCtx) *GenericParam {
+	if gp == nil {
+		return nil
+	}
+	out := &GenericParam{Name: gp.Name}
+	if gp.Constraint != nil {
+		out.Constraint = substitute(gp.Constraint, sub, ctx)
+	}
+	if gp.Default != nil {
+		out.Default = substitute(gp.Default, sub, ctx)
+	}
+	return out
+}
+
 func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 	switch x := t.(type) {
 	case *GenericParam:
@@ -1221,7 +1250,11 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		for i, r := range x.Returns {
 			rs[i] = substitute(r, sub, ctx)
 		}
-		return &Func{Params: ps, HasVarArg: x.HasVarArg, VarArg: va, Returns: rs}
+		tps := make([]*GenericParam, len(x.TypeParams))
+		for i, gp := range x.TypeParams {
+			tps[i] = substituteGenericParam(gp, sub, ctx)
+		}
+		return &Func{Params: ps, HasVarArg: x.HasVarArg, VarArg: va, Returns: rs, TypeParams: tps}
 	case *Object:
 		nf := map[string]Field{}
 		for n, f := range x.Fields {
@@ -1247,6 +1280,10 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		ctx.memo[key] = out
 		for n, f := range x.Fields {
 			out.Fields[n] = ClassField{Type: substitute(f.Type, sub, ctx), Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, IsMethod: f.IsMethod, Abstract: f.Abstract, Owner: f.Owner}
+		}
+		out.TypeParams = make([]*GenericParam, len(x.TypeParams))
+		for i, gp := range x.TypeParams {
+			out.TypeParams[i] = substituteGenericParam(gp, sub, ctx)
 		}
 		if x.Base != nil {
 			if b, ok := substitute(x.Base, sub, ctx).(*Class); ok {
@@ -1368,6 +1405,11 @@ func hasTypeParams(t Type, seen map[Type]bool) bool {
 				return true
 			}
 		}
+		for _, gp := range x.TypeParams {
+			if gp != nil && (hasTypeParams(gp.Constraint, seen) || hasTypeParams(gp.Default, seen)) {
+				return true
+			}
+		}
 	case *Object:
 		for _, f := range x.Fields {
 			if hasTypeParams(f.Type, seen) {
@@ -1392,6 +1434,11 @@ func hasTypeParams(t Type, seen map[Type]bool) bool {
 		}
 		if x.Base != nil && hasTypeParams(x.Base, seen) {
 			return true
+		}
+		for _, gp := range x.TypeParams {
+			if gp != nil && (hasTypeParams(gp.Constraint, seen) || hasTypeParams(gp.Default, seen)) {
+				return true
+			}
 		}
 	case *ClassValue:
 		if x.Class != nil && hasTypeParams(x.Class, seen) {

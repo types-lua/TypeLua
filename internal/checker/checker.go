@@ -53,6 +53,7 @@ type Symbol struct {
 
 type typeEntry struct {
 	name       string
+	span       token.Span // declaration name span (for goto-definition)
 	params     []*ast.GenericParam
 	alias      *ast.TypeAliasDecl
 	iface      *ast.InterfaceDecl
@@ -231,25 +232,25 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 		switch n := st.(type) {
 		case *ast.TypeAliasDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, alias: n, cacheInst: map[string]types.Type{}}
+				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, alias: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
 			} else {
 				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		case *ast.InterfaceDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, iface: n, cacheInst: map[string]types.Type{}}
+				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, iface: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
 			} else {
 				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		case *ast.EnumDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, enumDecl: n, cacheInst: map[string]types.Type{}}
+				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, enumDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
 			} else {
 				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		case *ast.ClassDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, classDecl: n, cacheInst: map[string]types.Type{}}
+				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, classDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
 			} else {
 				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
@@ -822,8 +823,19 @@ func (c *Checker) funcTypeFromLit(fn *ast.FuncLit, generics []*ast.GenericParam)
 		// body checking still skips (see checkFuncBody retStack nil).
 		rets = []types.Type{types.Any}
 	}
+	tps := make([]*types.GenericParam, len(generics))
+	for i, g := range generics {
+		tp := &types.GenericParam{Name: g.Name.Name}
+		if g.Constraint != nil {
+			tp.Constraint = c.resolveType(g.Constraint)
+		}
+		if g.Default != nil {
+			tp.Default = c.resolveType(g.Default)
+		}
+		tps[i] = tp
+	}
 	c.popTParams()
-	return &types.Func{Params: params, HasVarArg: fn.HasVarArg, VarArg: va, Returns: rets}
+	return &types.Func{Params: params, HasVarArg: fn.HasVarArg, VarArg: va, Returns: rets, TypeParams: tps}
 }
 
 func flattenReturns(t types.Type) []types.Type {
@@ -1139,6 +1151,8 @@ func (c *Checker) resolveTableType(t *ast.TableType, sub map[string]types.Type) 
 }
 
 func (c *Checker) resolveFuncType(t *ast.FuncType, sub map[string]types.Type) types.Type {
+	c.pushTParams(t.Generics)
+	defer c.popTParams()
 	var ps []types.FuncParam
 	for _, p := range t.Params {
 		var pt types.Type = types.Any
@@ -1182,7 +1196,18 @@ func (c *Checker) resolveFuncType(t *ast.FuncType, sub map[string]types.Type) ty
 	for _, r := range t.Returns {
 		rs = append(rs, c.resolveTypeWithSub(r, sub))
 	}
-	return &types.Func{Params: ps, HasVarArg: hasVA, VarArg: va, Returns: rs}
+	tps := make([]*types.GenericParam, len(t.Generics))
+	for i, g := range t.Generics {
+		tp := &types.GenericParam{Name: g.Name.Name}
+		if g.Constraint != nil {
+			tp.Constraint = c.resolveTypeWithSub(g.Constraint, sub)
+		}
+		if g.Default != nil {
+			tp.Default = c.resolveTypeWithSub(g.Default, sub)
+		}
+		tps[i] = tp
+	}
+	return &types.Func{Params: ps, HasVarArg: hasVA, VarArg: va, Returns: rs, TypeParams: tps}
 }
 
 // resolveConditional resolves `Check extends Extends ? True : False`.
@@ -1545,7 +1570,7 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 			if id, ok := fe.Obj.(*ast.Ident); ok {
 				if s := c.cur().lookupVar(id.Name); s != nil {
 					if cv, ok := s.Type.(*types.ClassValue); ok {
-						return c.checkClassInstantiate(cv, n.Args, n.Span())
+						return c.checkClassInstantiate(cv, n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 					}
 				}
 			}
@@ -1553,7 +1578,7 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 		if id, ok := n.Func.(*ast.Ident); ok && id.Name == "super" && c.cur().lookupVar("super") == nil {
 			return c.checkSuperCall(n)
 		}
-		return c.checkCall(n.Func.Span(), c.checkExpr(n.Func), n.Args, n.Span())
+		return c.checkCall(n.Func.Span(), c.checkExpr(n.Func), n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 	case *ast.MethodCallExpr:
 		if id, ok := n.Obj.(*ast.Ident); ok && id.Name == "super" && c.cur().lookupVar("super") == nil {
 			return c.checkSuperMethod(n)
@@ -1562,7 +1587,7 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 		if id, ok := n.Obj.(*ast.Ident); ok && n.Method.Name == "new" {
 			if s := c.cur().lookupVar(id.Name); s != nil {
 				if cv, ok := s.Type.(*types.ClassValue); ok {
-					return c.checkClassInstantiate(cv, n.Args, n.Span())
+					return c.checkClassInstantiate(cv, n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 				}
 			}
 		}
@@ -1571,7 +1596,7 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 		if !c.checkAccess(mf.Access, mf.Owner, n.Span(), "method '"+n.Method.Name+"'") {
 			return []types.Type{types.Any}
 		}
-		return c.checkCall(n.Span(), mf.Type, n.Args, n.Span())
+		return c.checkCall(n.Span(), mf.Type, n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 	case *ast.VarArg:
 		vt := c.currentVarArg()
 		if vt == nil {
@@ -1634,8 +1659,8 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 	case *ast.TableLit:
 		return c.checkTable(n)
 	case *ast.FuncLit:
-		ft := c.funcTypeFromLit(n, nil)
-		c.checkFuncBody(n, nil, ft)
+		ft := c.funcTypeFromLit(n, n.Generics)
+		c.checkFuncBody(n, n.Generics, ft)
 		return ft
 	case *ast.IndexExpr:
 		ot := c.checkExpr(n.Obj)
@@ -1876,8 +1901,61 @@ func (c *Checker) lookupMethodField(ot types.Type, name string, sp token.Span) t
 	return types.Field{Type: types.Any}
 }
 
+// resolveTypeArgs resolves explicit generic argument nodes (`f<T>(x)`).
+func (c *Checker) resolveTypeArgs(nodes []ast.TypeNode) []types.Type {
+	if len(nodes) == 0 {
+		return nil
+	}
+	out := make([]types.Type, len(nodes))
+	for i, n := range nodes {
+		out[i] = c.resolveType(n)
+	}
+	return out
+}
+
+// bindExplicitArgs binds explicit type arguments positionally into sub and
+// returns the function with those positions pre-substituted, so later
+// inference only fills the remainder. Unfilled params use defaults.
+func (c *Checker) bindExplicitArgs(fn *types.Func, explicit []types.Type, callSpan token.Span, sub map[string]types.Type) *types.Func {
+	if len(explicit) == 0 {
+		return fn
+	}
+	if len(fn.TypeParams) == 0 {
+		c.errorf("TL3234", callSpan, "explicit type arguments given to non-generic function")
+		return fn
+	}
+	if len(explicit) > len(fn.TypeParams) {
+		c.errorf("TL3234", callSpan, "expected %d type argument(s), got %d", len(fn.TypeParams), len(explicit))
+		explicit = explicit[:len(fn.TypeParams)]
+	}
+	exSub := map[string]types.Type{}
+	for i, gp := range fn.TypeParams {
+		if i >= len(explicit) {
+			break
+		}
+		a := explicit[i]
+		if gp.Constraint != nil && !types.IsAssignable(a, gp.Constraint, c.opt.toTypes()) {
+			c.errorf("TL3234", callSpan, "type argument '%s' does not satisfy constraint '%s'", a.String(), gp.Constraint.String())
+		}
+		exSub[gp.Name] = a
+		sub[gp.Name] = a
+	}
+	// Defaults for params with neither explicit nor (yet) inferred values.
+	for _, gp := range fn.TypeParams {
+		if _, ok := sub[gp.Name]; !ok && gp.Default != nil {
+			sub[gp.Name] = types.Substitute(gp.Default, sub)
+		}
+	}
+	if out, ok := types.Substitute(fn, exSub).(*types.Func); ok {
+		return out
+	}
+	return fn
+}
+
 // checkCall checks a call and returns multi return types.
-func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, callSpan token.Span) []types.Type {
+// explicit holds resolved explicit generic arguments (`f<T>(x)`);
+// remaining parameters still infer from arguments.
+func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, callSpan token.Span, explicit []types.Type) []types.Type {
 	if isAnyLike(fnT) {
 		for _, a := range args {
 			c.checkExpr(a)
@@ -1886,7 +1964,7 @@ func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, 
 	}
 	// Calling the class itself instantiates it (`Point(...)` via __call).
 	if cv, ok := fnT.(*types.ClassValue); ok {
-		return c.checkClassInstantiate(cv, args, callSpan)
+		return c.checkClassInstantiate(cv, args, callSpan, explicit)
 	}
 	fn, ok := fnT.(*types.Func)
 	if !ok {
@@ -1900,6 +1978,9 @@ func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, 
 	// Generic inference: collect type params from fn? Our Func doesn't store generic names after substitution? For generic functions, funcTypeFromLit resolved params with tparams as GenericParam placeholders.
 	// Infer: map param name -> inferred type from args.
 	sub := map[string]types.Type{}
+	// Explicit type arguments bind first (positional); the rest infer.
+	// Missing ones fall back to defaults, like TS partial application.
+	fn = c.bindExplicitArgs(fn, explicit, callSpan, sub)
 	// Check args (expand? call args don't expand multi except last? In Lua, `f(g())` where g returns multi expands! Support: expand last arg if multi.
 	argTypes := c.checkCallArgs(args)
 	// Arity checks (Lua allows any count at runtime; statically enforce required).
@@ -2449,7 +2530,7 @@ func lookupField(ot types.Type, name string) (types.Field, bool) {
 			if x.Constructor == nil {
 				return types.Field{Type: types.Any, Access: x.CtorAccess, Owner: classDefOf(x)}, true
 			}
-			return types.Field{Type: &types.Func{Params: x.Constructor.Params, HasVarArg: x.Constructor.HasVarArg, VarArg: x.Constructor.VarArg, Returns: []types.Type{x.Class}}, Access: x.CtorAccess, Owner: classDefOf(x)}, true
+			return types.Field{Type: &types.Func{Params: x.Constructor.Params, HasVarArg: x.Constructor.HasVarArg, VarArg: x.Constructor.VarArg, Returns: []types.Type{x.Class}, TypeParams: x.Class.TypeParams}, Access: x.CtorAccess, Owner: classDefOf(x)}, true
 		}
 		return types.Field{}, false
 	case *types.Primitive:
@@ -2750,6 +2831,17 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 	for _, pn := range shell.Params {
 		shell.Args = append(shell.Args, &types.GenericParam{Name: pn})
 	}
+	// Resolved declarations for explicit-argument checking on `new`.
+	for _, g := range n.Generics {
+		tp := &types.GenericParam{Name: g.Name.Name}
+		if g.Constraint != nil {
+			tp.Constraint = c.resolveType(g.Constraint)
+		}
+		if g.Default != nil {
+			tp.Default = c.resolveType(g.Default)
+		}
+		shell.TypeParams = append(shell.TypeParams, tp)
+	}
 	e.classShell = shell
 
 	// Duplicate and reserved member names.
@@ -2882,7 +2974,18 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 		} else {
 			rets = []types.Type{types.Any}
 		}
-		return &types.Func{Params: params, HasVarArg: m.HasVarArg, VarArg: va, Returns: rets}
+		tps := make([]*types.GenericParam, len(m.Generics))
+		for i, g := range m.Generics {
+			tp := &types.GenericParam{Name: g.Name.Name}
+			if g.Constraint != nil {
+				tp.Constraint = c.resolveType(g.Constraint)
+			}
+			if g.Default != nil {
+				tp.Default = c.resolveType(g.Default)
+			}
+			tps[i] = tp
+		}
+		return &types.Func{Params: params, HasVarArg: m.HasVarArg, VarArg: va, Returns: rets, TypeParams: tps}
 	}
 
 	for _, m := range n.Members {
@@ -3291,7 +3394,7 @@ func (c *Checker) checkClassMethodBody(n *ast.ClassDecl, m *ast.ClassMember, ft 
 }
 
 // checkClassInstantiate checks `Point(...)` / `Point.new(...)`.
-func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, span token.Span) []types.Type {
+func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, span token.Span, explicit []types.Type) []types.Type {
 	name := "class"
 	if cv.Class != nil && cv.Class.Name != "" {
 		name = "'" + cv.Class.Name + "'"
@@ -3331,12 +3434,15 @@ func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, s
 		}
 		return []types.Type{types.Any}
 	}
-	fn := &types.Func{Params: cv.Constructor.Params, HasVarArg: cv.Constructor.HasVarArg, VarArg: cv.Constructor.VarArg, Returns: []types.Type{cv.Class}}
-	return c.checkCall(span, fn, args, span)
+	fn := &types.Func{Params: cv.Constructor.Params, HasVarArg: cv.Constructor.HasVarArg, VarArg: cv.Constructor.VarArg, Returns: []types.Type{cv.Class}, TypeParams: cv.Class.TypeParams}
+	return c.checkCall(span, fn, args, span, explicit)
 }
 
 // checkSuperCall checks `super(...)` (base constructor on self).
 func (c *Checker) checkSuperCall(n *ast.CallExpr) []types.Type {
+	if len(n.TypeArgs) > 0 {
+		c.errorf("TL3234", n.Span(), "explicit type arguments are not allowed on 'super(...)'")
+	}
 	ctx := c.currentClass()
 	if ctx == nil || ctx.base == nil || len(c.retStack) != ctx.retDepth {
 		c.errorf("TL3301", n.Span(), "'super' can only be used inside methods of a derived class")
@@ -3366,7 +3472,7 @@ func (c *Checker) checkSuperCall(n *ast.CallExpr) []types.Type {
 		}
 		return []types.Type{types.Void}
 	}
-	c.checkCall(n.Span(), baseCtor, n.Args, n.Span())
+	c.checkCall(n.Span(), baseCtor, n.Args, n.Span(), nil)
 	return []types.Type{types.Void}
 }
 
@@ -3395,7 +3501,7 @@ func (c *Checker) checkSuperMethod(n *ast.MethodCallExpr) []types.Type {
 				return []types.Type{types.Any}
 			}
 			if mt, ok := f.Type.(*types.Func); ok {
-				return c.checkCall(n.Span(), mt, n.Args, n.Span())
+				return c.checkCall(n.Span(), mt, n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 			}
 			for _, a := range n.Args {
 				c.checkExpr(a)

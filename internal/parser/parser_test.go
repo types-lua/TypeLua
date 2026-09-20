@@ -133,3 +133,23 @@ func TestParseConditional(t *testing.T) {
 	mustParse(t, `type P<T> = T extends string ? 1 : T extends number ? 2 : 3`)
 	mustParse(t, `type R<T> = T extends (...args: any[]) -> infer R ? R : never`)
 }
+
+func TestParseExplicitTypeArgs(t *testing.T) {
+	f := mustParse(t, `local a = id<string>("hi")`)
+	lc, ok := f.Block.Stmts[0].(*ast.LocalAssign)
+	if !ok || len(lc.Values) != 1 {
+		t.Fatalf("bad localassign %T", f.Block.Stmts[0])
+	}
+	call, ok := lc.Values[0].(*ast.CallExpr)
+	if !ok || len(call.TypeArgs) != 1 {
+		t.Fatalf("expected 1 type arg, got %+v", lc.Values[0])
+	}
+	mustParse(t, `local b = obj:map<string>(1)`)
+	// Comparisons still parse as comparisons.
+	f2 := mustParse(t, `local c = a < b`)
+	lc2 := f2.Block.Stmts[0].(*ast.LocalAssign)
+	if _, ok := lc2.Values[0].(*ast.BinOpExpr); !ok {
+		t.Fatalf("expected binop, got %T", lc2.Values[0])
+	}
+	mustParse(t, `local d = Box.new<string>("hi")`)
+}

@@ -985,10 +985,23 @@ func (p *Parser) parseInterfaceField() *ast.InterfaceField {
 		p.next()
 		optional = true
 	}
-	// Method shorthand: name(params) [: ret | -> ret]
-	if p.at(token.LParen) {
-		// Generic methods? `foo<T>(...)` – support optional generics (ignored at emit, checked).
-		p.next()
+	// Method shorthand: name<T>(params) [: ret | -> ret]
+	if p.at(token.LParen) || p.at(token.Lt) {
+		// Generic methods: keep generics for explicit type arguments.
+		var mgen []*ast.GenericParam
+		if p.at(token.Lt) {
+			save := p.pos
+			nd := len(p.diags)
+			mgen = p.parseGenericParams()
+			if !p.at(token.LParen) {
+				p.pos = save
+				p.diags = p.diags[:nd]
+				mgen = nil
+			}
+		}
+		if _, ok := p.expect(token.LParen, "'('"); !ok {
+			return nil
+		}
 		params, hasVA, vaTy := p.parseFuncTypeParams()
 		p.expect(token.RParen, "')'")
 		var rets []ast.TypeNode
@@ -1000,7 +1013,7 @@ func (p *Parser) parseInterfaceField() *ast.InterfaceField {
 			rt := p.parseReturnType()
 			rets = returnTypeToList(rt)
 		}
-		ft := &ast.FuncType{Params: params, HasVarArg: hasVA, VarArgType: vaTy, Returns: rets, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+		ft := &ast.FuncType{Params: params, HasVarArg: hasVA, VarArgType: vaTy, Returns: rets, Generics: mgen, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 		return &ast.InterfaceField{Name: name, Type: ft, Optional: optional, Readonly: readonly, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
 	p.expect(token.Colon, "':'")
@@ -1273,12 +1286,37 @@ func (p *Parser) parseSuffix() ast.Expr {
 			if m == nil {
 				return e
 			}
+			var targs []ast.TypeNode
+			if p.at(token.Lt) {
+				// `obj:m<T>(args)`: tentative type args, must be followed by `(`.
+				save := p.pos
+				nd := len(p.diags)
+				if tas, ok := p.tryParseTypeArgs(); ok && p.at(token.LParen) {
+					targs = tas
+				} else {
+					p.pos = save
+					p.diags = p.diags[:nd]
+				}
+			}
 			args := p.parseCallArgs()
 			if args == nil {
 				p.errorf("TL2012", p.cur().Span, "expected method call arguments after ':method'")
 				return e
 			}
-			e = &ast.MethodCallExpr{Obj: e, Method: m, Args: args, S: token.Span{Start: e.Span().Start, End: p.prevEnd(), File: p.file}}
+			e = &ast.MethodCallExpr{Obj: e, Method: m, TypeArgs: targs, Args: args, S: token.Span{Start: e.Span().Start, End: p.prevEnd(), File: p.file}}
+		case p.at(token.Lt):
+			// `f<T>(args)`: explicit generic arguments. Tentative: `<` types `>`
+			// must be followed by `(`; otherwise this is a `<` comparison.
+			save := p.pos
+			nd := len(p.diags)
+			tas, ok := p.tryParseTypeArgs()
+			if !ok || !p.at(token.LParen) {
+				p.pos = save
+				p.diags = p.diags[:nd]
+				return e
+			}
+			args := p.parseCallArgs()
+			e = &ast.CallExpr{Func: e, TypeArgs: tas, Args: args, S: token.Span{Start: e.Span().Start, End: p.prevEnd(), File: p.file}}
 		case p.at(token.LParen), p.at(token.LBrace), p.at(token.String):
 			args := p.parseCallArgs()
 			e = &ast.CallExpr{Func: e, Args: args, S: token.Span{Start: e.Span().Start, End: p.prevEnd(), File: p.file}}
@@ -1357,19 +1395,21 @@ func (p *Parser) parsePrimary() ast.Expr {
 		return &ast.VarArg{S: c.Span}
 	case token.Function:
 		p.next()
-		// Optional generics for anonymous functions.
+		// Optional generics on anonymous functions.
+		var fgen []*ast.GenericParam
 		if p.at(token.Lt) {
 			save := p.pos
 			nd := len(p.diags)
 			g := p.parseGenericParams()
 			if g != nil && p.at(token.LParen) {
-				_ = g // generics on anonymous fn: parse but drop (checker could use; keep simple: ignore)
+				fgen = g
 			} else {
 				p.pos = save
 				p.diags = p.diags[:nd]
 			}
 		}
 		fn := p.parseFuncBody(false)
+		fn.Generics = fgen
 		return fn
 	case token.LBrace:
 		return p.parseTable()
@@ -1944,14 +1984,16 @@ func (p *Parser) parseTableTypeField() *ast.TableTypeField {
 		if lit == "" {
 			lit = name.Kind.String()
 		}
-		// Optional generics on methods: ignore for now but consume.
+		// Optional generics on methods: keep for explicit type arguments.
+		var mgen []*ast.GenericParam
 		if p.at(token.Lt) {
 			save := p.pos
 			nd := len(p.diags)
-			_ = p.parseGenericParams()
+			mgen = p.parseGenericParams()
 			if !p.at(token.LParen) {
 				p.pos = save
 				p.diags = p.diags[:nd]
+				mgen = nil
 			}
 		}
 		p.next() // (
@@ -1965,7 +2007,7 @@ func (p *Parser) parseTableTypeField() *ast.TableTypeField {
 			p.next()
 			rets = returnTypeToList(p.parseReturnType())
 		}
-		ft := &ast.FuncType{Params: params, HasVarArg: hasVA, VarArgType: vaTy, Returns: rets, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+		ft := &ast.FuncType{Params: params, HasVarArg: hasVA, VarArgType: vaTy, Returns: rets, Generics: mgen, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 		return &ast.TableTypeField{Name: lit, NameSpan: name.Span, Type: ft, IsMethod: true, MethodSig: ft, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
 	name := p.parseIdentAllowSoft()
@@ -1995,6 +2037,34 @@ func (p *Parser) parseTableTypeField() *ast.TableTypeField {
 	p.expect(token.Colon, "':'")
 	ty := p.parseType()
 	return &ast.TableTypeField{Name: name.Name, NameSpan: name.Span(), Type: ty, Optional: optional, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+}
+
+// tryParseTypeArgs parses `<T, ...>` explicit generic arguments.
+// Returns ok=false without consuming on failure (caller restores).
+func (p *Parser) tryParseTypeArgs() ([]ast.TypeNode, bool) {
+	if !p.at(token.Lt) {
+		return nil, false
+	}
+	p.next() // <
+	var out []ast.TypeNode
+	if !p.atGt() && p.cur().Kind != token.EOF {
+		for {
+			t := p.parseType()
+			if t == nil {
+				return nil, false
+			}
+			out = append(out, t)
+			if p.at(token.Comma) {
+				p.next()
+				continue
+			}
+			break
+		}
+	}
+	if !p.consumeGt() {
+		return nil, false
+	}
+	return out, true
 }
 
 func (p *Parser) parseGenericParams() []*ast.GenericParam {

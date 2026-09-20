@@ -421,6 +421,7 @@ type FuncLit struct {
 	ReturnType TypeNode // nil if unannotated; TupleType for multi-return
 	Body       *Block
 	IsMethod   bool // true if defined with colon (implicit self)
+	Generics   []*GenericParam
 	S          token.Span
 }
 
@@ -454,19 +455,21 @@ func (*FieldExpr) exprNode()          {}
 func (n *FieldExpr) Span() token.Span { return n.S }
 
 type CallExpr struct {
-	Func Expr
-	Args []Expr
-	S    token.Span
+	Func     Expr
+	TypeArgs []TypeNode // explicit generic arguments: f<T>(x)
+	Args     []Expr
+	S        token.Span
 }
 
 func (*CallExpr) exprNode()          {}
 func (n *CallExpr) Span() token.Span { return n.S }
 
 type MethodCallExpr struct {
-	Obj    Expr
-	Method *Ident
-	Args   []Expr
-	S      token.Span
+	Obj      Expr
+	Method   *Ident
+	TypeArgs []TypeNode // obj:m<T>(x)
+	Args     []Expr
+	S        token.Span
 }
 
 func (*MethodCallExpr) exprNode()          {}
@@ -606,6 +609,7 @@ type FuncType struct {
 	HasVarArg  bool
 	VarArgType TypeNode
 	Returns    []TypeNode // 0 => void-ish (unannotated?), 1+ return types
+	Generics   []*GenericParam
 	S          token.Span
 }
 
