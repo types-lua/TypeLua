@@ -1352,12 +1352,23 @@ func isNakedTypeParam(n ast.TypeNode, c *Checker, sub map[string]types.Type) boo
 // resolveMapped resolves `{ [K in Keys]?: V }`, expanding concrete
 // domains eagerly and deferring the rest.
 func (c *Checker) resolveMapped(n *ast.MappedType, sub map[string]types.Type) types.Type {
+	nd := len(c.diags)
 	constraint := c.resolveTypeWithSub(n.Constraint, sub)
 	// The key variable is visible inside the value type (shadows outer).
 	c.pushTParams([]*ast.GenericParam{{Name: n.Param}})
 	value := c.resolveTypeWithSub(n.Value, sub)
 	c.popTParams()
-	m := &types.Mapped{Param: n.Param.Name, Constraint: constraint, Optional: n.Optional, Readonly: n.Readonly, Value: value}
+	m := &types.Mapped{Param: n.Param.Name, Constraint: constraint, Optional: n.Optional, OptMinus: n.OptMinus, Readonly: n.Readonly, RoMinus: n.RoMinus, Value: value}
+	// Homomorphic base: `{[K in keyof T]...}` inherits T's field modifiers
+	// unless an explicit `?`/`-?`/`readonly`/`-readonly` overrides them.
+	// Only when nothing errored so far, so the re-resolution stays silent.
+	if kn, ok := n.Constraint.(*ast.KeyofType); ok && len(c.diags) == nd {
+		if base := c.resolveTypeWithSub(kn.Elem, sub); base != nil {
+			if o, ok := base.(*types.Object); ok {
+				m.Homomorphic = o
+			}
+		}
+	}
 	if r, ok := types.TryEvalMapped(m, c.opt.toTypes()); ok {
 		return r
 	}

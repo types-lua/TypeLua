@@ -1365,11 +1365,14 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		return x
 	case *Mapped:
 		m2 := &Mapped{
-			Param:      x.Param,
-			Constraint: substitute(x.Constraint, sub, ctx),
-			Optional:   x.Optional,
-			Readonly:   x.Readonly,
-			Value:      substitute(x.Value, sub, ctx),
+			Param:       x.Param,
+			Constraint:  substitute(x.Constraint, sub, ctx),
+			Optional:    x.Optional,
+			OptMinus:    x.OptMinus,
+			Readonly:    x.Readonly,
+			RoMinus:     x.RoMinus,
+			Homomorphic: substitute(x.Homomorphic, sub, ctx),
+			Value:       substitute(x.Value, sub, ctx),
 		}
 		if r, ok := evalMapped(m2, Options{StrictNilChecks: true}); ok {
 			return r
@@ -1511,7 +1514,8 @@ func hasTypeParams(t Type, seen map[Type]bool) bool {
 	case *Literal:
 		return hasTypeParams(x.Base, seen)
 	case *Mapped:
-		return hasTypeParams(x.Constraint, seen) || hasTypeParams(x.Value, seen)
+		return hasTypeParams(x.Constraint, seen) || hasTypeParams(x.Value, seen) ||
+			(x.Homomorphic != nil && hasTypeParams(x.Homomorphic, seen))
 	case *IndexedAccess:
 		return hasTypeParams(x.Obj, seen) || hasTypeParams(x.Index, seen)
 	}
@@ -1941,22 +1945,32 @@ func matchClassPattern(source, pattern *Class, bindings map[string]Type, seen ma
 
 // Mapped is `{ [K in Keys]?: V }`. Concrete domains expand eagerly
 // (see evalMapped); anything still generic stays deferred.
+// Homomorphic (non-nil) is the `keyof` base object whose field modifiers
+// are inherited unless overridden by an explicit `?`/`-?`/`readonly`/
+// `-readonly` marker; nil means absolute (markers decide alone).
 type Mapped struct {
-	Param      string
-	Constraint Type
-	Optional   bool
-	Readonly   bool
-	Value      Type
+	Param        string
+	Constraint   Type
+	Optional     bool // `?` or `+?`
+	OptMinus     bool // `-?`
+	Readonly     bool // `readonly` or `+readonly`
+	RoMinus      bool // `-readonly`
+	Homomorphic  Type
+	Value        Type
 }
 
 func (t *Mapped) Kind() Kind { return KMapped }
 func (t *Mapped) String() string {
 	q := ""
-	if t.Optional {
+	if t.OptMinus {
+		q = "-?"
+	} else if t.Optional {
 		q = "?"
 	}
 	ro := ""
-	if t.Readonly {
+	if t.RoMinus {
+		ro = "-readonly "
+	} else if t.Readonly {
 		ro = "readonly "
 	}
 	return "{ " + ro + "[" + t.Param + " in " + t.Constraint.String() + "]" + q + ": " + t.Value.String() + " }"
@@ -2013,12 +2027,34 @@ func evalMapped(m *Mapped, opt Options) (Type, bool) {
 		return &Object{Fields: map[string]Field{}}, true
 	}
 	fields := map[string]Field{}
+	// Homomorphic base for modifier inheritance (`keyof` object).
+	var base *Object
+	if m.Homomorphic != nil {
+		if o, ok := m.Homomorphic.(*Object); ok {
+			base = o
+		}
+	}
 	for _, k := range lits {
 		name, _ := literalKeyName(k)
+		opt, ro := m.Optional, m.Readonly
+		if m.OptMinus {
+			opt = false
+		} else if !m.Optional && base != nil {
+			if f, ok := base.Fields[name]; ok && f.Optional {
+				opt = true
+			}
+		}
+		if m.RoMinus {
+			ro = false
+		} else if !m.Readonly && base != nil {
+			if f, ok := base.Fields[name]; ok && f.Readonly {
+				ro = true
+			}
+		}
 		fields[name] = Field{
 			Type:     Substitute(m.Value, map[string]Type{m.Param: k}),
-			Optional: m.Optional,
-			Readonly: m.Readonly,
+			Optional: opt,
+			Readonly: ro,
 		}
 	}
 	return &Object{Fields: fields}, true

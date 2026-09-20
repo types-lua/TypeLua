@@ -678,6 +678,7 @@ func (p *Parser) parseDeclare() ast.Stmt {
 // parseMacroDef parses:
 //   macro Name(p1, p2) = expr            (expression macro)
 //   macro Name(p1, p2) do stmts end      (statement macro)
+// A trailing `...` collects extra call arguments (variadic macro).
 // Parameters are strict identifiers; `self`/`super` are reserved.
 func (p *Parser) parseMacroDef() ast.Stmt {
 	start := p.next() // macro
@@ -691,8 +692,17 @@ func (p *Parser) parseMacroDef() ast.Stmt {
 		return &ast.EmptyStmt{S: start.Span}
 	}
 	var params []*ast.Ident
+	hasVA := false
 	if !p.at(token.RParen) {
 		for {
+			if p.at(token.DotDotDot) {
+				dots := p.next()
+				hasVA = true
+				if !p.at(token.RParen) {
+					p.errorf("TL2041", dots.Span, "'...' must be the last macro parameter")
+				}
+				break
+			}
 			n := p.parseIdent()
 			if n == nil {
 				break
@@ -723,7 +733,7 @@ func (p *Parser) parseMacroDef() ast.Stmt {
 			p.synchronize()
 			return &ast.EmptyStmt{S: start.Span}
 		}
-		return &ast.MacroDef{Name: name, Params: params, Body: body, IsExpr: true, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+		return &ast.MacroDef{Name: name, Params: params, HasVarArg: hasVA, Body: body, IsExpr: true, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
 	if p.at(token.Do) {
 		p.next()
@@ -734,7 +744,7 @@ func (p *Parser) parseMacroDef() ast.Stmt {
 		if body.Ret != nil {
 			p.errorf("TL2040", body.Ret.Span(), "statement macro body cannot return a value")
 		}
-		return &ast.MacroDef{Name: name, Params: params, Block: body, IsExpr: false, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+		return &ast.MacroDef{Name: name, Params: params, HasVarArg: hasVA, Block: body, IsExpr: false, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
 	p.errorf("TL2001", p.cur().Span, "expected '=' or 'do' after macro parameters")
 	p.synchronize()
@@ -2060,9 +2070,13 @@ func (p *Parser) parseTableType() ast.TypeNode {
 	return &ast.TableType{Fields: fields, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
-// isMappedStart peeks `[K in` (optional readonly prefix) without consuming.
+// isMappedStart peeks `[K in` (optional `+`/`-` + readonly prefix)
+// without consuming.
 func (p *Parser) isMappedStart() bool {
 	i := 0
+	if p.peek(i).Kind == token.Plus || p.peek(i).Kind == token.Minus {
+		i++
+	}
 	if p.peek(i).Kind == token.ReadonlyKw {
 		i++
 	}
@@ -2072,8 +2086,19 @@ func (p *Parser) isMappedStart() bool {
 }
 
 func (p *Parser) parseMappedType(start token.Token) ast.TypeNode {
-	readonly := false
-	if p.at(token.ReadonlyKw) {
+	readonly, roMinus := false, false
+	if p.at(token.Plus) || p.at(token.Minus) {
+		neg := p.at(token.Minus)
+		p.next()
+		if _, ok := p.expect(token.ReadonlyKw, "'readonly'"); !ok {
+			return &ast.NamedType{Name: "any", S: start.Span}
+		}
+		if neg {
+			roMinus = true
+		} else {
+			readonly = true
+		}
+	} else if p.at(token.ReadonlyKw) {
 		p.next()
 		readonly = true
 	}
@@ -2084,8 +2109,19 @@ func (p *Parser) parseMappedType(start token.Token) ast.TypeNode {
 	if _, ok := p.expect(token.RBrack, "']'"); !ok {
 		return &ast.NamedType{Name: "any", S: start.Span}
 	}
-	optional := false
-	if p.at(token.Question) {
+	optional, optMinus := false, false
+	if p.at(token.Plus) || p.at(token.Minus) {
+		neg := p.at(token.Minus)
+		p.next()
+		if _, ok := p.expect(token.Question, "'?'"); !ok {
+			return &ast.NamedType{Name: "any", S: start.Span}
+		}
+		if neg {
+			optMinus = true
+		} else {
+			optional = true
+		}
+	} else if p.at(token.Question) {
 		// `?` here is the optional marker, never a conditional branch:
 		// a `[K in T] ? ...` conditional would need `extends` first.
 		p.next()
@@ -2097,7 +2133,7 @@ func (p *Parser) parseMappedType(start token.Token) ast.TypeNode {
 	if param == nil || constraint == nil || value == nil {
 		return &ast.NamedType{Name: "any", S: start.Span}
 	}
-	return &ast.MappedType{Param: param, Constraint: constraint, Optional: optional, Readonly: readonly, Value: value, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+	return &ast.MappedType{Param: param, Constraint: constraint, Optional: optional, OptMinus: optMinus, Readonly: readonly, RoMinus: roMinus, Value: value, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
 func (p *Parser) parseTableTypeField() *ast.TableTypeField {

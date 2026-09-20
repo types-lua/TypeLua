@@ -266,14 +266,17 @@ func (n *EnumMember) Span() token.Span { return n.S }
 
 // MacroDef is a compile-time macro: `macro name(params) = expr` for
 // expressions, `macro name(params) do stmts end` for statements.
+// A trailing `...` (HasVarArg) collects extra call arguments; inside the
+// body a bare `...` splices them, but only in call-argument position.
 // Definitions are expanded (and erased) before type checking.
 type MacroDef struct {
-	Name    *Ident
-	Params  []*Ident
-	Body    Expr   // expression macro (IsExpr)
-	Block   *Block // statement macro (!IsExpr)
-	IsExpr  bool
-	S       token.Span
+	Name      *Ident
+	Params    []*Ident
+	HasVarArg bool
+	Body      Expr   // expression macro (IsExpr)
+	Block     *Block // statement macro (!IsExpr)
+	IsExpr    bool
+	S         token.Span
 }
 
 func (*MacroDef) stmtNode()          {}
@@ -657,12 +660,17 @@ type KeyofType struct {
 func (*KeyofType) typeNode()          {}
 func (n *KeyofType) Span() token.Span { return n.S }
 
-// MappedType is `{ [K in Keys]?: V }` (optional readonly prefix).
+// MappedType is `{ [K in Keys]?: V }` with TS-style modifier operators:
+// an optional `+`/`-` prefix on `readonly` (`+readonly`/`-readonly`) and on
+// `?` (`+?`/`-?`). `+` is the explicit form of the bare marker; `-` removes
+// the modifier (meaningful for homomorphic mappings over `keyof T`).
 type MappedType struct {
 	Param      *Ident
 	Constraint TypeNode
-	Optional   bool
-	Readonly   bool
+	Optional   bool // `?` or `+?`
+	OptMinus   bool // `-?`
+	Readonly   bool // `readonly` or `+readonly`
+	RoMinus    bool // `-readonly`
 	Value      TypeNode
 	S          token.Span
 }

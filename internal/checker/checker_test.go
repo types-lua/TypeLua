@@ -342,6 +342,47 @@ local v: number = m["k"]
 `)
 }
 
+func TestMappedModifiers(t *testing.T) {
+	// Homomorphic: unmarked mapping over keyof inherits base modifiers.
+	expectOK(t, `
+type Base = { x: number, y?: string, readonly z: boolean }
+type H = { [K in keyof Base]: Base[K] }
+local h: H = { x = 1, z = true }
+local ys: string | nil = h.y
+`)
+	expectErr(t, `
+type Base = { x: number, y?: string, readonly z: boolean }
+type H = { [K in keyof Base]: Base[K] }
+local h: H = { x = 1, z = true }
+h.z = false`)
+	// `-?` removes optionality (Required-like).
+	expectErr(t, `
+type Base = { x: number, y?: string }
+type Req = { [K in keyof Base]-?: Base[K] }
+local r: Req = { x = 1 }`)
+	expectOK(t, `
+type Base = { x: number, y?: string }
+type Req = { [K in keyof Base]-?: Base[K] }
+local r: Req = { x = 1, y = "a" }`)
+	// `-readonly` removes readonly.
+	expectOK(t, `
+type Base = { readonly x: number }
+type Mut = { -readonly [K in keyof Base]: Base[K] }
+local m: Mut = { x = 1 }
+m.x = 2`)
+	// `+?` / `+readonly` behave like the bare markers.
+	expectOK(t, `
+type Base = { x: number }
+type P = { [K in keyof Base]+?: Base[K] }
+local p: P = {}
+`)
+	expectErr(t, `
+type Base = { x: number }
+type R = { +readonly [K in keyof Base]: Base[K] }
+local r: R = { x = 1 }
+r.x = 2`)
+}
+
 func TestMappedIndexedErr(t *testing.T) {
 	expectErr(t, `
 type Point = { x: number, y: number }

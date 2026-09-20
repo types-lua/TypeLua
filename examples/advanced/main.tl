@@ -58,3 +58,17 @@ print(useMapper({
 print(useMapper({
   map = function(x: number, f: any): any return f(x) end,
 }))
+
+-- Modifier operators: `+?`/`-?` and `+readonly`/`-readonly`.
+-- Unmarked homomorphic mappings inherit the base field modifiers.
+type Widget = { id: number, label?: string, readonly kind: string }
+type SameWidget = { [K in keyof Widget]: Widget[K] }
+local sw: SameWidget = { id = 7, kind = "w" }
+type ReqWidget = { [K in keyof Widget]-?: Widget[K] }
+local rw: ReqWidget = { id = 7, label = "r", kind = "w" }
+type MutWidget = { -readonly [K in keyof Widget]: Widget[K] }
+local mw: MutWidget = { id = 8, kind = "m" }
+mw.kind = "m2"
+type OptWidget = { [K in keyof Widget]+?: Widget[K] }
+local ow: OptWidget = {}
+print(sw.id, rw.label, mw.kind, ow.id)

@@ -168,6 +168,24 @@ func TestParseMappedAndIndexed(t *testing.T) {
 	mustParse(t, `local y: T[number] = 1`)
 	// Indexer still parses (no `in` after the name).
 	mustParse(t, `type M = { [string]: number }`)
+	// Modifier operators.
+	for _, src := range []string{
+		`type A<T> = { [K in keyof T]+?: T[K] }`,
+		`type B<T> = { [K in keyof T]-?: T[K] }`,
+		`type C<T> = { +readonly [K in keyof T]: T[K] }`,
+		`type D<T> = { -readonly [K in keyof T]: T[K] }`,
+	} {
+		mustParse(t, src)
+	}
+	fm := mustParse(t, `type E<T> = { -readonly [K in keyof T]-?: T[K] }`)
+	em, ok := fm.Block.Stmts[0].(*ast.TypeAliasDecl)
+	if !ok {
+		t.Fatalf("not alias %T", fm.Block.Stmts[0])
+	}
+	mt, ok := em.Type.(*ast.MappedType)
+	if !ok || !mt.OptMinus || !mt.RoMinus || mt.Optional || mt.Readonly {
+		t.Fatalf("bad modifier flags %+v", em.Type)
+	}
 }
 
 func TestParseMacro(t *testing.T) {
@@ -184,6 +202,13 @@ func TestParseMacro(t *testing.T) {
 	mustParse(t, `local macro hidden(x) = x`)
 	// `macro` stays usable as an identifier.
 	mustParse(t, `local macro = 1`)
+	// Variadic `...` must be last.
+	fv := mustParse(t, `macro v(fmt, ...) = fmt`)
+	mdv, ok := fv.Block.Stmts[0].(*ast.MacroDef)
+	if !ok || !mdv.HasVarArg || len(mdv.Params) != 1 {
+		t.Fatalf("bad variadic macrodef %+v", fv.Block.Stmts[0])
+	}
+	mustParse(t, `macro v2(...) = 1`)
 	// Errors, all recoverable.
 	for _, src := range []string{
 		`macro bad(x, x) = x`,
@@ -191,6 +216,7 @@ func TestParseMacro(t *testing.T) {
 		"macro bad3(x) do\n return x \nend",
 		`export macro e(x) = x`,
 		`declare macro d(x) = x`,
+		`macro bad4(..., x) = x`,
 	} {
 		if _, diags := ParseFile("t.tl", src); len(diags) == 0 {
 			t.Fatalf("expected errors for %q", src)
