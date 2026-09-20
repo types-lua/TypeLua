@@ -363,6 +363,10 @@ func (c *Checker) checkBlock(b *ast.Block) {
 // ---------- statements ----------
 
 func (c *Checker) checkStmt(st ast.Stmt) {
+	if st == nil {
+		// Recovery artifact (parser already reported); never crash.
+		return
+	}
 	switch n := st.(type) {
 	case *ast.EmptyStmt:
 	case *ast.ExprStmt:
@@ -484,7 +488,7 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 		} else {
 			final = types.Nil
 		}
-		isConst := n.Attrs[i] == "const"
+		isConst := i < len(n.Attrs) && n.Attrs[i] == "const"
 		if existing := c.cur().vars[name.Name]; existing != nil && !existing.IsBuiltin {
 			// Shadowing in same scope: error (Lua allows, but likely bug).
 			// Builtins (print/next/...) may be localized, so exempt them.
@@ -497,7 +501,7 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 	}
 	// Check const/close misuse: <close> must have a value? Lua requires? Just warn if no value.
 	for i, a := range n.Attrs {
-		if a == "close" && len(n.Values) == 0 {
+		if a == "close" && len(n.Values) == 0 && i < len(n.Names) {
 			c.errorf("TL3012", n.Names[i].Span(), "to-be-closed variable '%s' must be initialized", n.Names[i].Name)
 		}
 	}
@@ -1048,6 +1052,10 @@ func (c *Checker) resolveType(n ast.TypeNode) types.Type {
 }
 
 func (c *Checker) resolveTypeWithSub(n ast.TypeNode, sub map[string]types.Type) types.Type {
+	if n == nil {
+		// Recovery artifact (parser already reported); never crash.
+		return types.Any
+	}
 	switch t := n.(type) {
 	case *ast.NamedType:
 		return c.resolveNamed(t, sub)
@@ -1766,6 +1774,10 @@ func (c *Checker) currentVarArg() types.Type {
 }
 
 func (c *Checker) checkExprOne(e ast.Expr) types.Type {
+	if e == nil {
+		// Recovery artifact (parser already reported); never crash.
+		return types.Any
+	}
 	switch n := e.(type) {
 	case *ast.Ident:
 		if s := c.cur().lookupVar(n.Name); s != nil {

@@ -16,18 +16,57 @@ type Parser struct {
 	pendingGt    int // split >> into two >
 	extendsDepth int // >0 while parsing an extends clause (for `infer`)
 	inMacroBody  int // >0 while parsing a macro definition body
+	depth        int // current nesting depth (blocks, primaries, primary types)
 }
+
+// maxParseDepth caps nesting so adversarial inputs (e.g. 100k open
+// parens) report an error instead of exhausting the goroutine stack.
+const maxParseDepth = 256
+
+// enterDepth accounts one nesting level; a trip reports once and bails
+// out to ParseFile (see depthBailout). Callers must not run after false.
+func (p *Parser) enterDepth(sp token.Span) bool {
+	p.depth++
+	if p.depth > maxParseDepth {
+		if p.depth == maxParseDepth+1 {
+			p.errorf("TL2015", sp, "nesting too deep (maximum %d)", maxParseDepth)
+		}
+		panic(depthBailout{})
+	}
+	return true
+}
+
+func (p *Parser) leaveDepth() { p.depth-- }
 
 func ParseFile(filename, src string) (*ast.File, []diag.Diagnostic) {
 	toks, ldiags := lexer.Lex(filename, src)
 	p := &Parser{toks: toks, file: filename, diags: append([]diag.Diagnostic{}, ldiags...)}
-	block := p.parseBlock()
+	block := p.parseFileBlock()
 	eofSpan := token.Span{File: filename}
 	if len(toks) > 0 {
 		eofSpan = toks[len(toks)-1].Span
 	}
 	// Drain to EOF.
 	return &ast.File{Name: filename, Block: block, EOF: eofSpan}, p.diags
+}
+
+// depthBailout unwinds a depth-limit trip straight to ParseFile: the file
+// is pathologically nested, so one TL2015 plus an empty AST beats a flood
+// of recovery artifacts.
+type depthBailout struct{}
+
+// parseFileBlock parses the top-level block, converting a depth bailout
+// into an empty remainder.
+func (p *Parser) parseFileBlock() (block *ast.Block) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(depthBailout); !ok {
+				panic(r)
+			}
+			block = &ast.Block{S: token.Span{File: p.file}}
+		}
+	}()
+	return p.parseBlock()
 }
 
 // ---------- cursor helpers ----------
@@ -150,6 +189,8 @@ func (p *Parser) atGt() bool {
 
 func (p *Parser) parseBlock() *ast.Block {
 	start := p.cur()
+	p.enterDepth(start.Span)
+	defer p.leaveDepth()
 	var stmts []ast.Stmt
 	var ret *ast.ReturnStmt
 	for {
@@ -1380,6 +1421,9 @@ func (p *Parser) parseSuffix() ast.Expr {
 			p.next()
 			k := p.parseExpr()
 			p.expect(token.RBrack, "']'")
+			if k == nil {
+				return e
+			}
 			e = &ast.IndexExpr{Obj: e, Key: k, S: token.Span{Start: e.Span().Start, End: p.prevEnd(), File: p.file}}
 		case p.at(token.Colon):
 			// Distinguish method call `obj:method(args)` from type-ish? In expr context, colon always method call.
@@ -1446,7 +1490,11 @@ func (p *Parser) parseCallArgs() []ast.Expr {
 		args := []ast.Expr{}
 		if !p.at(token.RParen) {
 			for {
-				args = append(args, p.parseExpr())
+				a := p.parseExpr()
+				if a == nil {
+					break
+				}
+				args = append(args, a)
 				if !p.at(token.Comma) {
 					break
 				}
@@ -1469,6 +1517,8 @@ func (p *Parser) parseCallArgs() []ast.Expr {
 
 func (p *Parser) parsePrimary() ast.Expr {
 	c := p.cur()
+	p.enterDepth(c.Span)
+	defer p.leaveDepth()
 	if c.Kind == token.Ident || isSoftKw(c.Kind) {
 		p.next()
 		lit := c.Literal
@@ -1712,18 +1762,30 @@ func (p *Parser) parseConditional() ast.TypeNode {
 
 // isConditionalQ reports whether the current `?` opens conditional branches
 // (`? True :`) rather than forming Optional `T?`. Speculative and side
-// effect free: restores position and diagnostics either way.
-func (p *Parser) isConditionalQ() bool {
+// effect free: restores position and diagnostics either way. A depth trip
+// inside speculation just means "not a conditional" (the real parse takes
+// the shallower Optional path).
+func (p *Parser) isConditionalQ() (ok bool) {
 	if !p.at(token.Question) {
 		return false
 	}
 	savePos, saveDiags := p.pos, len(p.diags)
 	saveGt := p.pendingGt
+	saveDepth := p.depth
+	defer func() {
+		if r := recover(); r != nil {
+			if _, isBail := r.(depthBailout); !isBail {
+				panic(r)
+			}
+			ok = false
+		}
+		p.pos, p.pendingGt = savePos, saveGt
+		p.diags = p.diags[:saveDiags]
+		p.depth = saveDepth
+	}()
 	p.next() // ?
 	branch := p.parseType()
-	ok := branch != nil && p.at(token.Colon)
-	p.pos, p.pendingGt = savePos, saveGt
-	p.diags = p.diags[:saveDiags]
+	ok = branch != nil && p.at(token.Colon)
 	return ok
 }
 
@@ -1798,6 +1860,8 @@ func (p *Parser) parseTypePostfix() ast.TypeNode {
 
 func (p *Parser) parsePrimaryType() ast.TypeNode {
 	c := p.cur()
+	p.enterDepth(c.Span)
+	defer p.leaveDepth()
 	switch c.Kind {
 	case token.LParen:
 		return p.parseParenOrFuncType()

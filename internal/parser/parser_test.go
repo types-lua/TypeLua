@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/typelua/typelua/internal/ast"
@@ -220,6 +221,43 @@ func TestParseMacro(t *testing.T) {
 	} {
 		if _, diags := ParseFile("t.tl", src); len(diags) == 0 {
 			t.Fatalf("expected errors for %q", src)
+		}
+	}
+	// Broken call arguments never leak nils into the AST.
+	if _, diags := ParseFile("t.tl", `local r = f(local x = 1)`); len(diags) == 0 {
+		t.Fatalf("expected errors for broken call args")
+	}
+}
+
+func TestConditionalQ(t *testing.T) {
+	// `extends ? :` is a conditional; bare `?` is Optional.
+	f := mustParse(t, `type X<T> = T extends string ? string : number`)
+	if _, ok := f.Block.Stmts[0].(*ast.TypeAliasDecl).Type.(*ast.ConditionalType); !ok {
+		t.Fatalf("not conditional %T", f.Block.Stmts[0])
+	}
+	mustParse(t, `type Y = string?`)
+	mustParse(t, `type Z = (string | number)?`)
+	// Optional of a conditional parenthesized.
+	mustParse(t, `type W<T> = (T extends string ? string : number)?`)
+	// Nested conditionals stay right-associative through lookahead.
+	mustParse(t, `type N<T> = T extends string ? T extends "a" ? 1 : 2 : 3`)
+}
+
+func TestDeepNestingGuard(t *testing.T) {
+	for _, src := range []string{
+		`local x = ` + strings.Repeat("(", 5000) + `1` + strings.Repeat(")", 5000),
+		`local x: ` + strings.Repeat("(", 2000) + `number` + strings.Repeat(")", 2000) + ` = nil`,
+		strings.Repeat("do ", 2000) + `local x = 1 ` + strings.Repeat("end ", 2000),
+	} {
+		_, diags := ParseFile("t.tl", src)
+		found := false
+		for _, d := range diags {
+			if d.Code == "TL2015" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected TL2015, got %v", diags)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package checker
 import (
 	"testing"
 
+	"github.com/typelua/typelua/internal/ast"
 	"github.com/typelua/typelua/internal/parser"
 )
 
@@ -399,8 +400,30 @@ local v: number = m["k"]
 `)
 }
 
-func TestMappedModifiers(t *testing.T) {
-	// Homomorphic: unmarked mapping over keyof inherits base modifiers.
+func TestNilTolerance(t *testing.T) {
+	// Hand-built broken ASTs (as error recovery may produce) must not crash.
+	broken := []*ast.File{
+		{Name: "t.tl", Block: &ast.Block{Stmts: []ast.Stmt{
+			&ast.ExprStmt{E: &ast.CallExpr{Func: &ast.Ident{Name: "f"}, Args: []ast.Expr{nil}}},
+		}}},
+		{Name: "t.tl", Block: &ast.Block{Stmts: []ast.Stmt{
+			&ast.LocalAssign{Names: []*ast.Ident{{Name: "x"}}, Types: []ast.TypeNode{nil}},
+		}}},
+		{Name: "t.tl", Block: &ast.Block{Stmts: []ast.Stmt{nil}}},
+	}
+	for i, f := range broken {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("case %d panicked: %v", i, r)
+				}
+			}()
+			_ = CheckFile(f, DefaultOptions())
+		}()
+	}
+}
+
+func TestMappedModifiers(t *testing.T) {	// Homomorphic: unmarked mapping over keyof inherits base modifiers.
 	expectOK(t, `
 type Base = { x: number, y?: string, readonly z: boolean }
 type H = { [K in keyof Base]: Base[K] }

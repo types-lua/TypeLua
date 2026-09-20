@@ -151,6 +151,9 @@ func (e *emitter) emitBlock(b *ast.Block, ind int) {
 }
 
 func (e *emitter) emitStmt(st ast.Stmt) {
+	if st == nil {
+		return
+	}
 	e.mark(st, stmtName(st))
 	switch n := st.(type) {
 	case *ast.EmptyStmt:
@@ -497,6 +500,10 @@ type errString string
 func (x errString) Error() string { return string(x) }
 
 func (e *emitter) emitExpr(x ast.Expr) {
+	if x == nil {
+		e.write("nil")
+		return
+	}
 	switch n := x.(type) {
 	case *ast.Ident:
 		e.write(n.Name)
