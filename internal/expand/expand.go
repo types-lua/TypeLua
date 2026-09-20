@@ -13,12 +13,13 @@ const maxExpandDepth = 64
 
 // macroDef is a collected macro definition.
 type macroDef struct {
-	name   string
-	params []string
-	body   ast.Expr   // expression macro
-	block  *ast.Block // statement macro
-	isExpr bool
-	span   token.Span
+	name      string
+	params    []string
+	hasVarArg bool // trailing `...` collects extra call arguments
+	body      ast.Expr   // expression macro
+	block     *ast.Block // statement macro
+	isExpr    bool
+	span      token.Span
 }
 
 type scope struct {
@@ -79,11 +80,11 @@ func (e *expander) expandBlock(b *ast.Block, env *scope) {
 			if env.defs == nil {
 				env.defs = map[string]*macroDef{}
 			}
-			params := make([]string, len(md.Params))
-			for i, p := range md.Params {
-				params[i] = p.Name
-			}
-			env.defs[md.Name.Name] = &macroDef{name: md.Name.Name, params: params, body: md.Body, block: md.Block, isExpr: md.IsExpr, span: md.Span()}
+		params := make([]string, len(md.Params))
+		for i, p := range md.Params {
+			params[i] = p.Name
+		}
+		env.defs[md.Name.Name] = &macroDef{name: md.Name.Name, params: params, hasVarArg: md.HasVarArg, body: md.Body, block: md.Block, isExpr: md.IsExpr, span: md.Span()}
 		}
 	}
 	var out []ast.Stmt
@@ -998,6 +999,15 @@ type substCtx struct {
 	args   map[string]ast.Expr // param name -> arg AST (already expanded)
 	shadow map[string]int      // param names currently shadowed (depth count)
 	trail  []string            // push order for block-scoped unwinding
+	// Variadic rest: extra call args spliced at an unshadowed bare `...`
+	// in call-argument position. Nil outside variadic-macro expansion.
+	varArgs []ast.Expr
+	// dotsShadow counts enclosing function bodies: `...` inside one
+	// belongs to that function, never to the macro.
+	dotsShadow int
+	// strayDots collects unshadowed `...` outside call arguments
+	// (reported as TL3706 by the expansion driver).
+	strayDots []token.Span
 }
 
 func (s *substCtx) pushShadow(name string) {
@@ -1034,6 +1044,22 @@ func substBlock(b *ast.Block, s *substCtx) {
 	s.unwindTo(cp)
 }
 
+// substCallArgs substitutes call arguments, splicing an unshadowed bare
+// `...` (variadic macro rest) into per-occurrence copies of the extras.
+func substCallArgs(args []ast.Expr, s *substCtx) []ast.Expr {
+	out := make([]ast.Expr, 0, len(args)+len(s.varArgs))
+	for _, a := range args {
+		if _, ok := a.(*ast.VarArg); ok && s.varArgs != nil && s.dotsShadow == 0 {
+			for _, va := range s.varArgs {
+				out = append(out, copyExpr(va))
+			}
+			continue
+		}
+		out = append(out, substExpr(a, s))
+	}
+	return out
+}
+
 // substExpr replaces unshadowed param references with per-occurrence copies
 // of the argument ASTs.
 func substExpr(x ast.Expr, s *substCtx) ast.Expr {
@@ -1054,20 +1080,27 @@ func substExpr(x ast.Expr, s *substCtx) ast.Expr {
 		if n.VarArgName != nil {
 			s.pushShadow(n.VarArgName.Name)
 		}
+		savedDots := s.dotsShadow
+		s.dotsShadow++
 		substBlock(n.Body, s)
+		s.dotsShadow = savedDots
 		s.unwindTo(cp)
+		return n
+	case *ast.VarArg:
+		// Stray `...` (variadic rest outside call arguments): the driver
+		// reports TL3706; substitute nil to keep output runnable.
+		if s.varArgs != nil && s.dotsShadow == 0 {
+			s.strayDots = append(s.strayDots, n.S)
+			return &ast.NilLit{S: n.S}
+		}
 		return n
 	case *ast.CallExpr:
 		n.Func = substExpr(n.Func, s)
-		for i, a := range n.Args {
-			n.Args[i] = substExpr(a, s)
-		}
+		n.Args = substCallArgs(n.Args, s)
 		return n
 	case *ast.MethodCallExpr:
 		n.Obj = substExpr(n.Obj, s)
-		for i, a := range n.Args {
-			n.Args[i] = substExpr(a, s)
-		}
+		n.Args = substCallArgs(n.Args, s)
 		return n
 	case *ast.BinOpExpr:
 		n.L = substExpr(n.L, s)
@@ -1126,7 +1159,10 @@ func substStmt(st ast.Stmt, s *substCtx) {
 		if n.Func.VarArgName != nil {
 			s.pushShadow(n.Func.VarArgName.Name)
 		}
+		savedDots := s.dotsShadow
+		s.dotsShadow++
 		substBlock(n.Func.Body, s)
+		s.dotsShadow = savedDots
 		s.unwindTo(cp)
 	case *ast.FuncDefStmt:
 		cp := s.checkpoint()
@@ -1136,7 +1172,10 @@ func substStmt(st ast.Stmt, s *substCtx) {
 		if n.Func.VarArgName != nil {
 			s.pushShadow(n.Func.VarArgName.Name)
 		}
+		savedDots := s.dotsShadow
+		s.dotsShadow++
 		substBlock(n.Func.Body, s)
+		s.dotsShadow = savedDots
 		s.unwindTo(cp)
 	case *ast.ExprStmt:
 		n.E = substExpr(n.E, s)
@@ -1211,7 +1250,10 @@ func substStmt(st ast.Stmt, s *substCtx) {
 				if m.VarArgName != nil {
 					s.pushShadow(m.VarArgName.Name)
 				}
+				savedDots := s.dotsShadow
+				s.dotsShadow++
 				substBlock(m.Body, s)
+				s.dotsShadow = savedDots
 				s.unwindTo(cp)
 			}
 			if m.Init != nil {
@@ -1231,18 +1273,24 @@ func substRet(b *ast.Block, s *substCtx) {
 
 // ---------- macro expansion core ----------
 
-// checkArity validates argument count, padding missing with nil and
-// dropping extras only after reporting (best-effort runnable output).
+// checkArity validates argument count. A variadic macro (`...`) requires
+// at least len(params); otherwise the count must match exactly.
+// Mismatches report (best-effort runnable output) via a nil return.
 func (e *expander) checkArity(md *macroDef, call token.Span, nargs int) []int {
-	if nargs == len(md.params) {
-		idx := make([]int, nargs)
-		for i := range idx {
-			idx[i] = i
+	if md.hasVarArg {
+		if nargs < len(md.params) {
+			e.errorf("TL3702", call, "macro '%s' expects at least %d argument(s), got %d", md.name, len(md.params), nargs)
+			return nil
 		}
-		return idx
+	} else if nargs != len(md.params) {
+		e.errorf("TL3702", call, "macro '%s' expects %d argument(s), got %d", md.name, len(md.params), nargs)
+		return nil
 	}
-	e.errorf("TL3702", call, "macro '%s' expects %d argument(s), got %d", md.name, len(md.params), nargs)
-	return nil
+	idx := make([]int, nargs)
+	for i := range idx {
+		idx[i] = i
+	}
+	return idx
 }
 
 // enter guards recursion: same macro re-entered, or depth exceeded.
@@ -1275,6 +1323,13 @@ func (e *expander) renameScope(args []ast.Expr) *renameCtx {
 	return r
 }
 
+// reportStrayDots reports variadic `...` used outside call arguments.
+func (e *expander) reportStrayDots(md *macroDef, sub *substCtx) {
+	for _, sp := range sub.strayDots {
+		e.errorf("TL3706", sp, "variadic '...' of macro '%s' must appear in call arguments", md.name)
+	}
+}
+
 // expandExprMacro expands an expression-macro call.
 func (e *expander) expandExprMacro(md *macroDef, call *ast.CallExpr, env *scope) ast.Expr {
 	// Expand arguments first (caller context).
@@ -1297,7 +1352,11 @@ func (e *expander) expandExprMacro(md *macroDef, call *ast.CallExpr, env *scope)
 	for i, p := range md.params {
 		sub.args[p] = args[i]
 	}
+	if md.hasVarArg {
+		sub.varArgs = append([]ast.Expr{}, args[len(md.params):]...)
+	}
 	body = substExpr(body, sub)
+	e.reportStrayDots(md, sub)
 	return e.expandExpr(body, env)
 }
 
@@ -1322,7 +1381,11 @@ func (e *expander) expandStmtMacro(md *macroDef, call *ast.CallExpr, env *scope)
 	for i, p := range md.params {
 		sub.args[p] = args[i]
 	}
+	if md.hasVarArg {
+		sub.varArgs = append([]ast.Expr{}, args[len(md.params):]...)
+	}
 	substBlock(blk, sub)
+	e.reportStrayDots(md, sub)
 	// Spliced placeholders must yield real statements (calls); anything
 	// else would emit invalid Lua.
 	var valid []ast.Stmt

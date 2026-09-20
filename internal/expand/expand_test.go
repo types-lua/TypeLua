@@ -137,3 +137,60 @@ withLabel(2)
 		t.Fatalf("labels not hygienic:\n%s", out)
 	}
 }
+
+func TestVariadicMacro(t *testing.T) {
+	// Extras splice into call arguments.
+	out, codes := expandEmit(t, `
+macro wrap(f, ...) = f(...)
+local r = wrap(print, 1, "a")
+`)
+	if len(codes) != 0 {
+		t.Fatalf("diags: %v", codes)
+	}
+	if !strings.Contains(out, `print(1, "a")`) {
+		t.Fatalf("extras not spliced:\n%s", out)
+	}
+	// Zero extras splice to nothing.
+	out, codes = expandEmit(t, `
+macro fwd(f, ...) = f(...)
+local r = fwd(print)
+`)
+	if len(codes) != 0 {
+		t.Fatalf("diags: %v", codes)
+	}
+	if !strings.Contains(out, `print()`) {
+		t.Fatalf("empty splice:\n%s", out)
+	}
+	// Statement macro form.
+	out, codes = expandEmit(t, `
+macro each(f, ...) do f(...) end
+each(print, 1, 2)
+`)
+	if len(codes) != 0 {
+		t.Fatalf("diags: %v", codes)
+	}
+	if !strings.Contains(out, `print(1, 2)`) {
+		t.Fatalf("stmt splice:\n%s", out)
+	}
+	// Too few arguments still errors.
+	_, codes = expandEmit(t, "macro req(a, b, ...) = a\nlocal r = req(1)\n")
+	if len(codes) != 1 || codes[0] != "TL3702" {
+		t.Fatalf("want TL3702, got %v", codes)
+	}
+	// Bare `...` outside call arguments errors.
+	_, codes = expandEmit(t, "macro bad(...) = ...\nlocal r = bad(1)\n")
+	if len(codes) != 1 || codes[0] != "TL3706" {
+		t.Fatalf("want TL3706, got %v", codes)
+	}
+	// `...` inside a nested function belongs to it, not the macro.
+	out, codes = expandEmit(t, `
+macro mk(...) = print(function() return ... end)
+local r = mk(1)
+`)
+	if len(codes) != 0 {
+		t.Fatalf("diags: %v", codes)
+	}
+	if !strings.Contains(out, `return ...`) {
+		t.Fatalf("inner ... must survive:\n%s", out)
+	}
+}

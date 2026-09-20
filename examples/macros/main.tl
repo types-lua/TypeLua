@@ -27,3 +27,9 @@ macro shadowing(x) do
 end
 shadowing(v)
 print(v)
+
+-- Variadic macros: trailing `...` collects extras, spliced in call args.
+macro logged(tag, ...) = print(tag, ...)
+macro broadcast(f, ...) do f(...) end
+local m = logged("info", 1, 2)
+broadcast(print, "a", "b")
