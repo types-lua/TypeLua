@@ -169,7 +169,7 @@ func applyChange(content string, lines []int, start, end lspPos, text string) st
 	s := tmp.offsetAt(start.Line, start.Character)
 	e := tmp.offsetAt(end.Line, end.Character)
 	if s > e || s > len(content) || e > len(content) {
-		return text
+		return content
 	}
 	return content[:s] + text + content[e:]
 }

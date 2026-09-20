@@ -438,3 +438,78 @@ func TestDidChangeIncremental(t *testing.T) {
 		t.Fatalf("bad hover: %q", hvr.Contents.Value)
 	}
 }
+
+func TestIncrementalSyncAdvertised(t *testing.T) {
+	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("shutdown", 2, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	m := findMsg(h.readAll(), "1")
+	if m == nil {
+		t.Fatalf("no initialize response")
+	}
+	var res struct {
+		Capabilities struct {
+			TextDocumentSync int `json:"textDocumentSync"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(m.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Capabilities.TextDocumentSync != 2 {
+		t.Fatalf("want incremental(2), got %d", res.Capabilities.TextDocumentSync)
+	}
+}
+
+func TestDidChangeBatchAndUnicode(t *testing.T) {
+	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": sampleURI, "version": 1, "text": "local 名称 = 1\nlocal y = 2\n",
+	}})
+	// One notification, two ranged edits (applied in order): rename the
+	// CJK variable (UTF-16 columns) and join the lines with a multiline edit.
+	h.send("textDocument/didChange", nil, map[string]any{
+		"textDocument": map[string]any{"uri": sampleURI, "version": 2},
+		"contentChanges": []any{
+			map[string]any{
+				"range": map[string]any{
+					"start": map[string]any{"line": 0, "character": 6},
+					"end":   map[string]any{"line": 0, "character": 8},
+				},
+				"text": "name",
+			},
+			map[string]any{
+				"range": map[string]any{
+					"start": map[string]any{"line": 0, "character": 15},
+					"end":   map[string]any{"line": 1, "character": 0},
+				},
+				"text": "; ",
+			},
+		},
+	})
+	h.send("textDocument/hover", 60, map[string]any{
+		"textDocument": map[string]any{"uri": sampleURI},
+		"position":     map[string]any{"line": 0, "character": 8},
+	})
+	h.send("shutdown", 61, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+	hv := findMsg(msgs, "60")
+	if hv == nil {
+		t.Fatalf("no hover response")
+	}
+	var hvr struct {
+		Contents struct {
+			Value string `json:"value"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(hv.Result, &hvr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(hvr.Contents.Value, "name") {
+		t.Fatalf("batch edit misapplied, hover: %q", hvr.Contents.Value)
+	}
+}

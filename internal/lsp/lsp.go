@@ -182,7 +182,7 @@ func (s *Server) dispatch(msg message) {
 func (s *Server) capabilities() any {
 	return map[string]any{
 		"capabilities": map[string]any{
-			"textDocumentSync":   1,
+			"textDocumentSync":   2,
 			"hoverProvider":      true,
 			"definitionProvider": true,
 			"completionProvider": map[string]any{
