@@ -992,6 +992,10 @@ func (c *Checker) resolveTypeWithSub(n ast.TypeNode, sub map[string]types.Type) 
 	case *ast.KeyofType:
 		e := c.resolveTypeWithSub(t.Elem, sub)
 		return c.resolveKeyof(e, t.Span())
+	case *ast.MappedType:
+		return c.resolveMapped(t, sub)
+	case *ast.IndexedAccessType:
+		return c.resolveIndexedAccess(t, sub)
 	case *ast.InferType:
 		if c.extendsDepth == 0 {
 			c.errorf("TL3601", t.Span(), "'infer' is only allowed in the extends clause of a conditional type")
@@ -1247,6 +1251,42 @@ func isNakedTypeParam(n ast.TypeNode, c *Checker, sub map[string]types.Type) boo
 		return true
 	}
 	return c.lookupTParam(nt.Name) != nil
+}
+
+// resolveMapped resolves `{ [K in Keys]?: V }`, expanding concrete
+// domains eagerly and deferring the rest.
+func (c *Checker) resolveMapped(n *ast.MappedType, sub map[string]types.Type) types.Type {
+	constraint := c.resolveTypeWithSub(n.Constraint, sub)
+	// The key variable is visible inside the value type (shadows outer).
+	c.pushTParams([]*ast.GenericParam{{Name: n.Param}})
+	value := c.resolveTypeWithSub(n.Value, sub)
+	c.popTParams()
+	m := &types.Mapped{Param: n.Param.Name, Constraint: constraint, Optional: n.Optional, Readonly: n.Readonly, Value: value}
+	if r, ok := types.TryEvalMapped(m, c.opt.toTypes()); ok {
+		return r
+	}
+	// Only report unmappable concrete domains; Any/Unknown arise from
+	// unfilled generic parameters (definition check) or dynamic code,
+	// both of which stay deferred.
+	if types.IsConcreteType(constraint) && !isAnyLike(constraint) {
+		c.errorf("TL3602", n.Span(), "cannot map over type '%s'", constraint.String())
+		return types.Any
+	}
+	return m
+}
+
+// resolveIndexedAccess resolves `T[K]`.
+func (c *Checker) resolveIndexedAccess(n *ast.IndexedAccessType, sub map[string]types.Type) types.Type {
+	obj := c.resolveTypeWithSub(n.Obj, sub)
+	index := c.resolveTypeWithSub(n.Index, sub)
+	if r, ok, errStr := types.TryEvalIndexed(obj, index, c.opt.toTypes()); ok {
+		if errStr != "" {
+			c.errorf("TL3603", n.Span(), "%s", errStr)
+			return types.Any
+		}
+		return r
+	}
+	return &types.IndexedAccess{Obj: obj, Index: index}
 }
 
 func (c *Checker) resolveTypeof(t *ast.TypeofType) types.Type {
@@ -3904,6 +3944,13 @@ func collectInferNames(n ast.TypeNode, into map[string]bool) map[string]bool {
 		}
 	case *ast.KeyofType:
 		collectInferNames(t.Elem, into)
+	case *ast.MappedType:
+		// Value-position infers bind in the true branch; constraint
+		// infers would have nothing to bind against, skip them.
+		collectInferNames(t.Value, into)
+	case *ast.IndexedAccessType:
+		collectInferNames(t.Obj, into)
+		collectInferNames(t.Index, into)
 	case *ast.ConditionalType:
 		// Own scope; skip.
 	}

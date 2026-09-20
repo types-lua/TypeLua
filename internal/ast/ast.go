@@ -642,6 +642,29 @@ type KeyofType struct {
 func (*KeyofType) typeNode()          {}
 func (n *KeyofType) Span() token.Span { return n.S }
 
+// MappedType is `{ [K in Keys]?: V }` (optional readonly prefix).
+type MappedType struct {
+	Param      *Ident
+	Constraint TypeNode
+	Optional   bool
+	Readonly   bool
+	Value      TypeNode
+	S          token.Span
+}
+
+func (*MappedType) typeNode()          {}
+func (n *MappedType) Span() token.Span { return n.S }
+
+// IndexedAccessType is `T[K]`.
+type IndexedAccessType struct {
+	Obj   TypeNode
+	Index TypeNode
+	S     token.Span
+}
+
+func (*IndexedAccessType) typeNode()          {}
+func (n *IndexedAccessType) Span() token.Span { return n.S }
+
 // ConditionalType is `Check extends Extends ? True : False`.
 type ConditionalType struct {
 	Check   TypeNode

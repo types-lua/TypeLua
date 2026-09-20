@@ -1677,6 +1677,17 @@ func (p *Parser) parseTypePostfix() ast.TypeNode {
 			t = &ast.ArrayType{Elem: t, S: token.Span{Start: t.Span().Start, End: p.prevEnd(), File: p.file}}
 			continue
 		}
+		if p.at(token.LBrack) {
+			// Indexed access `T[K]` (empty brackets stay Array above).
+			p.next() // [
+			idx := p.parseType()
+			p.expect(token.RBrack, "']'")
+			if idx == nil {
+				break
+			}
+			t = &ast.IndexedAccessType{Obj: t, Index: idx, S: token.Span{Start: t.Span().Start, End: p.prevEnd(), File: p.file}}
+			continue
+		}
 		break
 	}
 	return t
@@ -1931,6 +1942,11 @@ func (p *Parser) parseFuncTypeParams() ([]*ast.FuncTypeParam, bool, ast.TypeNode
 
 func (p *Parser) parseTableType() ast.TypeNode {
 	start := p.next() // {
+	// Mapped type: `{ [K in Keys]?: V }` (optional readonly prefix).
+	// Committed once `[Ident in` is seen; errors after that are real.
+	if p.isMappedStart() {
+		return p.parseMappedType(start)
+	}
 	var fields []*ast.TableTypeField
 	for !p.at(token.RBrace) && !p.at(token.EOF) {
 		if p.at(token.Comma) || p.at(token.Semi) {
@@ -1949,6 +1965,46 @@ func (p *Parser) parseTableType() ast.TypeNode {
 	}
 	p.expect(token.RBrace, "'}'")
 	return &ast.TableType{Fields: fields, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+}
+
+// isMappedStart peeks `[K in` (optional readonly prefix) without consuming.
+func (p *Parser) isMappedStart() bool {
+	i := 0
+	if p.peek(i).Kind == token.ReadonlyKw {
+		i++
+	}
+	return p.peek(i).Kind == token.LBrack &&
+		p.peek(i+1).Kind == token.Ident &&
+		p.peek(i+2).Kind == token.In
+}
+
+func (p *Parser) parseMappedType(start token.Token) ast.TypeNode {
+	readonly := false
+	if p.at(token.ReadonlyKw) {
+		p.next()
+		readonly = true
+	}
+	p.next() // [
+	param := p.parseIdent()
+	p.expect(token.In, "'in'")
+	constraint := p.parseType()
+	if _, ok := p.expect(token.RBrack, "']'"); !ok {
+		return &ast.NamedType{Name: "any", S: start.Span}
+	}
+	optional := false
+	if p.at(token.Question) {
+		// `?` here is the optional marker, never a conditional branch:
+		// a `[K in T] ? ...` conditional would need `extends` first.
+		p.next()
+		optional = true
+	}
+	p.expect(token.Colon, "':'")
+	value := p.parseType()
+	p.expect(token.RBrace, "'}'")
+	if param == nil || constraint == nil || value == nil {
+		return &ast.NamedType{Name: "any", S: start.Span}
+	}
+	return &ast.MappedType{Param: param, Constraint: constraint, Optional: optional, Readonly: readonly, Value: value, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
 func (p *Parser) parseTableTypeField() *ast.TableTypeField {

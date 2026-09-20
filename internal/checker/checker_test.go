@@ -315,3 +315,39 @@ local d = f<string>("hi")`)
 local function id<T>(x: T): T return x end
 local a: number = id<string>("hi")`)
 }
+
+func TestMappedIndexedOK(t *testing.T) {
+	expectOK(t, `
+type Point = { x: number, y: number }
+type PP = { [K in keyof Point]?: Point[K] }
+local p: PP = { x = 1 }
+local x: number | nil = p.x
+`)
+	expectOK(t, `
+type Pick<T, K> = { [P in K]: T[P] }
+type Point = { x: number, y: number }
+local pk: Pick<Point, "x"> = { x = 1 }
+`)
+	expectOK(t, `
+type Tup = [string, number]
+local t: Tup = {"a", 1}
+local a: string = t[1]
+local n: Tup[number] = 1
+`)
+	expectOK(t, `
+type M = { [string]: number }
+local m: M = {}
+local v: number = m["k"]
+`)
+}
+func TestMappedIndexedErr(t *testing.T) {
+	expectErr(t, `
+type Point = { x: number, y: number }
+local a: Point["z"] = 1`)
+	expectErr(t, `type Bad = { [K in boolean]: string }`)
+	expectErr(t, `
+type RO<T> = { readonly [K in keyof T]: T[K] }
+type Point = { x: number, y: number }
+local ro: RO<Point> = { x = 1, y = 2 }
+ro.x = 2`)
+}

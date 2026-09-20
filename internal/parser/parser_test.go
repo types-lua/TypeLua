@@ -153,3 +153,19 @@ func TestParseExplicitTypeArgs(t *testing.T) {
 	}
 	mustParse(t, `local d = Box.new<string>("hi")`)
 }
+
+func TestParseMappedAndIndexed(t *testing.T) {
+	f := mustParse(t, `type P<T> = { [K in keyof T]?: T[K] }`)
+	alias, ok := f.Block.Stmts[0].(*ast.TypeAliasDecl)
+	if !ok {
+		t.Fatalf("not alias %T", f.Block.Stmts[0])
+	}
+	if _, ok := alias.Type.(*ast.MappedType); !ok {
+		t.Fatalf("not mapped %T", alias.Type)
+	}
+	mustParse(t, `type R = { readonly [K in string]: number }`)
+	mustParse(t, `local x: Point["x"] = 1`)
+	mustParse(t, `local y: T[number] = 1`)
+	// Indexer still parses (no `in` after the name).
+	mustParse(t, `type M = { [string]: number }`)
+}
