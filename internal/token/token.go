@@ -56,6 +56,7 @@ const (
 	AbstractKw
 	ImplementsKw
 	InferKw
+	MacroKw
 
 	// Literals / punctuation
 	Plus        // +
@@ -140,6 +141,7 @@ var keywords = map[string]Kind{
 	"abstract":  AbstractKw,
 	"implements": ImplementsKw,
 	"infer":     InferKw,
+	"macro":     MacroKw,
 }
 
 // LookupIdent maps an identifier to a keyword kind, or Ident.
@@ -157,7 +159,7 @@ func (k Kind) IsKeyword() bool {
 		Goto, If, In, Local, Nil, Not, Or, Repeat, Return, Then,
 		True, Until, While, TypeKw, InterfaceKw, EnumKw, AsKw,
 		ExtendsKw, ExportKw, DeclareKw, KeyofKw, TypeofKw, IsKw, ReadonlyKw,
-		ClassKw, SuperKw, StaticKw, PrivateKw, PublicKw, ProtectedKw, AbstractKw, ImplementsKw, InferKw:
+		ClassKw, SuperKw, StaticKw, PrivateKw, PublicKw, ProtectedKw, AbstractKw, ImplementsKw, InferKw, MacroKw:
 		return true
 	}
 	return false
@@ -257,6 +259,8 @@ func (k Kind) String() string {
 		return "implements"
 	case InferKw:
 		return "infer"
+	case MacroKw:
+		return "macro"
 	case Plus:
 		return "+"
 	case Minus:

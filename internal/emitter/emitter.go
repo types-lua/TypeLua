@@ -264,8 +264,8 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		e.pad()
 		e.write("::" + n.Name.Name + "::")
 		e.nl()
-	case *ast.TypeAliasDecl, *ast.InterfaceDecl:
-		// Type-only: erased.
+	case *ast.TypeAliasDecl, *ast.InterfaceDecl, *ast.MacroDef:
+		// Type-only / compile-time: erased.
 	case *ast.EnumDecl:
 		e.emitEnum(n)
 	case *ast.ClassDecl:

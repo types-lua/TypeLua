@@ -264,6 +264,21 @@ type EnumMember struct {
 
 func (n *EnumMember) Span() token.Span { return n.S }
 
+// MacroDef is a compile-time macro: `macro name(params) = expr` for
+// expressions, `macro name(params) do stmts end` for statements.
+// Definitions are expanded (and erased) before type checking.
+type MacroDef struct {
+	Name    *Ident
+	Params  []*Ident
+	Body    Expr   // expression macro (IsExpr)
+	Block   *Block // statement macro (!IsExpr)
+	IsExpr  bool
+	S       token.Span
+}
+
+func (*MacroDef) stmtNode()          {}
+func (n *MacroDef) Span() token.Span { return n.S }
+
 // ---------- Classes ----------
 
 type Visibility int

@@ -15,6 +15,7 @@ type Parser struct {
 	diags        []diag.Diagnostic
 	pendingGt    int // split >> into two >
 	extendsDepth int // >0 while parsing an extends clause (for `infer`)
+	inMacroBody  int // >0 while parsing a macro definition body
 }
 
 func ParseFile(filename, src string) (*ast.File, []diag.Diagnostic) {
@@ -252,6 +253,12 @@ func (p *Parser) parseStmt() ast.Stmt {
 			return p.parseTypeDecl(false, false)
 		}
 		return p.parseExprStmtOrAssign()
+	case token.MacroKw:
+		// `macro Name` declares; any other use is a plain identifier.
+		if p.peek(1).Kind == token.Ident {
+			return p.parseMacroDef()
+		}
+		return p.parseExprStmtOrAssign()
 	case token.ExportKw:
 		return p.parseExport()
 	case token.DeclareKw:
@@ -479,6 +486,9 @@ func (p *Parser) parseLocal() ast.Stmt {
 	if p.at(token.AbstractKw) && p.peek(1).Kind == token.ClassKw && p.peek(2).Kind == token.Ident {
 		return p.parseClassDecl(false, false, true)
 	}
+	if p.at(token.MacroKw) && p.peek(1).Kind == token.Ident {
+		return p.parseMacroDef()
+	}
 	// local name [attr] [: type] [, ...] [= exprlist]
 	var names []*ast.Ident
 	var attrs []string
@@ -585,6 +595,11 @@ func (p *Parser) parseExport() ast.Stmt {
 		}
 		return st
 	}
+	if p.at(token.MacroKw) {
+		p.errorf("TL2005", p.cur().Span, "macros cannot be exported (they expand within their file)")
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
 	p.errorf("TL2005", p.cur().Span, "expected declaration after 'export'")
 	p.synchronize()
 	return &ast.EmptyStmt{S: start.Span}
@@ -650,7 +665,78 @@ func (p *Parser) parseDeclare() ast.Stmt {
 		fn := &ast.FuncLit{Params: params, HasVarArg: hasVA, VarArgName: vaName, VarArgType: vaTy, ReturnType: retTy, Body: &ast.Block{}, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 		return &ast.FuncDefStmt{Name: name, Generics: generics, Func: fn, S: fn.S}
 	}
+	if p.at(token.MacroKw) {
+		p.errorf("TL2006", p.cur().Span, "macros cannot be declared (they have no runtime value)")
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
 	p.errorf("TL2006", p.cur().Span, "expected declaration after 'declare'")
+	p.synchronize()
+	return &ast.EmptyStmt{S: start.Span}
+}
+
+// parseMacroDef parses:
+//   macro Name(p1, p2) = expr            (expression macro)
+//   macro Name(p1, p2) do stmts end      (statement macro)
+// Parameters are strict identifiers; `self`/`super` are reserved.
+func (p *Parser) parseMacroDef() ast.Stmt {
+	start := p.next() // macro
+	name := p.parseIdent()
+	if name == nil {
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
+	if _, ok := p.expect(token.LParen, "'('"); !ok {
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
+	var params []*ast.Ident
+	if !p.at(token.RParen) {
+		for {
+			n := p.parseIdent()
+			if n == nil {
+				break
+			}
+			if n.Name == "self" || n.Name == "super" {
+				p.errorf("TL2038", n.Span(), "macro parameter cannot be named '%s'", n.Name)
+			}
+			params = append(params, n)
+			if !p.at(token.Comma) {
+				break
+			}
+			p.next()
+		}
+	}
+	p.expect(token.RParen, "')'")
+	// Duplicate parameter names shadow confusingly; reject outright.
+	seen := map[string]bool{}
+	for _, n := range params {
+		if seen[n.Name] {
+			p.errorf("TL2039", n.Span(), "duplicate macro parameter '%s'", n.Name)
+		}
+		seen[n.Name] = true
+	}
+	if p.at(token.Assign) {
+		p.next()
+		body := p.parseExpr()
+		if body == nil {
+			p.synchronize()
+			return &ast.EmptyStmt{S: start.Span}
+		}
+		return &ast.MacroDef{Name: name, Params: params, Body: body, IsExpr: true, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+	}
+	if p.at(token.Do) {
+		p.next()
+		p.inMacroBody++
+		body := p.parseBlock()
+		p.inMacroBody--
+		p.expect(token.End, "'end'")
+		if body.Ret != nil {
+			p.errorf("TL2040", body.Ret.Span(), "statement macro body cannot return a value")
+		}
+		return &ast.MacroDef{Name: name, Params: params, Block: body, IsExpr: false, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+	}
+	p.errorf("TL2001", p.cur().Span, "expected '=' or 'do' after macro parameters")
 	p.synchronize()
 	return &ast.EmptyStmt{S: start.Span}
 }
@@ -1074,6 +1160,13 @@ func (p *Parser) parseExprStmtOrAssign() ast.Stmt {
 	case *ast.CallExpr, *ast.MethodCallExpr:
 		return &ast.ExprStmt{E: first, S: first.Span()}
 	default:
+		// Inside macro bodies a bare identifier is a splice placeholder
+		// for a statement argument (validated after substitution).
+		if p.inMacroBody > 0 {
+			if _, ok := first.(*ast.Ident); ok {
+				return &ast.ExprStmt{E: first, S: first.Span()}
+			}
+		}
 		p.errorf("TL2009", first.Span(), "expected assignment or function call")
 		return &ast.ExprStmt{E: first, S: first.Span()}
 	}
@@ -1110,7 +1203,7 @@ func isSoftKw(k token.Kind) bool {
 	case token.TypeKw, token.InterfaceKw, token.EnumKw, token.ExportKw, token.DeclareKw,
 		token.KeyofKw, token.TypeofKw, token.IsKw, token.ReadonlyKw, token.AsKw, token.ExtendsKw,
 		token.ClassKw, token.SuperKw, token.StaticKw, token.PrivateKw, token.PublicKw,
-		token.ProtectedKw, token.AbstractKw, token.ImplementsKw, token.InferKw:
+		token.ProtectedKw, token.AbstractKw, token.ImplementsKw, token.InferKw, token.MacroKw:
 		return true
 	}
 	return false
@@ -2174,7 +2267,7 @@ func (p *Parser) synchronize() {
 		case token.Local, token.Function, token.If, token.While, token.Repeat,
 			token.For, token.Do, token.Return, token.Break, token.Goto,
 			token.TypeKw, token.InterfaceKw, token.EnumKw, token.ClassKw,
-			token.AbstractKw, token.ExportKw, token.DeclareKw:
+			token.AbstractKw, token.ExportKw, token.DeclareKw, token.MacroKw:
 			return
 		}
 		p.next()

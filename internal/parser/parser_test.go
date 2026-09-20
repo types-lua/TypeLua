@@ -169,3 +169,31 @@ func TestParseMappedAndIndexed(t *testing.T) {
 	// Indexer still parses (no `in` after the name).
 	mustParse(t, `type M = { [string]: number }`)
 }
+
+func TestParseMacro(t *testing.T) {
+	f := mustParse(t, `macro twice(x) = (x) + (x)`)
+	md, ok := f.Block.Stmts[0].(*ast.MacroDef)
+	if !ok || !md.IsExpr || len(md.Params) != 1 {
+		t.Fatalf("bad macrodef %T", f.Block.Stmts[0])
+	}
+	f2 := mustParse(t, "macro unless(c, b) do\n if not c then b end\nend")
+	md2, ok := f2.Block.Stmts[0].(*ast.MacroDef)
+	if !ok || md2.IsExpr || md2.Block == nil {
+		t.Fatalf("bad stmt macro %T", f2.Block.Stmts[0])
+	}
+	mustParse(t, `local macro hidden(x) = x`)
+	// `macro` stays usable as an identifier.
+	mustParse(t, `local macro = 1`)
+	// Errors, all recoverable.
+	for _, src := range []string{
+		`macro bad(x, x) = x`,
+		`macro bad2(self) = self`,
+		"macro bad3(x) do\n return x \nend",
+		`export macro e(x) = x`,
+		`declare macro d(x) = x`,
+	} {
+		if _, diags := ParseFile("t.tl", src); len(diags) == 0 {
+			t.Fatalf("expected errors for %q", src)
+		}
+	}
+}

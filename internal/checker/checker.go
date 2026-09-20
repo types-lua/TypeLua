@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/expand"
 	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
@@ -165,6 +166,8 @@ func (c *Checker) pop()        { c.scopes = c.scopes[:len(c.scopes)-1] }
 func CheckFile(f *ast.File, opt Options) []diag.Diagnostic {
 	c := New(opt)
 	c.file = f.Name
+	// Macros expand before checking (definitions erase; idempotent).
+	c.diags = append(c.diags, expand.ExpandFile(f)...)
 	c.scopes = []*Scope{newScope(nil)}
 	c.defineBuiltins(c.cur())
 	c.checkBlock(f.Block)
@@ -335,6 +338,9 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 		c.checkEnum(n)
 	case *ast.ClassDecl:
 		c.checkClass(n)
+	case *ast.MacroDef:
+		// Unreachable via CheckFile (expansion runs first); defensive.
+		c.errorf("TL3700", st.Span(), "internal error: unexpanded macro '%s'", n.Name.Name)
 	default:
 		c.errorf("TL3000", st.Span(), "unsupported statement %T", st)
 	}
