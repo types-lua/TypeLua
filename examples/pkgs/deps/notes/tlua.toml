@@ -1,0 +1,6 @@
+[package]
+name = "example.com/notes"
+version = "v0.2.0"
+
+[dependencies."example.com/words"]
+version = "^v1.0.0"

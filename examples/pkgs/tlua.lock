@@ -4,3 +4,15 @@ path = "example.com/greet"
 version = "v1.0.0"
 commit = "local"
 direct = true
+
+[[module]]
+path = "example.com/notes"
+version = "v0.2.0"
+commit = "local"
+direct = true
+
+[[module]]
+path = "example.com/words"
+version = "v1.0.0"
+commit = "local"
+direct = false
