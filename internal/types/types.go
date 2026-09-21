@@ -120,10 +120,54 @@ type Union struct {
 }
 
 func (t *Union) Kind() Kind { return KUnion }
-func (t *Union) String() string {
+// typeString formats t with a visited set: shared *Object nodes reached
+// twice (recursive declarations) collapse to their name (or "{...}"),
+// so printing a cyclic type terminates. Only objects can recur
+// structurally (classes print nominally); containers forward the set.
+func typeString(t Type, seen map[Type]bool) string {
+	switch x := t.(type) {
+	case *Object:
+		if seen[x] {
+			if x.Name != "" {
+				return x.Name
+			}
+			return "{...}"
+		}
+		seen[x] = true
+		return x.stringSeen(seen)
+	case *Union:
+		return x.stringSeen(seen)
+	case *Intersection:
+		return x.stringSeen(seen)
+	case *Array:
+		return x.stringSeen(seen)
+	case *Map:
+		return x.stringSeen(seen)
+	case *Tuple:
+		return x.stringSeen(seen)
+	case *Func:
+		return x.stringSeen(seen)
+	case *Class:
+		return x.stringSeen(seen)
+	case *GenericParam:
+		return x.stringSeen(seen)
+	case *Ref:
+		return x.stringSeen(seen)
+	case *Conditional:
+		return x.stringSeen(seen)
+	case *Mapped:
+		return x.stringSeen(seen)
+	case *IndexedAccess:
+		return x.stringSeen(seen)
+	default:
+		return t.String()
+	}
+}
+func (t *Union) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Union) stringSeen(seen map[Type]bool) string {
 	parts := make([]string, len(t.Types))
 	for i, x := range t.Types {
-		parts[i] = x.String()
+		parts[i] = typeString(x, seen)
 	}
 	return strings.Join(parts, " | ")
 }
@@ -133,10 +177,11 @@ type Intersection struct {
 }
 
 func (t *Intersection) Kind() Kind { return KIntersection }
-func (t *Intersection) String() string {
+func (t *Intersection) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Intersection) stringSeen(seen map[Type]bool) string {
 	parts := make([]string, len(t.Types))
 	for i, x := range t.Types {
-		parts[i] = x.String()
+		parts[i] = typeString(x, seen)
 	}
 	return strings.Join(parts, " & ")
 }
@@ -146,8 +191,9 @@ type Array struct {
 }
 
 func (t *Array) Kind() Kind { return KArray }
-func (t *Array) String() string {
-	return t.Elem.String() + "[]"
+func (t *Array) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Array) stringSeen(seen map[Type]bool) string {
+	return typeString(t.Elem, seen) + "[]"
 }
 
 type Map struct {
@@ -156,8 +202,9 @@ type Map struct {
 }
 
 func (t *Map) Kind() Kind { return KMap }
-func (t *Map) String() string {
-	return fmt.Sprintf("map<%s, %s>", t.Key.String(), t.Value.String())
+func (t *Map) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Map) stringSeen(seen map[Type]bool) string {
+	return fmt.Sprintf("map<%s, %s>", typeString(t.Key, seen), typeString(t.Value, seen))
 }
 
 type Tuple struct {
@@ -165,10 +212,11 @@ type Tuple struct {
 }
 
 func (t *Tuple) Kind() Kind { return KTuple }
-func (t *Tuple) String() string {
+func (t *Tuple) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Tuple) stringSeen(seen map[Type]bool) string {
 	parts := make([]string, len(t.Elems))
 	for i, e := range t.Elems {
-		parts[i] = e.String()
+		parts[i] = typeString(e, seen)
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
 }
@@ -190,33 +238,34 @@ type Func struct {
 }
 
 func (t *Func) Kind() Kind { return KFunc }
-func (t *Func) String() string {
+func (t *Func) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Func) stringSeen(seen map[Type]bool) string {
 	var ps []string
 	for _, p := range t.Params {
 		if p.Name != "" {
 			if p.Optional {
-				ps = append(ps, p.Name+"?: "+p.Type.String())
+				ps = append(ps, p.Name+"?: "+typeString(p.Type, seen))
 			} else {
-				ps = append(ps, p.Name+": "+p.Type.String())
+				ps = append(ps, p.Name+": "+typeString(p.Type, seen))
 			}
 		} else {
-			ps = append(ps, p.Type.String())
+			ps = append(ps, typeString(p.Type, seen))
 		}
 	}
 	if t.HasVarArg {
 		if t.VarArg != nil {
-			ps = append(ps, "...: "+t.VarArg.String())
+			ps = append(ps, "...: "+typeString(t.VarArg, seen))
 		} else {
 			ps = append(ps, "...")
 		}
 	}
 	ret := "void"
 	if len(t.Returns) == 1 {
-		ret = t.Returns[0].String()
+		ret = typeString(t.Returns[0], seen)
 	} else if len(t.Returns) > 1 {
 		rs := make([]string, len(t.Returns))
 		for i, r := range t.Returns {
-			rs[i] = r.String()
+			rs[i] = typeString(r, seen)
 		}
 		ret = "(" + strings.Join(rs, ", ") + ")"
 	}
@@ -230,7 +279,8 @@ type Object struct {
 }
 
 func (t *Object) Kind() Kind { return KObject }
-func (t *Object) String() string {
+func (t *Object) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Object) stringSeen(seen map[Type]bool) string {
 	if t.Name != "" && len(t.Fields) == 0 && len(t.Indexers) == 0 {
 		return t.Name
 	}
@@ -246,10 +296,10 @@ func (t *Object) String() string {
 		if f.Optional {
 			q = "?"
 		}
-		parts = append(parts, fmt.Sprintf("%s%s: %s", n, q, f.Type.String()))
+		parts = append(parts, fmt.Sprintf("%s%s: %s", n, q, typeString(f.Type, seen)))
 	}
 	for _, ix := range t.Indexers {
-		parts = append(parts, fmt.Sprintf("[%s]: %s", ix.Key.String(), ix.Value.String()))
+		parts = append(parts, fmt.Sprintf("[%s]: %s", typeString(ix.Key, seen), typeString(ix.Value, seen)))
 	}
 	if t.Name != "" {
 		return t.Name + "{ " + strings.Join(parts, ", ") + " }"
@@ -273,9 +323,10 @@ type GenericParam struct {
 }
 
 func (t *GenericParam) Kind() Kind { return KGenericParam }
-func (t *GenericParam) String() string {
+func (t *GenericParam) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *GenericParam) stringSeen(seen map[Type]bool) string {
 	if t.Constraint != nil {
-		return t.Name + " extends " + t.Constraint.String()
+		return t.Name + " extends " + typeString(t.Constraint, seen)
 	}
 	return t.Name
 }
@@ -287,13 +338,14 @@ type Ref struct {
 }
 
 func (t *Ref) Kind() Kind { return KRef }
-func (t *Ref) String() string {
+func (t *Ref) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Ref) stringSeen(seen map[Type]bool) string {
 	if len(t.Args) == 0 {
 		return t.Name
 	}
 	ps := make([]string, len(t.Args))
 	for i, a := range t.Args {
-		ps[i] = a.String()
+		ps[i] = typeString(a, seen)
 	}
 	return t.Name + "<" + strings.Join(ps, ", ") + ">"
 }
@@ -332,13 +384,14 @@ type Class struct {
 }
 
 func (t *Class) Kind() Kind { return KClass }
-func (t *Class) String() string {
+func (t *Class) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Class) stringSeen(seen map[Type]bool) string {
 	if len(t.Args) == 0 {
 		return t.Name
 	}
 	ps := make([]string, len(t.Args))
 	for i, a := range t.Args {
-		ps[i] = a.String()
+		ps[i] = typeString(a, seen)
 	}
 	return t.Name + "<" + strings.Join(ps, ", ") + ">"
 }
@@ -387,8 +440,9 @@ type Conditional struct {
 }
 
 func (t *Conditional) Kind() Kind { return KConditional }
-func (t *Conditional) String() string {
-	return t.Check.String() + " extends " + t.Extends.String() + " ? " + t.TrueBranch.String() + " : " + t.FalseBranch.String()
+func (t *Conditional) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Conditional) stringSeen(seen map[Type]bool) string {
+	return typeString(t.Check, seen) + " extends " + typeString(t.Extends, seen) + " ? " + typeString(t.TrueBranch, seen) + " : " + typeString(t.FalseBranch, seen)
 }
 
 // ---------- constructors ----------
@@ -1293,15 +1347,21 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		}
 		return &Func{Params: ps, HasVarArg: x.HasVarArg, VarArg: va, Returns: rs, TypeParams: tps}
 	case *Object:
-		nf := map[string]Field{}
+		// Shared (possibly cyclic) objects substitute once; the copy is
+		// filled in place so recursive references terminate.
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
+		out := &Object{Name: x.Name, Fields: map[string]Field{}, Indexers: nil}
+		ctx.memo[key] = out
 		for n, f := range x.Fields {
-			nf[n] = Field{Type: substitute(f.Type, sub, ctx), Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, Owner: f.Owner}
+			out.Fields[n] = Field{Type: substitute(f.Type, sub, ctx), Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, Owner: f.Owner}
 		}
-		var nix []Indexer
 		for _, ix := range x.Indexers {
-			nix = append(nix, Indexer{Key: substitute(ix.Key, sub, ctx), Value: substitute(ix.Value, sub, ctx)})
+			out.Indexers = append(out.Indexers, Indexer{Key: substitute(ix.Key, sub, ctx), Value: substitute(ix.Value, sub, ctx)})
 		}
-		return &Object{Name: x.Name, Fields: nf, Indexers: nix}
+		return out
 	case *Class:
 		// Recursive classes (e.g. `next: Chain<T>`) would diverge under
 		// naive substitution; build the copy once and fill it in place.
@@ -1960,7 +2020,8 @@ type Mapped struct {
 }
 
 func (t *Mapped) Kind() Kind { return KMapped }
-func (t *Mapped) String() string {
+func (t *Mapped) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Mapped) stringSeen(seen map[Type]bool) string {
 	q := ""
 	if t.OptMinus {
 		q = "-?"
@@ -1973,7 +2034,7 @@ func (t *Mapped) String() string {
 	} else if t.Readonly {
 		ro = "readonly "
 	}
-	return "{ " + ro + "[" + t.Param + " in " + t.Constraint.String() + "]" + q + ": " + t.Value.String() + " }"
+	return "{ " + ro + "[" + t.Param + " in " + typeString(t.Constraint, seen) + "]" + q + ": " + typeString(t.Value, seen) + " }"
 }
 
 // IndexedAccess is `T[K]`, evaluated when both sides are concrete.
@@ -1983,8 +2044,9 @@ type IndexedAccess struct {
 }
 
 func (t *IndexedAccess) Kind() Kind { return KIndexedAccess }
-func (t *IndexedAccess) String() string {
-	return t.Obj.String() + "[" + t.Index.String() + "]"
+func (t *IndexedAccess) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *IndexedAccess) stringSeen(seen map[Type]bool) string {
+	return typeString(t.Obj, seen) + "[" + typeString(t.Index, seen) + "]"
 }
 
 // literalKeyName normalizes a literal to an object field name.

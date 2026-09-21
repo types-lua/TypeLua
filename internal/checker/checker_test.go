@@ -506,6 +506,59 @@ end
 `)
 }
 
+func TestRecursiveTypes(t *testing.T) {
+	// Interface self-reference.
+	expectOK(t, `
+interface Node { v: number, next?: Node }
+local n: Node = { v = 1, next = { v = 2 } }
+local h: number = 0
+if n.next ~= nil then
+  h = n.next.v
+end
+`)
+	// Generic alias recursion.
+	expectOK(t, `
+type List<T> = { head: T, tail: List<T> | nil }
+local l: List<number> = { head = 1, tail = { head = 2, tail = nil } }
+local function sum(l: List<number> | nil): number
+  if l == nil then return 0 end
+  return l.head
+end
+`)
+	// Mutual recursion.
+	expectOK(t, `
+interface A { b?: B }
+interface B { a?: A, tag: string }
+local ab: A = {}
+local bb: B = { tag = "x", a = {} }
+local t: string = bb.tag
+`)
+	// Class-typed recursive fields.
+	expectOK(t, `
+class BoxC<T> {
+  v: T,
+  constructor(v: T) self.v = v end,
+}
+interface Node { v: number, box?: BoxC<Node> }
+local n: Node = { v = 1 }
+`)
+	// Direct self-aliases still error.
+	expectErr(t, `type A2 = A2`)
+	expectErr(t, `type U = U | nil`)
+	// Missing members through recursion still error.
+	expectErr(t, `
+interface Node { v: number, next?: Node }
+local n: Node = { v = 1 }
+local s: string = n.nope
+`)
+	// Self-feeding expansions terminate with an error, not a hang.
+	expectErr(t, `
+type Wrap<T> = { w: T }
+type L<T> = { x: L<Wrap<T>> }
+local v: L<number> = nil as any
+`)
+}
+
 func TestNilTolerance(t *testing.T) {
 	// Hand-built broken ASTs (as error recovery may produce) must not crash.
 	broken := []*ast.File{

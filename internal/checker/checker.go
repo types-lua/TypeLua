@@ -71,6 +71,10 @@ type typeEntry struct {
 	resolving    bool
 	cached       types.Type // for non-generic
 	cacheInst    map[string]types.Type
+	// inflight tracks in-progress builds per instantiation key for
+	// recursive declarations: a cycle re-entry shares a shell object
+	// (nil = building, non-nil = shell handed out), filled on completion.
+	inflight map[string]*types.Object
 }
 
 // TypeEntry is the exported alias of typeEntry for language servers:
@@ -144,6 +148,12 @@ type Checker struct {
 	// Inferred returns for unannotated functions (collect).
 	inferStack [][]types.Type
 	loopDepth  int
+	// Instantiation depth for generic alias/interface builds. Self-feeding
+	// expansions (`L<L<T>>`, `L<Wrap<T>>`) grow the key forever, so cap it.
+	// (Non-generic builds terminate via inflight shells.)
+	typeDepth int
+	// depthReported suppresses repeat overflow errors per entry.
+	depthReported map[*typeEntry]bool
 	// Enclosing classes for self/super/visibility.
 	classStack []*classCtx
 	// >0 while resolving an extends clause (where `infer` may appear).
@@ -1671,6 +1681,9 @@ func (c *Checker) resolveTypeEntry(e *typeEntry, sub map[string]types.Type) type
 	return c.resolveTypeEntryWithArgs(e, nil, token.Span{})
 }
 
+// maxTypeDepth caps generic instantiation nesting (see typeDepth).
+const maxTypeDepth = 64
+
 func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useSpan token.Span) types.Type {
 	// Enum: no params.
 	if e.enumDecl != nil {
@@ -1709,6 +1722,19 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 	// Build substitution for generic params.
 	sub := map[string]types.Type{}
 	if len(e.params) > 0 {
+		c.typeDepth++
+		if c.typeDepth > maxTypeDepth {
+			c.typeDepth--
+			if !c.depthReported[e] {
+				if c.depthReported == nil {
+					c.depthReported = map[*typeEntry]bool{}
+				}
+				c.depthReported[e] = true
+				c.errorf("TL3106", useSpan, "type instantiation too deep (possible infinite expansion of '%s')", e.name)
+			}
+			return types.Any
+		}
+		defer func() { c.typeDepth-- }()
 		if len(args) > len(e.params) {
 			c.errorf("TL3107", useSpan, "type '%s' expects %d argument(s), got %d", e.name, len(e.params), len(args))
 		}
@@ -1738,10 +1764,17 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 		if cached, ok := e.cacheInst[key]; ok {
 			return cached
 		}
-		if e.resolving {
-			// Recursive generic: return any to break cycle (error reported at alias level if direct).
-			return types.Any
+		if _, busy := e.inflight[key]; busy {
+			// Recursive reference: share an in-progress shell, filled
+			// when the outer build completes (mutual recursion included).
+			sh := &types.Object{Name: e.name, Fields: map[string]types.Field{}}
+			e.inflight[key] = sh
+			return sh
 		}
+		if e.inflight == nil {
+			e.inflight = map[string]*types.Object{}
+		}
+		e.inflight[key] = nil
 		e.resolving = true
 		var res types.Type
 		if e.alias != nil {
@@ -1752,6 +1785,7 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 			res = types.Any
 		}
 		e.resolving = false
+		res = c.fillShell(e, key, res, useSpan)
 		e.cacheInst[key] = res
 		return res
 	}
@@ -1759,10 +1793,15 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 	if e.cached != nil {
 		return e.cached
 	}
-	if e.resolving {
-		c.errorf("TL3106", useSpan, "cyclic type alias '%s'", e.name)
-		return types.Any
+	if _, busy := e.inflight[""]; busy {
+		sh := &types.Object{Name: e.name, Fields: map[string]types.Field{}}
+		e.inflight[""] = sh
+		return sh
 	}
+	if e.inflight == nil {
+		e.inflight = map[string]*types.Object{}
+	}
+	e.inflight[""] = nil
 	e.resolving = true
 	var res types.Type
 	if e.alias != nil {
@@ -1773,8 +1812,35 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 		res = types.Any
 	}
 	e.resolving = false
+	res = c.fillShell(e, "", res, useSpan)
 	e.cached = res
 	return res
+}
+
+// fillShell completes a recursive build: if a cycle created a shell for key
+// during the build, the finished object is copied into it (preserving the
+// shared pointer) and the shell is returned. Direct self-aliases
+// (`type A = A`) and non-object results keep the TL3106 error.
+func (c *Checker) fillShell(e *typeEntry, key string, res types.Type, useSpan token.Span) types.Type {
+	sh, ok := e.inflight[key]
+	delete(e.inflight, key)
+	if !ok || sh == nil {
+		return res
+	}
+	if res == types.Type(sh) {
+		c.errorf("TL3106", useSpan, "cyclic type alias '%s'", e.name)
+		return res
+	}
+	robj, ok := res.(*types.Object)
+	if !ok {
+		c.errorf("TL3106", useSpan, "cyclic type alias '%s'", e.name)
+		return res
+	}
+	for k, v := range robj.Fields {
+		sh.Fields[k] = v
+	}
+	sh.Indexers = robj.Indexers
+	return sh
 }
 
 func typesKey(args []types.Type) string {
