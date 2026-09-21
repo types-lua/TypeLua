@@ -1175,7 +1175,7 @@ local z = p["x"]
 	// Rename of structural members is refused (aliases untracked).
 	h.send("textDocument/rename", 152, map[string]any{
 		"textDocument": doc, "position": map[string]any{"line": 1, "character": 13},
-		"newName":      "w",
+		"newName": "w",
 	})
 	h.send("shutdown", 153, nil)
 	h.send("exit", nil, nil)
