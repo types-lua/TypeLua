@@ -73,6 +73,10 @@ type typeEntry struct {
 	cacheInst    map[string]types.Type
 }
 
+// TypeEntry is the exported alias of typeEntry for language servers:
+// occurrences compare by pointer without needing construction.
+type TypeEntry = typeEntry
+
 // classBuild is the checked definition form of a class (generic placeholders
 // intact so call-site inference keeps working).
 type classBuild struct {
@@ -155,7 +159,19 @@ type SymUse struct {
 	Root  *Symbol
 	IsDef bool
 	// Entry is set for type-name references (aliases, interfaces...).
-	Entry *typeEntry
+	Entry *TypeEntry
+	// Member is set for member references (class/interface/enum members).
+	Member *MemberRef
+}
+
+// MemberRef identifies one member occurrence of a nominal owner
+// (class, interface, or enum). Owner compares by pointer within one
+// index run; rename-safe since renaming never replaces the entry.
+type MemberRef struct {
+	Owner     *TypeEntry
+	OwnerName string // e.g. "Dog"
+	Name      string // member name
+	Kind      string // "method", "field", or "member" (kind is "" at use sites)
 }
 
 // ScopeSpan pairs a live scope with the block span that owns it.
@@ -198,6 +214,72 @@ func (c *Checker) recordTypeUse(span token.Span, e *typeEntry) {
 		return
 	}
 	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, Entry: e})
+}
+
+// recordDefEntry records a value definition that twins a type declaration
+// (class/enum names), so rename can cover both namespaces at once.
+func (c *Checker) recordDefEntry(span token.Span, s *Symbol, e *typeEntry) {
+	if c.Index == nil || s == nil {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, Sym: s, Root: symRoot(s), IsDef: true, Entry: e})
+}
+
+// recordMemberDef records a member definition of a nominal owner.
+func (c *Checker) recordMemberDef(span token.Span, e *typeEntry, name, kind string) {
+	if c.Index == nil || e == nil {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, IsDef: true,
+		Member: &MemberRef{Owner: e, OwnerName: e.name, Name: name, Kind: kind}})
+}
+
+// recordMemberUse records a member access on a resolved owner type.
+// Unknown owners (structural objects, maps, any) are skipped.
+func (c *Checker) recordMemberUse(span token.Span, objT types.Type, name string) {
+	if c.Index == nil {
+		return
+	}
+	// `new` on a class value is synthetic constructor sugar (no source
+	// definition) unless the class actually declares a static `new`.
+	if name == "new" {
+		if cv, ok := objT.(*types.ClassValue); ok {
+			if _, has := cv.Statics["new"]; !has {
+				return
+			}
+		}
+	}
+	e := c.ownerEntry(objT)
+	if e == nil {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span,
+		Member: &MemberRef{Owner: e, OwnerName: e.name, Name: name}})
+}
+
+// ownerEntry resolves a value type back to its nominal type declaration,
+// if any (class instance/value, named object such as an interface or enum
+// table, enum). Scope-aware: the name resolves at the use site.
+func (c *Checker) ownerEntry(t types.Type) *typeEntry {
+	var name string
+	switch x := t.(type) {
+	case *types.Class:
+		name = x.Name
+	case *types.ClassValue:
+		if x.Class != nil {
+			name = x.Class.Name
+		}
+	case *types.Object:
+		name = x.Name
+	case *types.Enum:
+		name = x.Name
+	default:
+		return nil
+	}
+	if name == "" {
+		return nil
+	}
+	return c.cur().lookupType(name)
 }
 
 func (c *Checker) recordScope(sc *Scope, span token.Span) {
@@ -312,6 +394,14 @@ func (c *Checker) defineBuiltins(sc *Scope) {
 
 // ---------- blocks ----------
 
+// recordTypeDef records a type declaration name.
+func (c *Checker) recordTypeDef(span token.Span, e *typeEntry) {
+	if c.Index == nil || e == nil {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, IsDef: true, Entry: e})
+}
+
 func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 	if b == nil {
 		return
@@ -320,25 +410,33 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 		switch n := st.(type) {
 		case *ast.TypeAliasDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, alias: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				e := &typeEntry{name: n.Name.Name, params: n.Generics, alias: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				sc.types[n.Name.Name] = e
+				c.recordTypeDef(n.Name.Span(), e)
 			} else {
 				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		case *ast.InterfaceDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, iface: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				e := &typeEntry{name: n.Name.Name, params: n.Generics, iface: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				sc.types[n.Name.Name] = e
+				c.recordTypeDef(n.Name.Span(), e)
 			} else {
 				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		case *ast.EnumDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, enumDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				e := &typeEntry{name: n.Name.Name, enumDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				sc.types[n.Name.Name] = e
+				c.recordTypeDef(n.Name.Span(), e)
 			} else {
 				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		case *ast.ClassDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				sc.types[n.Name.Name] = &typeEntry{name: n.Name.Name, params: n.Generics, classDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				e := &typeEntry{name: n.Name.Name, params: n.Generics, classDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				sc.types[n.Name.Name] = e
+				c.recordTypeDef(n.Name.Span(), e)
 			} else {
 				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
@@ -645,6 +743,7 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 				if sym.IsConst {
 					c.errorf("TL3015", t.Span(), "cannot assign to const variable '%s'", t.Name)
 				}
+				c.recordUse(t.Span(), sym)
 				want = sym.Type
 			}
 		case *ast.FieldExpr:
@@ -659,6 +758,7 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 				if !c.checkAccess(f.Access, f.Owner, t.Span(), "field '"+t.Field.Name+"'") {
 					want = types.Any
 				} else {
+					c.recordMemberUse(t.Field.Span(), ot, t.Field.Name)
 					if f.Readonly {
 						readonly = true
 					}
@@ -862,6 +962,16 @@ func (c *Checker) checkInterface(n *ast.InterfaceDecl) {
 	if e == nil {
 		return
 	}
+	for _, m := range n.Fields {
+		if m.Name == nil {
+			continue
+		}
+		kind := "field"
+		if _, ok := m.Type.(*ast.FuncType); ok {
+			kind = "method"
+		}
+		c.recordMemberDef(m.Name.Span(), e, m.Name.Name, kind)
+	}
 	_ = c.resolveTypeEntry(e, nil)
 }
 
@@ -878,7 +988,13 @@ func (c *Checker) checkEnum(n *ast.EnumDecl) {
 			fields[name] = types.Field{Type: m}
 		}
 		obj := &types.Object{Name: n.Name.Name, Fields: fields}
-		c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: obj, Span: n.Span()}))
+		c.recordDefEntry(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: obj, Span: n.Span()}), e)
+		for _, m := range n.Members {
+			if m.Name == nil {
+				continue
+			}
+			c.recordMemberDef(m.Name.Span(), e, m.Name.Name, "member")
+		}
 	}
 }
 
@@ -1725,6 +1841,7 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 			if id, ok := fe.Obj.(*ast.Ident); ok {
 				if s := c.cur().lookupVar(id.Name); s != nil {
 					if cv, ok := s.Type.(*types.ClassValue); ok {
+						c.recordUse(id.Span(), s)
 						return c.checkClassInstantiate(cv, n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 					}
 				}
@@ -1742,6 +1859,7 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 		if id, ok := n.Obj.(*ast.Ident); ok && n.Method.Name == "new" {
 			if s := c.cur().lookupVar(id.Name); s != nil {
 				if cv, ok := s.Type.(*types.ClassValue); ok {
+					c.recordUse(id.Span(), s)
 					return c.checkClassInstantiate(cv, n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 				}
 			}
@@ -1750,6 +1868,9 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 		mf := c.lookupMethodField(ot, n.Method.Name, n.Span())
 		if !c.checkAccess(mf.Access, mf.Owner, n.Span(), "method '"+n.Method.Name+"'") {
 			return []types.Type{types.Any}
+		}
+		if _, ok := lookupField(ot, n.Method.Name); ok {
+			c.recordMemberUse(n.Method.Span(), ot, n.Method.Name)
 		}
 		return c.checkCall(n.Span(), mf.Type, n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 	case *ast.VarArg:
@@ -1839,6 +1960,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 			if !c.checkAccess(f.Access, f.Owner, n.Span(), "field '"+n.Field.Name+"'") {
 				return types.Any
 			}
+			c.recordMemberUse(n.Field.Span(), ot, n.Field.Name)
 			if f.Optional {
 				return types.NewUnion([]types.Type{f.Type, types.Nil})
 			}
@@ -3519,13 +3641,23 @@ func (c *Checker) checkClass(n *ast.ClassDecl) {
 	}
 	def := c.ensureClassDef(e)
 	if def == nil {
-		c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: types.Any, Span: n.Span()}))
+		c.recordDefEntry(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: types.Any, Span: n.Span()}), e)
 		return
 	}
 	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
 		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
 	}
-	c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: def.val, Span: n.Span()}))
+	c.recordDefEntry(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: def.val, Span: n.Span()}), e)
+	for _, m := range n.Members {
+		if m.Name == nil || m.Kind == ast.ClassConstructor {
+			continue
+		}
+		kind := "field"
+		if m.Kind == ast.ClassMethod {
+			kind = "method"
+		}
+		c.recordMemberDef(m.Name.Span(), e, m.Name.Name, kind)
+	}
 	if !n.Declared {
 		c.checkClassBodies(e, n, def)
 	}
@@ -4328,12 +4460,17 @@ func (s *Scope) ScopeVars() []ScopeVar {
 
 // HasType reports whether a type name is visible from this scope.
 func (s *Scope) HasType(name string) bool {
+	return s.LookupTypeEntry(name) != nil
+}
+
+// LookupTypeEntry returns the visible type declaration for name, if any.
+func (s *Scope) LookupTypeEntry(name string) *TypeEntry {
 	for sc := s; sc != nil; sc = sc.parent {
-		if _, ok := sc.types[name]; ok {
-			return true
+		if e, ok := sc.types[name]; ok {
+			return e
 		}
 	}
-	return false
+	return nil
 }
 
 // ScopeTypeInfo is one visible type declaration.

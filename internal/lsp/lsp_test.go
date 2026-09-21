@@ -276,6 +276,246 @@ func TestHoverDefinitionReferencesRename(t *testing.T) {
 	}
 }
 
+const memberURI = "file:///test/members.tl"
+const memberSrc = `type Alias = { x: number }
+interface Shape {
+  name: string,
+}
+enum Color { Red = "red", Blue = "blue" }
+class Dog {
+  name: string,
+  constructor(name: string) self.name = name end,
+  greet(): string return self.name end,
+}
+local a: Alias = { x = 1 }
+local s: Shape = { name = "c" }
+local sn = s.name
+local c: Color = Color.Red
+local d = Dog.new("rex")
+local n = d.name
+local g = d:greet()
+`
+
+func openMembers(h *harness) {
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("initialized", nil, map[string]any{})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": memberURI, "version": 1, "text": memberSrc,
+	}})
+}
+
+func TestTypeRename(t *testing.T) {
+	h := newHarness("test")
+	openMembers(h)
+	doc := map[string]any{"uri": memberURI}
+	// Rename Alias at its declaration: decl + one annotation use.
+	h.send("textDocument/rename", 70, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 0, "character": 7},
+		"newName": "Rec",
+	})
+	// Rename Dog from a value use: declaration + constructor call.
+	h.send("textDocument/rename", 71, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 14, "character": 11},
+		"newName": "Cat",
+	})
+	// Rename Color: declaration + annotation + value base (not the member).
+	h.send("textDocument/rename", 72, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 4, "character": 6},
+		"newName": "Hue",
+	})
+	h.send("shutdown", 73, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+	checkEdits := func(id string, wantLines []int) {
+		t.Helper()
+		m := findMsg(msgs, id)
+		if m == nil || m.Error != nil {
+			t.Fatalf("rename %s failed: %+v", id, m)
+		}
+		var edit struct {
+			Changes map[string][]struct {
+				NewText string `json:"newText"`
+				Range   struct {
+					Start struct {
+						Line int `json:"line"`
+					} `json:"start"`
+				} `json:"range"`
+			} `json:"changes"`
+		}
+		if err := json.Unmarshal(m.Result, &edit); err != nil {
+			t.Fatal(err)
+		}
+		got := edit.Changes[memberURI]
+		if len(got) != len(wantLines) {
+			t.Fatalf("rename %s: want %d edits, got %d (%+v)", id, len(wantLines), len(got), got)
+		}
+		for i, e := range got {
+			if e.Range.Start.Line != wantLines[i] {
+				t.Fatalf("rename %s edit %d: want line %d, got %+v", id, i, wantLines[i], e.Range.Start)
+			}
+		}
+	}
+	checkEdits("70", []int{0, 10})
+	checkEdits("71", []int{5, 14})
+	checkEdits("72", []int{4, 13, 13})
+}
+
+func TestMemberRenameReferences(t *testing.T) {
+	h := newHarness("test")
+	openMembers(h)
+	doc := map[string]any{"uri": memberURI}
+	// `name` field: def (6) + self uses (7, 8) + dot uses (12, 15).
+	// (`s.name` belongs to Shape and stays out.)
+	h.send("textDocument/references", 80, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 15, "character": 13},
+		"context": map[string]any{"includeDeclaration": true},
+	})
+	// Rename greet method: def (8) + call (16).
+	h.send("textDocument/rename", 81, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 16, "character": 15},
+		"newName": "bark",
+	})
+	// Rename enum member Red: def (4) + use (13).
+	h.send("textDocument/rename", 82, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 13, "character": 24},
+		"newName": "Crimson",
+	})
+	// Definition of the field use jumps to the class body.
+	h.send("textDocument/definition", 83, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 15, "character": 13},
+	})
+	// Hover on the method call names the owner.
+	h.send("textDocument/hover", 84, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 16, "character": 15},
+	})
+	h.send("shutdown", 85, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+
+	refs := findMsg(msgs, "80")
+	if refs == nil {
+		t.Fatalf("no references response")
+	}
+	var rlocs []struct {
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(refs.Result, &rlocs); err != nil {
+		t.Fatal(err)
+	}
+	if len(rlocs) != 4 {
+		t.Fatalf("bad member references: %+v", rlocs)
+	}
+	for i, want := range []int{6, 7, 8, 15} {
+		if rlocs[i].Range.Start.Line != want {
+			t.Fatalf("bad member references: %+v", rlocs)
+		}
+	}
+
+	m := findMsg(msgs, "81")
+	if m == nil || m.Error != nil {
+		t.Fatalf("method rename failed: %+v", m)
+	}
+	var edit struct {
+		Changes map[string][]struct {
+			Range struct {
+				Start struct {
+					Line int `json:"line"`
+				} `json:"start"`
+			} `json:"range"`
+		} `json:"changes"`
+	}
+	if err := json.Unmarshal(m.Result, &edit); err != nil {
+		t.Fatal(err)
+	}
+	got := edit.Changes[memberURI]
+	if len(got) != 2 || got[0].Range.Start.Line != 8 || got[1].Range.Start.Line != 16 {
+		t.Fatalf("bad method rename: %+v", got)
+	}
+
+	m82 := findMsg(msgs, "82")
+	if m82 == nil || m82.Error != nil {
+		t.Fatalf("enum member rename failed: %+v", m82)
+	}
+	var edit82 struct {
+		Changes map[string][]struct {
+			Range struct {
+				Start struct {
+					Line int `json:"line"`
+				} `json:"start"`
+			} `json:"range"`
+		} `json:"changes"`
+	}
+	if err := json.Unmarshal(m82.Result, &edit82); err != nil {
+		t.Fatal(err)
+	}
+	got82 := edit82.Changes[memberURI]
+	if len(got82) != 2 || got82[0].Range.Start.Line != 4 || got82[1].Range.Start.Line != 13 {
+		t.Fatalf("bad enum member rename: %+v", got82)
+	}
+
+	def := findMsg(msgs, "83")
+	if def == nil {
+		t.Fatalf("no definition response")
+	}
+	var dlocs []struct {
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(def.Result, &dlocs); err != nil {
+		t.Fatal(err)
+	}
+	if len(dlocs) != 1 || dlocs[0].Range.Start.Line != 6 {
+		t.Fatalf("member definition should jump to line 6: %+v", dlocs)
+	}
+
+	hv := findMsg(msgs, "84")
+	if hv == nil {
+		t.Fatalf("no hover response")
+	}
+	var hvr struct {
+		Contents struct {
+			Value string `json:"value"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(hv.Result, &hvr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(hvr.Contents.Value, "Dog.greet") {
+		t.Fatalf("bad member hover: %q", hvr.Contents.Value)
+	}
+}
+
+func TestRenameTypeConflict(t *testing.T) {
+	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": memberURI, "version": 1,
+		"text": "type Foo = number\nlocal Foo = 1\nlocal y: Foo = Foo\n",
+	}})
+	// The value use is shadowed by an unrelated type: refuse half renames.
+	h.send("textDocument/rename", 90, map[string]any{
+		"textDocument": map[string]any{"uri": memberURI},
+		"position":     map[string]any{"line": 2, "character": 16},
+		"newName":      "Bar",
+	})
+	h.send("shutdown", 91, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	m := findMsg(h.readAll(), "90")
+	if m == nil || m.Error == nil {
+		t.Fatalf("expected conflict error, got %+v", m)
+	}
+}
+
 func TestRenameRejected(t *testing.T) {
 	h := newHarness("test")
 	openSample(h)
