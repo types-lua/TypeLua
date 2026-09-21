@@ -494,8 +494,97 @@ func TestMemberRenameReferences(t *testing.T) {
 	}
 }
 
-func TestRenameTypeConflict(t *testing.T) {
+const indexURI = "file:///test/indexkeys.tl"
+const indexSrc = `interface Box {
+  label: string,
+  get(): number,
+}
+local b: Box = { label = "x", get = function(): number return 1 end }
+local l1 = b["label"]
+b["label"] = "y"
+local g2 = b.get()
+`
+
+func TestStringIndexAndImplKeys(t *testing.T) {
 	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": indexURI, "version": 1, "text": indexSrc,
+	}})
+	doc := map[string]any{"uri": indexURI}
+	// `label`: def (1) + impl key (4) + string-index read (5) + write (6).
+	h.send("textDocument/references", 95, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 5, "character": 16},
+		"context": map[string]any{"includeDeclaration": true},
+	})
+	// Rename `get`: def (2) + impl key (4) + call (7).
+	h.send("textDocument/rename", 96, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 7, "character": 13},
+		"newName": "fetch",
+	})
+	h.send("shutdown", 97, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+
+	refs := findMsg(msgs, "95")
+	if refs == nil {
+		t.Fatalf("no references response")
+	}
+	var rlocs []struct {
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+				Char int `json:"character"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(refs.Result, &rlocs); err != nil {
+		t.Fatal(err)
+	}
+	var gotLines []int
+	for _, l := range rlocs {
+		gotLines = append(gotLines, l.Range.Start.Line)
+	}
+	wantLines := []int{1, 4, 5, 6}
+	if len(gotLines) != len(wantLines) {
+		t.Fatalf("bad string-index references: %+v", gotLines)
+	}
+	for i := range wantLines {
+		if gotLines[i] != wantLines[i] {
+			t.Fatalf("bad string-index references: %+v", gotLines)
+		}
+	}
+
+	m := findMsg(msgs, "96")
+	if m == nil || m.Error != nil {
+		t.Fatalf("impl-key rename failed: %+v", m)
+	}
+	var edit struct {
+		Changes map[string][]struct {
+			NewText string `json:"newText"`
+			Range   struct {
+				Start struct {
+					Line int `json:"line"`
+				} `json:"start"`
+			} `json:"range"`
+		} `json:"changes"`
+	}
+	if err := json.Unmarshal(m.Result, &edit); err != nil {
+		t.Fatal(err)
+	}
+	got := edit.Changes[indexURI]
+	if len(got) != 3 {
+		t.Fatalf("bad impl-key rename: %+v", got)
+	}
+	for i, want := range []int{2, 4, 7} {
+		if got[i].Range.Start.Line != want || got[i].NewText != "fetch" {
+			t.Fatalf("bad impl-key rename: %+v", got)
+		}
+	}
+}
+
+func TestRenameTypeConflict(t *testing.T) {	h := newHarness("test")
 	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
 	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
 		"uri": memberURI, "version": 1,

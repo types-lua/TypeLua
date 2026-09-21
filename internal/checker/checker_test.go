@@ -400,6 +400,64 @@ local v: number = m["k"]
 `)
 }
 
+func TestUnionMemberAccess(t *testing.T) {
+	expectOK(t, `
+type A = { x: number, tag: string }
+type B = { x: number, tag: string, y?: boolean }
+local function f(v: A | B): number
+  return v.x
+end
+local function g(v: A | B): string
+  return v.tag
+end
+`)
+	// Optional folds in from any member (both sides declare it).
+	expectOK(t, `
+type A = { x: number, y: boolean }
+type B = { x: number, y?: boolean }
+local function f(v: A | B): boolean | nil
+  return v.y
+end
+`)
+	// Index distribution over unions.
+	expectOK(t, `
+type Tup = [string, number]
+local function h(t: Tup | string[]): string | number
+  return t[1]
+end
+`)
+	// A member missing on one side fails the whole access.
+	expectErr(t, `
+type A = { x: number }
+type C = { z: number }
+local function f(v: A | C): number
+  return v.x
+end
+`)
+	// nil members fail under strict nil checks (narrow first).
+	expectErr(t, `
+type A = { x: number }
+local function f(v: A | nil): number
+  return v.x
+end
+`)
+	expectOK(t, `
+type A = { x: number }
+local function f(v: A | nil): number
+  if v == nil then return 0 end
+  return v.x
+end
+`)
+	// Methods distribute too.
+	expectOK(t, `
+interface S { name: string }
+interface T { name: string, id: integer }
+local function g(s: S | T): string
+  return s.name
+end
+`)
+}
+
 func TestNilTolerance(t *testing.T) {
 	// Hand-built broken ASTs (as error recovery may produce) must not crash.
 	broken := []*ast.File{

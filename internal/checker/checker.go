@@ -234,26 +234,98 @@ func (c *Checker) recordMemberDef(span token.Span, e *typeEntry, name, kind stri
 		Member: &MemberRef{Owner: e, OwnerName: e.name, Name: name, Kind: kind}})
 }
 
+// lookupNamedField resolves a DECLARED member (no indexer fallback), for
+// member tracking (references/rename) which needs a definition site.
+func lookupNamedField(ot types.Type, name string) (types.Field, bool) {
+	switch x := ot.(type) {
+	case *types.Object:
+		if f, ok := x.Fields[name]; ok {
+			return f, true
+		}
+	case *types.Class:
+		if f, ok := x.Fields[name]; ok {
+			return types.Field{Type: f.Type, Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, Owner: f.Owner}, true
+		}
+	case *types.ClassValue:
+		if f, ok := x.Statics[name]; ok {
+			return types.Field{Type: f.Type, Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, Owner: f.Owner}, true
+		}
+		// Synthetic `new` has no definition; never tracked.
+	case *types.Enum:
+		if m, ok := x.Members[name]; ok {
+			return types.Field{Type: m}, true
+		}
+	}
+	return types.Field{}, false
+}
+
 // recordMemberUse records a member access on a resolved owner type.
-// Unknown owners (structural objects, maps, any) are skipped.
+// Unknown owners (structural objects, maps, any) are skipped, as are
+// indexer-only resolutions (no definition site to unify).
+// Union bases record only on unanimous ownership: every member must
+// declare the field under the SAME entry, otherwise the use stays
+// untracked (access itself still checks via lookupField).
 func (c *Checker) recordMemberUse(span token.Span, objT types.Type, name string) {
 	if c.Index == nil {
 		return
 	}
-	// `new` on a class value is synthetic constructor sugar (no source
-	// definition) unless the class actually declares a static `new`.
-	if name == "new" {
-		if cv, ok := objT.(*types.ClassValue); ok {
-			if _, has := cv.Statics["new"]; !has {
+	if u, ok := objT.(*types.Union); ok {
+		var e *typeEntry
+		for _, m := range u.Types {
+			if _, ok := lookupNamedField(m, name); !ok {
+				return
+			}
+			me := c.ownerEntry(m)
+			if me == nil {
+				return
+			}
+			if e == nil {
+				e = me
+			} else if e != me {
 				return
 			}
 		}
+		if e == nil {
+			return
+		}
+		c.Index.Uses = append(c.Index.Uses, SymUse{Span: span,
+			Member: &MemberRef{Owner: e, OwnerName: e.name, Name: name}})
+		return
+	}
+	if _, ok := lookupNamedField(objT, name); !ok {
+		return
 	}
 	e := c.ownerEntry(objT)
 	if e == nil {
 		return
 	}
 	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span,
+		Member: &MemberRef{Owner: e, OwnerName: e.name, Name: name}})
+}
+
+// recordStringIndex records `obj["field"]` with a quoted literal key as a
+// member occurrence (inner span, quotes preserved for edits), when the
+// owner declares the field. Indexer-only resolutions stay untracked.
+func (c *Checker) recordStringIndex(key ast.Expr, objT types.Type) {
+	if c.Index == nil {
+		return
+	}
+	sl, ok := key.(*ast.StringLit)
+	if !ok {
+		return
+	}
+	name, inner, ok := stringKeyName(sl)
+	if !ok {
+		return
+	}
+	if _, ok := lookupNamedField(objT, name); !ok {
+		return
+	}
+	e := c.ownerEntry(objT)
+	if e == nil {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: inner,
 		Member: &MemberRef{Owner: e, OwnerName: e.name, Name: name}})
 }
 
@@ -592,6 +664,11 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 			// Builtins (print/next/...) may be localized, so exempt them.
 			c.errorf("TL3011", name.Span(), "redefinition of local '%s'", name.Name)
 		}
+		if i < len(n.Values) {
+			if tl, ok := n.Values[i].(*ast.TableLit); ok {
+				c.recordTableKeys(tl, want)
+			}
+		}
 		c.recordDef(name.Span(), c.bindVar(name.Name, &Symbol{Name: name.Name, Kind: symVar, Type: final, Span: name.Span(), IsConst: isConst}))
 	}
 	if len(valTypes) > len(n.Names) && len(n.Names) > 0 {
@@ -774,6 +851,8 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 					c.errorf("TL3016", t.Span(), "cannot index type '%s'", ot.String())
 				}
 				want = types.Any
+			} else {
+				c.recordStringIndex(t.Key, ot)
 			}
 		default:
 			c.errorf("TL3017", tgt.Span(), "invalid assignment target")
@@ -793,6 +872,11 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 		if got != nil && want != nil {
 			if !types.IsAssignable(got, want, c.opt.toTypes()) {
 				c.errorf("TL3010", tgt.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
+			}
+		}
+		if i < len(n.Values) {
+			if tl, ok := n.Values[i].(*ast.TableLit); ok {
+				c.recordTableKeys(tl, want)
 			}
 		}
 		_ = sym
@@ -939,6 +1023,11 @@ func (c *Checker) checkReturn(r *ast.ReturnStmt) {
 		var g types.Type = types.Nil
 		if i < len(vals) {
 			g = vals[i]
+		}
+		if i < len(r.Exprs) {
+			if tl, ok := r.Exprs[i].(*ast.TableLit); ok {
+				c.recordTableKeys(tl, w)
+			}
 		}
 		if !types.IsAssignable(g, w, c.opt.toTypes()) {
 			c.errorf("TL3031", r.Span(), "return type '%s' is not assignable to '%s'", g.String(), w.String())
@@ -1947,6 +2036,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 		ot := c.checkExpr(n.Obj)
 		kt := c.checkExpr(n.Key)
 		if r := indexResult(ot, kt); r != nil {
+			c.recordStringIndex(n.Key, ot)
 			return r
 		}
 		if isAnyLike(ot) {
@@ -2071,8 +2161,34 @@ func literalKey(e ast.Expr) *string {
 	return nil
 }
 
-func parseStringLiteral(lit string) (string, error) {
-	if len(lit) >= 2 && (lit[0] == '"' || lit[0] == '\'') {
+// stringKeyName splits a quoted `"name"` literal into its member name and
+// inner span (quotes excluded, so rename edits preserve them).
+// Long strings and non-literals report false.
+func stringKeyName(sl *ast.StringLit) (string, token.Span, bool) {
+	if sl == nil {
+		return "", token.Span{}, false
+	}
+	lit := sl.Literal
+	if len(lit) < 2 {
+		return "", token.Span{}, false
+	}
+	q := lit[0]
+	if (q != '"' && q != '\'') || lit[len(lit)-1] != q {
+		return "", token.Span{}, false
+	}
+	name, _ := parseStringLiteral(lit)
+	inner := sl.Span()
+	inner.Start.Offset++
+	inner.Start.Column++
+	inner.End.Offset--
+	inner.End.Column--
+	if inner.End.Offset <= inner.Start.Offset {
+		return "", token.Span{}, false
+	}
+	return name, inner, true
+}
+
+func parseStringLiteral(lit string) (string, error) {	if len(lit) >= 2 && (lit[0] == '"' || lit[0] == '\'') {
 		// Use strconv-ish unquoting for simple cases; Lua escapes differ, so best-effort.
 		inner := lit[1 : len(lit)-1]
 		return inner, nil
@@ -2084,6 +2200,56 @@ func parseStringLiteral(lit string) (string, error) {
 		return lit, nil
 	}
 	return lit, nil
+}
+
+// recordTableKeys records named keys of a table literal checked against a
+// nominal object type (interface implementations), recursing into nested
+// literals with the member's declared type.
+func (c *Checker) recordTableKeys(lit *ast.TableLit, want types.Type) {
+	if c.Index == nil || lit == nil {
+		return
+	}
+	obj, ok := want.(*types.Object)
+	if !ok || obj.Name == "" {
+		return
+	}
+	e := c.cur().lookupType(obj.Name)
+	if e == nil {
+		return
+	}
+	for _, f := range lit.Fields {
+		var name string
+		var sp token.Span
+		var val ast.Expr
+		switch f.Kind {
+		case ast.NamedField:
+			if f.Key == nil {
+				continue
+			}
+			name, sp, val = f.Key.Name, f.Key.Span(), f.Val
+		case ast.IndexedField:
+			sl, ok := f.KeyX.(*ast.StringLit)
+			if !ok {
+				continue
+			}
+			nm, inner, ok := stringKeyName(sl)
+			if !ok {
+				continue
+			}
+			name, sp, val = nm, inner, f.Val
+		default:
+			continue
+		}
+		mf, ok := lookupNamedField(obj, name)
+		if !ok {
+			continue
+		}
+		c.Index.Uses = append(c.Index.Uses, SymUse{Span: sp,
+			Member: &MemberRef{Owner: e, OwnerName: e.name, Name: name}})
+		if sub, ok := val.(*ast.TableLit); ok {
+			c.recordTableKeys(sub, mf.Type)
+		}
+	}
 }
 
 func (c *Checker) checkBinOp(n *ast.BinOpExpr) types.Type {
@@ -2970,6 +3136,33 @@ func isLengthable(t types.Type) bool {
 
 func lookupField(ot types.Type, name string) (types.Field, bool) {
 	switch x := ot.(type) {
+	case *types.Union:
+		// Distribute: every member must declare the field (nil and
+		// field-less members fail the whole access, like TS).
+		var ts []types.Type
+		opt, ro := false, false
+		acc := types.Public
+		var owner *types.ClassDef
+		for _, m := range x.Types {
+			f, ok := lookupField(m, name)
+			if !ok {
+				return types.Field{}, false
+			}
+			ts = append(ts, f.Type)
+			if f.Optional {
+				opt = true
+			}
+			if f.Readonly {
+				ro = true
+			}
+			if f.Access == types.Private || (f.Access == types.Protected && acc == types.Public) {
+				acc = f.Access
+				owner = f.Owner
+			} else if owner == nil {
+				owner = f.Owner
+			}
+		}
+		return types.Field{Type: types.NewUnion(ts), Optional: opt, Readonly: ro, Access: acc, Owner: owner}, true
 	case *types.Object:
 		if f, ok := x.Fields[name]; ok {
 			return f, true
@@ -3059,6 +3252,16 @@ func indexResult(ot, kt types.Type) types.Type {
 		return types.Any
 	}
 	switch x := ot.(type) {
+	case *types.Union:
+		var rs []types.Type
+		for _, m := range x.Types {
+			r := indexResult(m, kt)
+			if r == nil {
+				return nil
+			}
+			rs = append(rs, r)
+		}
+		return types.NewUnion(rs)
 	case *types.Array:
 		if isIntegerLike(kt) || isNumberLike(kt) {
 			return x.Elem
