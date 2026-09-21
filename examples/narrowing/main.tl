@@ -64,3 +64,12 @@ local function head(n: { v: number, next?: { v: number } }): number
   return n.next.v
 end
 print(head({ v = 1 }))
+
+-- Truthiness narrowing (only nil/false are falsy).
+local function greet(name: string | nil): string
+  if name then
+    return name
+  end
+  return "stranger"
+end
+print(greet(nil), greet("ada"))

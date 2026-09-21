@@ -44,3 +44,19 @@ local calc: Calculator = {
     mul = function(a: number, b: number) return a * b end,
 }
 print(calc.add(2, 3), calc.mul(2, 3))
+
+-- Recursive interfaces and union member access.
+interface Node { v: number, next?: Node }
+local function head(n: Node): number
+  if n.next then
+    return n.next.v
+  end
+  return n.v
+end
+type Pair = { x: number, tag: string }
+type Triple = { x: number, tag: string, y?: boolean }
+local function getX(p: Pair | Triple): number
+  return p.x
+end
+print(head({ v = 1, next = { v = 2 } }))
+print(getX({ x = 3, tag = "t" }))

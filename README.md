@@ -18,10 +18,10 @@ go build -o tlua ./cmd/tlua
 | `basic` | 端到端入门：类型/接口/枚举/泛型/窄化 |
 | `types` | 基元/字面量/联合/交叉/数组/map/元组/函数类型/`typeof`/`keyof` |
 | `generics` | 泛型函数/别名/约束/默认值/嵌套`>>` |
-| `interfaces` | 结构化、`extends`、可选/只读、方法简写 |
+| `interfaces` | 结构化、`extends`、可选/只读、方法简写、递归接口、联合体访问 |
 | `enums` | 字符串/数字自增枚举、穷举分支 |
 | `functions` | 多返回值、变参、闭包、方法定义/调用 |
-| `narrowing` | `nil`/`type()`/提前返回/`not`/`as`/`!`/成员路径 |
+| `narrowing` | `nil`/`type()`/真值/提前返回/`not`/`as`/`!`/成员路径 |
 | `modules` | `return M` + `require as T` 边界注解 |
 | `oop` | 无`class`：接口+元表（`__index`/`setmetatable`） |
 | `stdlib` | `table/string/math/io/os`（动态垫片+自建类型边界） |
