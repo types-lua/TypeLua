@@ -29,3 +29,17 @@ if f ~= nil then
     fh:close()
 end
 print(os.time(), os.date("%Y-%m-%d"))
+
+-- Coroutines are precisely typed (unlike the any-typed shims above).
+local co = coroutine.create(function()
+  coroutine.yield("step")
+end)
+local ok, v = coroutine.resume(co)
+local st = coroutine.status(co)
+if st == "dead" then
+  print("done")
+else
+  print("live")
+end
+local w = coroutine.wrap(function(a: number) return a * 2 end)
+print(ok, v, w(21))

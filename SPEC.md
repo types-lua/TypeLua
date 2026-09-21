@@ -112,6 +112,7 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 
 - `if x == nil / x ~= nil`（含提前 `return` 后的流分析）。
 - `if type(x) == "string" | "number" | ...`。
+- `if x == "lit" / x ~= "lit"`（字符串字面量并集取成员/构造，`any` 不动）。
 - `not`、`and`（真分支）、`or`（假分支）组合（`and` 同根多成员顺序合成）。
 - 真值窄化：`if x then` 去 `nil`/`false`（`boolean` 收敛为字面量），`else` 侧留 `nil`/`false`；`any` 不动。
 - 以上对成员路径同样成立：`if node.next then return node.next.v end` 无需先存入局部变量（对象/类实例逐层求精）。
@@ -219,3 +220,18 @@ end
 - `errdefer` 只在**同一函数体内显式 `error(...)`** 处触发（语句与 `return error(...)` 位；改写为先跑后抛，位置信息不变）。`assert` 失败、被调函数抛上来的错误、`pcall` 捕获均不触发。
 - 限制：`error()` 的 `pcall` 式错误传播不触发任何 defer（这点不如 Go；要全出口清理请用 `<close>` 局部量——真 Lua 语义）；`...` 不可直接进 deferred 调用（`TL3235`，先拷入局部）；`error` 被局部遮蔽时不改写。
 - 生成代码使用 `__tl_` 前缀（保留，勿作用户标识符）。
+
+## 13. 协程（单线程协作）
+
+```lua
+local co = coroutine.create(function() coroutine.yield("step") end)
+local ok, v = coroutine.resume(co)          -- (boolean, any)
+local st = coroutine.status(co)             -- "running" | "suspended" | "normal" | "dead"
+if st == "dead" then print("done") end      -- 字面量相等参与窄化
+```
+
+- `create(f)` 要求函数（否则 `TL3233`），返回 `thread`；`resume(co, ...)` 首值为 `boolean`（余值 `any`，第 3 位起读 `nil`，与 `pcall` 同类截断）；`yield(...)` 返回 `any`；`wrap(f)` 返回同形函数。
+- `running()` 返回 `(thread, boolean | nil)`（`nil` 即 5.1 无 ismain）。
+- `close`/`isyieldable` 仅 5.4：`--target 5.1` 下不可见（`TL3203`）。
+- `x == "lit"`（`~=` 反之）对变量与成员路径窄化（并集取成员/构造字面量、`any` 不动、引号拼写不敏感）。
+- 限制：`resume`/`yield` 的多值只精确到前两位；`error` 路径与 `pcall` 捕获内的协程状态不跟踪；`coroutine` 表本身悬停显示全量方法。
