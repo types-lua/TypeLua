@@ -988,3 +988,164 @@ func TestDidChangeBatchAndUnicode(t *testing.T) {
 		t.Fatalf("batch edit misapplied, hover: %q", hvr.Contents.Value)
 	}
 }
+
+func TestMemberCompletionPrivate(t *testing.T) {
+	const uri = "file:///test/priv.tl"
+	src := `class Vault {
+  secret: number,
+  private code: number,
+  constructor() self.secret = 1 end,
+  get(): number return self.secret end,
+}
+local v = Vault.new()
+local a = v.secret
+local b = v.code
+`
+	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": uri, "version": 1, "text": src,
+	}})
+	doc := map[string]any{"uri": uri}
+	// Outside the class: public yes, private no.
+	h.send("textDocument/completion", 120, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 8, "character": 12},
+	})
+	// Inside a method (self.): both show.
+	h.send("textDocument/completion", 121, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 4, "character": 28},
+	})
+	h.send("shutdown", 122, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+	labels := func(id string) []string {
+		t.Helper()
+		m := findMsg(msgs, id)
+		if m == nil {
+			t.Fatalf("no completion %s", id)
+		}
+		var res struct {
+			Items []struct {
+				Label string `json:"label"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(m.Result, &res); err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, it := range res.Items {
+			out = append(out, it.Label)
+		}
+		return out
+	}
+	outside := labels("120")
+	has := func(ls []string, w string) bool {
+		for _, l := range ls {
+			if l == w {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(outside, "secret") || has(outside, "code") {
+		t.Fatalf("private must hide outside: %v", outside)
+	}
+	inside := labels("121")
+	if !has(inside, "secret") || !has(inside, "code") {
+		t.Fatalf("both must show inside: %v", inside)
+	}
+}
+
+func TestMemberCompletionChain(t *testing.T) {
+	const uri = "file:///test/chain.tl"
+	src := `interface Inner { v: number }
+interface Outer { inner: Inner }
+local o: Outer = { inner = { v = 1 } }
+local n = o.inner.v
+local s = a..b
+`
+	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": uri, "version": 1, "text": src,
+	}})
+	doc := map[string]any{"uri": uri}
+	// `o.inner.` resolves through the chain to Inner's members.
+	h.send("textDocument/completion", 130, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 3, "character": 18},
+	})
+	// `..` concat must not confuse the chain parser (falls back cleanly).
+	h.send("textDocument/completion", 131, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 4, "character": 13},
+	})
+	h.send("shutdown", 132, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+	m := findMsg(msgs, "130")
+	if m == nil {
+		t.Fatalf("no chained completion")
+	}
+	var res struct {
+		Items []struct {
+			Label string `json:"label"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(m.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range res.Items {
+		if it.Label == "v" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("chain did not resolve to Inner: %+v", res.Items)
+	}
+	m131 := findMsg(msgs, "131")
+	if m131 == nil || m131.Error != nil {
+		t.Fatalf("concat fallback failed: %+v", m131)
+	}
+}
+
+func TestMemberCompletionAnyFallsBack(t *testing.T) {
+	const uri = "file:///test/anyc.tl"
+	src := "local x: any = nil\nlocal y = x.foo\n"
+	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": uri, "version": 1, "text": src,
+	}})
+	// `x.` with any-typed x falls back to plain completion (keywords).
+	h.send("textDocument/completion", 140, map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     map[string]any{"line": 1, "character": 12},
+	})
+	h.send("shutdown", 141, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+	m := findMsg(msgs, "140")
+	if m == nil {
+		t.Fatalf("no completion")
+	}
+	var res struct {
+		Items []struct {
+			Label string `json:"label"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(m.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	foundKw := false
+	for _, it := range res.Items {
+		if it.Label == "and" {
+			foundKw = true
+		}
+	}
+	if !foundKw {
+		t.Fatalf("any base must fall back to plain completion: %+v", res.Items)
+	}
+}

@@ -715,3 +715,27 @@ local function f(x: any): string
 end
 `)
 }
+
+func TestRecursiveGenericGuard(t *testing.T) {
+	// Self-referential constraints/defaults terminate with errors.
+	expectErr(t, `
+type F<T extends F<T>> = { v: T }
+local a: F<number> = nil as any
+`)
+	expectErr(t, `
+type L<T = L<T>> = { x: T }
+local b: L<number> = nil as any
+`)
+	// Deep but finite generic nesting is unaffected by the depth cap.
+	nested := "number"
+	for i := 0; i < 100; i++ {
+		nested = "Box<" + nested + ">"
+	}
+	expectOK(t, `
+class Box<T> {
+  v: T,
+  constructor(v: T) self.v = v end,
+}
+local x: `+nested+` = nil as any
+`)
+}

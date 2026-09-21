@@ -2,6 +2,7 @@ package checker
 
 import (
 	"github.com/typelua/typelua/internal/token"
+	"github.com/typelua/typelua/internal/types"
 )
 
 // Read API over the position index for the language server.
@@ -132,6 +133,35 @@ func (e *typeEntry) DeclSpan() token.Span {
 		return token.Span{}
 	}
 	return e.span
+}
+
+// DeclRange returns the full declaration span (for visibility checks:
+// private members complete only inside it).
+func (e *typeEntry) DeclRange() token.Span {
+	if e == nil {
+		return token.Span{}
+	}
+	switch {
+	case e.alias != nil:
+		return e.alias.Span()
+	case e.iface != nil:
+		return e.iface.Span()
+	case e.enumDecl != nil:
+		return e.enumDecl.Span()
+	case e.classDecl != nil:
+		return e.classDecl.Span()
+	}
+	return token.Span{}
+}
+
+// LookupFieldType resolves a named member's type (for completion chains;
+// indexers included, like field access).
+func LookupFieldType(ot types.Type, name string) (types.Type, bool) {
+	f, ok := lookupField(ot, name)
+	if !ok {
+		return nil, false
+	}
+	return f.Type, true
 }
 
 // EntryKind describes a type declaration for hovers.
