@@ -141,6 +141,8 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 			if splitAt < 0 {
 				e.emitClassInits(name, inits)
 			}
+			e.pushDeferFrame(ctor.Body)
+			e.emitDeferPrelude(e.indent)
 			for i, st := range ctor.Body.Stmts {
 				e.emitStmt(st)
 				if i == splitAt {
@@ -148,20 +150,10 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 				}
 			}
 			if ctor.Body.Ret != nil {
-				e.mark(ctor.Body.Ret, "")
-				e.pad()
-				e.write("return")
-				if len(ctor.Body.Ret.Exprs) > 0 {
-					e.write(" ")
-					for i, x := range ctor.Body.Ret.Exprs {
-						if i > 0 {
-							e.write(", ")
-						}
-						e.emitExpr(x)
-					}
-				}
-				e.nl()
+				e.emitReturn(ctor.Body.Ret)
 			}
+			e.emitDeferTrail(ctor.Body, e.indent)
+			e.popDeferFrame()
 		} else {
 			e.emitClassInits(name, inits)
 		}
@@ -206,7 +198,11 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 		e.indent++
 		e.emitVarArgPrelude(m.Params, m.HasVarArg, m.VarArgName, e.indent)
 		if m.Body != nil {
+			e.pushDeferFrame(m.Body)
+			e.emitDeferPrelude(e.indent)
 			e.emitBlock(m.Body, e.indent)
+			e.emitDeferTrail(m.Body, e.indent)
+			e.popDeferFrame()
 		} else {
 			e.pad()
 			e.write("error(\"abstract method '" + name + "." + m.Name.Name + "' is not implemented\")")

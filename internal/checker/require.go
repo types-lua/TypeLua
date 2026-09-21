@@ -159,6 +159,8 @@ func (w *requireWalker) stmt(st ast.Stmt) {
 		}
 	case *ast.ImportStmt:
 		w.add(n.Path)
+	case *ast.DeferStmt:
+		w.expr(n.Call)
 	}
 }
 

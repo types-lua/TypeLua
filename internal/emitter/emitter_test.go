@@ -1,6 +1,7 @@
 package emitter
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/typelua/typelua/internal/parser"
@@ -97,5 +98,112 @@ func TestEmitImport(t *testing.T) {
 	out = emit(t, `import "example.com.side"`)
 	if out != "require(\"example.com.side\")\n" {
 		t.Fatalf("got %q", out)
+	}
+}
+
+func TestEmitDefer(t *testing.T) {
+	out := emit(t, `local function f(x: number): number
+  defer print("a", x)
+  defer print("b")
+  if x < 0 then
+    return -1
+  end
+  return x
+end`)
+	want := "local function f(x)\n" +
+		"    local __tl_defer_1 = {}\n" +
+		"    local function __tl_rundefer_1(...) for __i = #__tl_defer_1, 1, -1 do if not __tl_defer_1[__i].err then __tl_defer_1[__i].fn() end end return ... end\n" +
+		"    __tl_defer_1[#__tl_defer_1 + 1] = { fn = function() print(\"a\", x) end }\n" +
+		"    __tl_defer_1[#__tl_defer_1 + 1] = { fn = function() print(\"b\") end }\n" +
+		"    if x < 0 then\n" +
+		"        return __tl_rundefer_1(-1)\n" +
+		"    end\n" +
+		"    return __tl_rundefer_1(x)\n" +
+		"end\n"
+	if out != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+func TestEmitErrDefer(t *testing.T) {
+	// Standalone emission (no checker run): the error call passes
+	// through unmarked, so errdefers only register. Valid output.
+	out := emit(t, `local function g(): number
+  local h = 1
+  errdefer print("failed")
+  if h > 0 then
+    error("boom")
+  end
+  return h
+end`)
+	want := "local function g()\n" +
+		"    local __tl_defer_1 = {}\n" +
+		"    local function __tl_runerr_1() for __i = #__tl_defer_1, 1, -1 do __tl_defer_1[__i].fn() end end\n" +
+		"    local h = 1\n" +
+		"    __tl_defer_1[#__tl_defer_1 + 1] = { fn = function() print(\"failed\") end, err = true }\n" +
+		"    if h > 0 then\n" +
+		"        error(\"boom\")\n" +
+		"    end\n" +
+		"    return h\n" +
+		"end\n"
+	if out != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+func TestEmitNoDeferUnchanged(t *testing.T) {
+	// Functions without defer emit byte-identical output to before.
+	out := emit(t, `local function f(x: number): number
+  if x < 0 then
+    return -1
+  end
+  return x
+end`)
+	want := "local function f(x)\n    if x < 0 then\n        return -1\n    end\n    return x\nend\n"
+	if out != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+func TestEmitDeferMethod(t *testing.T) {
+	out := emit(t, `class C {
+  x: number,
+  constructor(x: number) self.x = x end,
+  get(): number
+    defer print("get")
+    return self.x
+  end,
+}`)
+	if !strings.Contains(out, "local __tl_defer_1 = {}") {
+		t.Fatalf("method defer prelude missing:\n%s", out)
+	}
+	if !strings.Contains(out, "return __tl_rundefer_1(self.x)") {
+		t.Fatalf("method return not wrapped:\n%s", out)
+	}
+}
+
+func TestEmitDeferTopLevel(t *testing.T) {
+	out := emit(t, "defer print(\"bye\")\nprint(\"hi\")\n")
+	if !strings.Contains(out, "__tl_defer_1[#__tl_defer_1 + 1]") {
+		t.Fatalf("top-level defer not registered:\n%s", out)
+	}
+	if !strings.Contains(out, "__tl_rundefer_1()\n") {
+		t.Fatalf("top-level trailing run missing:\n%s", out)
+	}
+}
+
+func TestEmitDeferGlobalAndCtor(t *testing.T) {
+	out := emit(t, `function g(): number
+  defer print("g")
+  return 1
+end
+class C {
+  constructor() defer print("ctor") end,
+}`)
+	if !strings.Contains(out, "return __tl_rundefer_1(1)") {
+		t.Fatalf("global fn return not wrapped:\n%s", out)
+	}
+	if !strings.Contains(out, "__tl_defer_2[#__tl_defer_2 + 1]") {
+		t.Fatalf("ctor defer not registered:\n%s", out)
 	}
 }

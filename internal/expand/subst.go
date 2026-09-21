@@ -163,6 +163,10 @@ func substStmt(st ast.Stmt, s *substCtx) {
 		for _, id := range n.Names {
 			s.pushShadow(id.Name)
 		}
+	case *ast.DeferStmt:
+		// Deferred calls substitute like normal calls (evaluated at exit,
+		// but with the call-site argument values, as written).
+		n.Call = substExpr(n.Call, s)
 	case *ast.ImportStmt:
 		// The bound name shadows macro parameters from here on.
 		if n.Name != nil {

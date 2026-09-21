@@ -80,6 +80,8 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 		c.errorf("TL3700", st.Span(), "internal error: unexpanded macro '%s'", n.Name.Name)
 	case *ast.ImportStmt:
 		c.checkImport(n)
+	case *ast.DeferStmt:
+		c.checkDefer(n)
 	default:
 		c.errorf("TL3000", st.Span(), "unsupported statement %T", st)
 	}
@@ -244,6 +246,68 @@ func (c *Checker) checkImport(n *ast.ImportStmt) {
 		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
 	}
 	c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: want, Span: n.Name.Span()}))
+}
+
+// checkDefer checks a deferred call like a normal call (argument checking
+// included). Bare `...` cannot cross into the deferred closure (it would
+// bind the closure's nonexistent varargs); copy into a local first.
+func (c *Checker) checkDefer(n *ast.DeferStmt) {
+	c.checkExpr(n.Call)
+	if hasBareVarArg(n.Call) {
+		c.errorf("TL3235", n.Call.Span(), "cannot use '...' in a deferred call (copy it into a local first)")
+	}
+}
+
+// hasBareVarArg reports a `...` outside nested function bodies.
+func hasBareVarArg(x ast.Expr) bool {
+	switch n := x.(type) {
+	case *ast.VarArg:
+		return true
+	case *ast.FuncLit:
+		return false
+	case *ast.ParenExpr:
+		return hasBareVarArg(n.E)
+	case *ast.CallExpr:
+		if hasBareVarArg(n.Func) {
+			return true
+		}
+		for _, a := range n.Args {
+			if hasBareVarArg(a) {
+				return true
+			}
+		}
+	case *ast.MethodCallExpr:
+		if hasBareVarArg(n.Obj) {
+			return true
+		}
+		for _, a := range n.Args {
+			if hasBareVarArg(a) {
+				return true
+			}
+		}
+	case *ast.BinOpExpr:
+		return hasBareVarArg(n.L) || hasBareVarArg(n.R)
+	case *ast.UnOpExpr:
+		return hasBareVarArg(n.X)
+	case *ast.IndexExpr:
+		return hasBareVarArg(n.Obj) || hasBareVarArg(n.Key)
+	case *ast.FieldExpr:
+		return hasBareVarArg(n.Obj)
+	case *ast.TableLit:
+		for _, f := range n.Fields {
+			if f.KeyX != nil && hasBareVarArg(f.KeyX) {
+				return true
+			}
+			if f.Val != nil && hasBareVarArg(f.Val) {
+				return true
+			}
+		}
+	case *ast.CastExpr:
+		return hasBareVarArg(n.E)
+	case *ast.NonNullExpr:
+		return hasBareVarArg(n.E)
+	}
+	return false
 }
 
 func (c *Checker) checkLocalFunc(n *ast.LocalFuncDef) {

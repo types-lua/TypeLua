@@ -215,3 +215,37 @@ m(42)
 		t.Fatalf("argument captured:\n%s", out)
 	}
 }
+
+func TestDeferInMacro(t *testing.T) {
+	// Deferred calls participate in substitution and hygiene like other calls.
+	out, codes := expandEmit(t, `
+macro m(q) do
+  defer print(q)
+  print("done")
+end
+m(42)
+`)
+	if len(codes) != 0 {
+		t.Fatalf("diags: %v", codes)
+	}
+	if !strings.Contains(out, "print(42)") {
+		t.Fatalf("param must substitute into deferred call:\n%s", out)
+	}
+}
+
+func TestDeferMacroCall(t *testing.T) {
+	// Expression-macro calls inside defer expand before emission.
+	out, codes := expandEmit(t, `
+macro twice(x) = (x) + (x)
+local function f(v: number): number
+  defer print(twice(v))
+  return v
+end
+`)
+	if len(codes) != 0 {
+		t.Fatalf("diags: %v", codes)
+	}
+	if !strings.Contains(out, "print((v) + (v))") {
+		t.Fatalf("macro call inside defer not expanded:\n%s", out)
+	}
+}

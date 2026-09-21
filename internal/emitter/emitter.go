@@ -28,7 +28,11 @@ func EmitFile(f *ast.File, opt Options) string {
 // happens only when the caller wants a map (near-zero overhead).
 func EmitFileWithMap(f *ast.File, opt Options) (string, []sourcemap.Mapping) {
 	e := &emitter{opt: opt, line: 1}
+	e.pushDeferFrame(f.Block)
+	e.emitDeferPrelude(0)
 	e.emitBlock(f.Block, 0)
+	e.emitDeferTrail(f.Block, 0)
+	e.popDeferFrame()
 	out := e.buf.String()
 	if out == "" || strings.HasSuffix(out, "\n") {
 		return out, e.mappings
@@ -50,6 +54,9 @@ type emitter struct {
 	col        int // 0-based generated column (runes)
 	pending    *pendingMark
 	mappings   []sourcemap.Mapping
+	// Defer frames (one per function body under emission, incl. chunk).
+	deferStack []*deferFrame
+	tmpCount   int // unique generated temporaries per file
 }
 
 type classEmitCtx struct {
@@ -135,19 +142,7 @@ func (e *emitter) emitBlock(b *ast.Block, ind int) {
 		e.emitStmt(st)
 	}
 	if b.Ret != nil {
-		e.mark(b.Ret, "")
-		e.pad()
-		e.write("return")
-		if len(b.Ret.Exprs) > 0 {
-			e.write(" ")
-			for i, x := range b.Ret.Exprs {
-				if i > 0 {
-					e.write(", ")
-				}
-				e.emitExpr(x)
-			}
-		}
-		e.nl()
+		e.emitReturn(b.Ret)
 	}
 	e.indent = saved
 }

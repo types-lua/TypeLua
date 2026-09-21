@@ -136,7 +136,11 @@ func (e *emitter) emitExpr(x ast.Expr) {
 		} else {
 			e.nl()
 			e.emitVarArgPrelude(n.Params, n.HasVarArg, n.VarArgName, e.indent+1)
+			e.pushDeferFrame(n.Body)
+			e.emitDeferPrelude(e.indent + 1)
 			e.emitBlock(n.Body, e.indent+1)
+			e.emitDeferTrail(n.Body, e.indent+1)
+			e.popDeferFrame()
 			e.pad()
 			e.write("end")
 		}

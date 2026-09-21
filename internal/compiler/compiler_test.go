@@ -402,3 +402,75 @@ print(s)
 		t.Fatalf("relative require must win over vendor:\n%s", p.FormatDiags())
 	}
 }
+
+func TestDeferErrRewrite(t *testing.T) {
+	// Full pipeline: the checker marks error() so emission runs errdefers.
+	p := NewProgram(testConfig())
+	p.LoadSources(map[string]string{
+		"a.tl": `local function g(): number
+  local h = 1
+  errdefer print("failed")
+  if h > 0 then
+    error("boom")
+  end
+  return h
+end
+`,
+	})
+	p.Check()
+	if p.HasErrors() {
+		t.Fatalf("diags:\n%s", p.FormatDiags())
+	}
+	out := p.EmitToString()["a.tl"]
+	if !strings.Contains(out, "do __tl_runerr_1(); error(\"boom\") end") {
+		t.Fatalf("error call not rewritten:\n%s", out)
+	}
+}
+
+func TestDeferMultiReturn(t *testing.T) {
+	// Multi-value returns survive the runner without pack/unpack.
+	p := NewProgram(testConfig())
+	p.LoadSources(map[string]string{
+		"a.tl": `local function divmod(a: number, b: number): (number, number)
+  defer print("div")
+  return a, b
+end
+local q, r = divmod(7, 3)
+print(q, r)
+`,
+	})
+	p.Check()
+	if p.HasErrors() {
+		t.Fatalf("diags:\n%s", p.FormatDiags())
+	}
+	out := p.EmitToString()["a.tl"]
+	if !strings.Contains(out, "return __tl_rundefer_1(a, b)") {
+		t.Fatalf("multi return not preserved:\n%s", out)
+	}
+}
+
+func TestDeferPcallShape(t *testing.T) {
+	// pcall catching a throwing function: errdefer runs once inside,
+	// then the error propagates as a value.
+	p := NewProgram(testConfig())
+	p.LoadSources(map[string]string{
+		"a.tl": `local function g(): number
+  errdefer print("cleanup")
+  error("boom")
+end
+local ok, err = pcall(g)
+print(ok)
+`,
+	})
+	p.Check()
+	if p.HasErrors() {
+		t.Fatalf("diags:\n%s", p.FormatDiags())
+	}
+	out := p.EmitToString()["a.tl"]
+	if !strings.Contains(out, "do __tl_runerr_1(); error(\"boom\") end") {
+		t.Fatalf("errdefer not armed:\n%s", out)
+	}
+	if !strings.Contains(out, "local ok, err = pcall(g)") {
+		t.Fatalf("pcall call altered:\n%s", out)
+	}
+}

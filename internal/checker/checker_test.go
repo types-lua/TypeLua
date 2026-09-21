@@ -660,3 +660,32 @@ import G from "example.com.greet"
 import G from "example.com.other"
 `)
 }
+
+func TestDeferCheck(t *testing.T) {
+	// Deferred calls type-check like normal calls.
+	expectOK(t, `
+local function f(x: number): number
+  defer print(x)
+  return x
+end
+`)
+	// Argument mismatches surface.
+	expectErr(t, `
+local function f(x: number): number
+  defer print(x, y)
+  return x
+end
+`)
+	// Bare ... cannot cross into the deferred closure.
+	expectErr(t, `
+local function f(...: string)
+  defer print(...)
+end
+`)
+	// ... inside a nested function is that function's own business.
+	expectOK(t, `
+local function f(...: string)
+  defer print(function(...) return ... end)
+end
+`)
+}

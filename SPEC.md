@@ -195,3 +195,24 @@ direct = true
 - 模块消解（check/build）：点路径先找引用文件同目录，再找配置目录下 `tlua_modules`；`example.com.greet` 先试 `greet.tl` 再试包根 `greet/init.tl`（Lua `init.lua` 惯例）；manifest 末段唯一的短名（`greet`）亦可（歧义则回退）；命中程序内文件则按依赖序检查并用其 `return M` 类型（循环引用、自引用、缺失目标、`.d.tl` 一律回退 `any`；宏体内拼接出的 require 尽力而为）。
 - 缓存：`~/.tlua/pkg/mod`（`TLUA_MODCACHE` 覆盖；`TLUA_OFFLINE=1` 离线，预热后 fetch/vendor/check 全可用）；`replace` 本地目录记 `commit = "local"`。
 - 限制：`mod tidy`（未用清理）暂无，请手工删依赖；`--offline` 只有环境变量开关。
+
+## 12. defer / errdefer
+
+```lua
+local function f(name: string): number
+  defer print("close", name)     -- 所有正常返回前 LIFO 运行
+  errdefer print("abort", name)  -- 仅显式 error() 离开时 LIFO 运行
+  if name == "" then
+    return error("empty")
+  end
+  return 1
+end
+```
+
+- `defer <call>` / `errdefer <call>`（`f()`、`obj:m()`，可带显式泛型实参；软关键字，`local defer = 1` 等不受影响）。
+- 作用域是函数（块内 `defer` 也在函数退出时运行）；顶层 chunk 亦可（chunk 末运行）。
+- 求值是惰性的（闭包捕获，与 Lua 闭包同规则；注意数字 `for` 循环变量复用）——Go 的“实参立即求值”不适用（含多值截断问题）。
+- `return E...` 改写为 `return __r(E...)`（runner 透传多值，无需 pack/unpack，5.1 兼容）；无 `return` 的函数在末尾补跑。
+- `errdefer` 只在**同一函数体内显式 `error(...)`** 处触发（语句与 `return error(...)` 位；改写为先跑后抛，位置信息不变）。`assert` 失败、被调函数抛上来的错误、`pcall` 捕获均不触发。
+- 限制：`error()` 的 `pcall` 式错误传播不触发任何 defer（这点不如 Go；要全出口清理请用 `<close>` 局部量——真 Lua 语义）；`...` 不可直接进 deferred 调用（`TL3235`，先拷入局部）；`error` 被局部遮蔽时不改写。
+- 生成代码使用 `__tl_` 前缀（保留，勿作用户标识符）。

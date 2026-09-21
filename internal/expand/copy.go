@@ -180,6 +180,10 @@ func copyStmt(st ast.Stmt) ast.Stmt {
 			c.Name = &v
 		}
 		return &c
+	case *ast.DeferStmt:
+		c := *n
+		c.Call = copyExpr(n.Call)
+		return &c
 	case *ast.LocalFuncDef:
 		c := *n
 		l := *n.Name

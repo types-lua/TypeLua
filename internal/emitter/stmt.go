@@ -16,8 +16,37 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		// Skip (avoid clutter), but keep `;` if it was intentional? Drop.
 		e.pending = nil
 	case *ast.ExprStmt:
+		if isErrorCall(n.E) {
+			if fr := e.deferTop(); fr != nil && fr.hasErr {
+				// Throwing out: run errdefers (+all defers), then throw.
+				e.pad()
+				e.write("do " + fr.errVar + "(); ")
+				e.emitExpr(n.E)
+				e.write(" end")
+				e.nl()
+				break
+			}
+		}
 		e.pad()
 		e.emitExpr(n.E)
+		e.nl()
+	case *ast.DeferStmt:
+		fr := e.deferTop()
+		if fr == nil || (!fr.hasDefer && !fr.hasErr) {
+			// Defensive (prescan always frames these): run immediately.
+			e.pad()
+			e.emitExpr(n.Call)
+			e.nl()
+			break
+		}
+		e.pad()
+		e.write(fr.listVar + "[#" + fr.listVar + " + 1] = { fn = function() ")
+		e.emitExpr(n.Call)
+		e.write(" end")
+		if n.IsErr {
+			e.write(", err = true")
+		}
+		e.write(" }")
 		e.nl()
 	case *ast.LocalAssign:
 		e.pad()
@@ -58,7 +87,11 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		e.write(")")
 		e.nl()
 		e.emitVarArgPrelude(n.Func.Params, n.Func.HasVarArg, n.Func.VarArgName, e.indent+1)
+		e.pushDeferFrame(n.Func.Body)
+		e.emitDeferPrelude(e.indent + 1)
 		e.emitBlock(n.Func.Body, e.indent+1)
+		e.emitDeferTrail(n.Func.Body, e.indent+1)
+		e.popDeferFrame()
 		e.pad()
 		e.write("end")
 		e.nl()
@@ -85,7 +118,11 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		e.nl()
 		if params != nil {
 			e.emitVarArgPrelude(params.Params, params.HasVarArg, params.VarArgName, e.indent+1)
+			e.pushDeferFrame(params.Body)
+			e.emitDeferPrelude(e.indent + 1)
 			e.emitBlock(params.Body, e.indent+1)
+			e.emitDeferTrail(params.Body, e.indent+1)
+			e.popDeferFrame()
 		}
 		e.pad()
 		e.write("end")

@@ -84,6 +84,9 @@ func (p *Parser) parseStmt() ast.Stmt {
 	if p.isImportStart() {
 		return p.parseImport()
 	}
+	if p.isDeferStart() {
+		return p.parseDefer()
+	}
 	switch p.cur().Kind {
 	case token.Semi:
 		s := p.next()
@@ -196,6 +199,37 @@ func (p *Parser) parseImport() ast.Stmt {
 	}
 	t := p.next()
 	return &ast.ImportStmt{Name: name, Type: ty, Path: &ast.StringLit{Literal: t.Literal, S: t.Span}, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+}
+
+// isDeferStart peeks `defer <call>` / `errdefer <call>` (soft keywords:
+// the callee must be a plain identifier on the same line, so `defer(x)`
+// stays a call to a function named defer and `defer` alone stays a name).
+func (p *Parser) isDeferStart() bool {
+	if p.cur().Kind != token.Ident {
+		return false
+	}
+	if p.cur().Literal != "defer" && p.cur().Literal != "errdefer" {
+		return false
+	}
+	n1 := p.peek(1)
+	return n1.Kind == token.Ident &&
+		n1.Span.Start.Line == p.cur().Span.Start.Line
+}
+
+// parseDefer parses `defer <call>` / `errdefer <call>`; the call may use
+// explicit type arguments (`defer f<T>()`).
+func (p *Parser) parseDefer() ast.Stmt {
+	start := p.next() // defer | errdefer
+	isErr := start.Literal == "errdefer"
+	call := p.parseSuffix()
+	switch call.(type) {
+	case *ast.CallExpr, *ast.MethodCallExpr:
+		return &ast.DeferStmt{IsErr: isErr, Call: call, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+	default:
+		p.errorf("TL2016", p.cur().Span, "expected a function call after '%s'", start.Literal)
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
 }
 
 func (p *Parser) parseDo() ast.Stmt {

@@ -199,6 +199,9 @@ func (r *renameCtx) renameStmt(st ast.Stmt) {
 			r.bindVar(n.Name.Name)
 			n.Name.Name = r.vars[n.Name.Name]
 		}
+	case *ast.DeferStmt:
+		// The deferred call resolves names like any other call.
+		r.renameExpr(n.Call)
 	case *ast.LocalFuncDef:
 		r.bindVar(n.Name.Name)
 		n.Name.Name = r.vars[n.Name.Name]

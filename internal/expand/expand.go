@@ -129,6 +129,9 @@ func (e *expander) expandStmtInto(st ast.Stmt, env *scope) []ast.Stmt {
 	case *ast.ExprStmt:
 		n.E = e.expandExpr(n.E, env)
 		return []ast.Stmt{st}
+	case *ast.DeferStmt:
+		n.Call = e.expandExpr(n.Call, env)
+		return []ast.Stmt{st}
 	case *ast.AssignStmt:
 		for i, t := range n.Targets {
 			n.Targets[i] = e.expandExpr(t, env)

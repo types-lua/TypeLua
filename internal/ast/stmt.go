@@ -60,6 +60,19 @@ type LocalFuncDef struct {
 func (*LocalFuncDef) stmtNode()         {}
 func (n *LocalFuncDef) Span() token.Span { return n.S }
 
+// DeferStmt is `defer <call>` / `errdefer <call>` (soft keywords):
+// cleanup runs LIFO at function exit — deferred calls on every normal
+// return, errdeferred calls only when leaving via an explicit `error()`.
+// `defer`/`errdefer` stay plain identifiers everywhere else.
+type DeferStmt struct {
+	IsErr bool // errdefer
+	Call  Expr // CallExpr or MethodCallExpr
+	S     token.Span
+}
+
+func (*DeferStmt) stmtNode()          {}
+func (n *DeferStmt) Span() token.Span { return n.S }
+
 // ImportStmt is require sugar:
 //
 //	import "path"                 (side-effect require)

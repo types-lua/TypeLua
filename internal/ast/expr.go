@@ -133,7 +133,10 @@ type CallExpr struct {
 	Func     Expr
 	TypeArgs []TypeNode // explicit generic arguments: f<T>(x)
 	Args     []Expr
-	S        token.Span
+	// ErrorCall marks a call to the `error` builtin (set by the checker
+	// when unshadowed); the emitter runs errdefers around it.
+	ErrorCall bool
+	S         token.Span
 }
 
 func (*CallExpr) exprNode()          {}

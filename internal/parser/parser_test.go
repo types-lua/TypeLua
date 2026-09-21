@@ -303,3 +303,39 @@ func TestParseImport(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDefer(t *testing.T) {
+	f := mustParse(t, `defer print("bye")`)
+	dm, ok := f.Block.Stmts[0].(*ast.DeferStmt)
+	if !ok || dm.IsErr {
+		t.Fatalf("bad defer %+v", f.Block.Stmts[0])
+	}
+	if _, ok := dm.Call.(*ast.CallExpr); !ok {
+		t.Fatalf("defer call not preserved: %T", dm.Call)
+	}
+	f2 := mustParse(t, `errdefer f:close()`)
+	dm2, ok := f2.Block.Stmts[0].(*ast.DeferStmt)
+	if !ok || !dm2.IsErr {
+		t.Fatalf("bad errdefer %+v", f2.Block.Stmts[0])
+	}
+	if _, ok := dm2.Call.(*ast.MethodCallExpr); !ok {
+		t.Fatalf("errdefer method call not preserved: %T", dm2.Call)
+	}
+	mustParse(t, `defer f<string>("x")`)
+	// `defer`/`errdefer` stay plain identifiers elsewhere.
+	mustParse(t, `local defer = 1`)
+	mustParse(t, `local errdefer = 2`)
+	mustParse(t, `defer(x)`)
+	mustParse(t, `defer = 1`)
+	mustParse(t, `defer.foo()`)
+	// Errors, all recoverable.
+	for _, src := range []string{
+		`defer x`,
+		`defer 42`,
+		`errdefer`,
+	} {
+		if _, diags := ParseFile("t.tl", src); len(diags) == 0 {
+			t.Fatalf("expected errors for %q", src)
+		}
+	}
+}

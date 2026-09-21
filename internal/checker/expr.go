@@ -53,6 +53,13 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 				return []types.Type{c.requirePathType(lit)}
 			}
 		}
+		// Mark unshadowed `error(...)` calls so the emitter can run
+		// errdefers around them (normal checking continues).
+		if id, ok := n.Func.(*ast.Ident); ok && id.Name == "error" {
+			if s := c.cur().lookupVar("error"); s == nil || s.IsBuiltin {
+				n.ErrorCall = true
+			}
+		}
 		// `Point.new(...)` gets instantiation checks (abstract/private).
 		if fe, ok := n.Func.(*ast.FieldExpr); ok && fe.Field.Name == "new" {
 			if id, ok := fe.Obj.(*ast.Ident); ok {
