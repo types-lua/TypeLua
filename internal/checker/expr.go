@@ -282,6 +282,9 @@ func (c *Checker) checkTable(n *ast.TableLit) types.Type {
 func literalKey(e ast.Expr) *string {
 	switch n := e.(type) {
 	case *ast.StringLit:
+		if s, _, _, ok := unquoteKey(n.Literal); ok {
+			return &s
+		}
 		s, err := parseStringLiteral(n.Literal)
 		if err == nil {
 			return &s
@@ -296,6 +299,32 @@ func literalKey(e ast.Expr) *string {
 	return nil
 }
 
+// unquoteKey splits a string literal into content plus delimiter widths.
+// Handles "...", '...', and long brackets [[...]], [=[...]=] (any level).
+// Escapes stay raw (source-faithful, matching literalKey).
+func unquoteKey(lit string) (string, int, int, bool) {
+	if len(lit) >= 2 {
+		q := lit[0]
+		if (q == '"' || q == '\'') && lit[len(lit)-1] == q {
+			return lit[1 : len(lit)-1], 1, 1, true
+		}
+		if q == '[' {
+			i := 1
+			for i < len(lit) && lit[i] == '=' {
+				i++
+			}
+			if i < len(lit) && lit[i] == '[' {
+				open := i + 1
+				close := "]" + strings.Repeat("=", i-1) + "]"
+				if strings.HasSuffix(lit, close) && len(lit) >= open+len(close) {
+					return lit[open : len(lit)-len(close)], open, len(close), true
+				}
+			}
+		}
+	}
+	return "", 0, 0, false
+}
+
 // stringKeyName splits a quoted `"name"` literal into its member name and
 // inner span (quotes excluded, so rename edits preserve them).
 // Long strings and non-literals report false.
@@ -303,20 +332,15 @@ func stringKeyName(sl *ast.StringLit) (string, token.Span, bool) {
 	if sl == nil {
 		return "", token.Span{}, false
 	}
-	lit := sl.Literal
-	if len(lit) < 2 {
+	name, open, close, ok := unquoteKey(sl.Literal)
+	if !ok {
 		return "", token.Span{}, false
 	}
-	q := lit[0]
-	if (q != '"' && q != '\'') || lit[len(lit)-1] != q {
-		return "", token.Span{}, false
-	}
-	name, _ := parseStringLiteral(lit)
 	inner := sl.Span()
-	inner.Start.Offset++
-	inner.Start.Column++
-	inner.End.Offset--
-	inner.End.Column--
+	inner.Start.Offset += open
+	inner.Start.Column += open
+	inner.End.Offset -= close
+	inner.End.Column -= close
 	if inner.End.Offset <= inner.Start.Offset {
 		return "", token.Span{}, false
 	}

@@ -313,6 +313,9 @@ func indexResult(ot, kt types.Type) types.Type {
 		// Literal string/number keys map to fields.
 		if lit, ok := kt.(*types.Literal); ok {
 			key := strings.Trim(lit.Value, `"'`)
+			if s, _, _, ok := unquoteKey(lit.Value); ok {
+				key = s
+			}
 			// Number literal for array-like indexers.
 			if lit.Base == types.Number || lit.Base == types.Integer || lit.Base == types.Float {
 				for _, ix := range x.Indexers {

@@ -2,6 +2,8 @@ package lsp
 
 import (
 	"encoding/json"
+
+	"github.com/typelua/typelua/internal/types"
 )
 
 // Hover and go-to-definition.
@@ -19,7 +21,7 @@ func (s *Server) hover(raw json.RawMessage) any {
 	}
 	var md string
 	if u.Sym != nil && u.Member == nil {
-		md = "```tlua\n" + u.Sym.KindString() + " " + u.Sym.Name + ": " + u.Sym.Type.String() + "\n```"
+		md = "```tlua\n" + u.Sym.KindString() + " " + u.Sym.Name + ": " + types.Abbrev(u.Sym.Type.String()) + "\n```"
 	} else if u.Member != nil {
 		kind := u.Member.Kind
 		if kind == "" {

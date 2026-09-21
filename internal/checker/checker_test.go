@@ -689,3 +689,29 @@ local function f(...: string)
 end
 `)
 }
+
+func TestLongStringKeys(t *testing.T) {
+	// Long-bracket keys behave like quoted ones everywhere.
+	expectOK(t, `
+type T = { name: string }
+local t: T = { name = "x" }
+local a = t[ [[name]] ]
+local b: string = t[ [=[name]=] ]
+`)
+	expectOK(t, `
+local function get(n: { next?: { v: number } }): number
+  if n[ [[next]] ] ~= nil then
+    return n.next.v
+  end
+  return -1
+end
+`)
+	// Note: `n[[next]]` (no space) lexes as a string-argument call
+	// `n([[next]])`, exactly like Lua; index needs the space.
+	expectOK(t, `
+local function f(x: any): string
+  if type(x) == [[string]] then return x end
+  return ""
+end
+`)
+}

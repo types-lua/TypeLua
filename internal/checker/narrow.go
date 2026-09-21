@@ -1,8 +1,6 @@
 package checker
 
 import (
-	"strings"
-
 	"github.com/typelua/typelua/internal/ast"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
@@ -137,8 +135,10 @@ func narrowPath(e ast.Expr) (root string, fields []string, ok bool) {
 		if !isStr {
 			return "", nil, false
 		}
-		s, _ := parseStringLiteral(sl.Literal)
-		s = strings.Trim(s, `"'`)
+		s, _, _, ok := unquoteKey(sl.Literal)
+		if !ok {
+			return "", nil, false
+		}
 		r, fs, ok := narrowPath(n.Obj)
 		if !ok {
 			return "", nil, false
@@ -263,10 +263,10 @@ func matchTypeofCall(call, lit ast.Expr) (ast.Expr, string, bool) {
 	if !ok {
 		return nil, "", false
 	}
-	s, _ := parseStringLiteral(sl.Literal)
-	// Strip quotes if our fallback left them.
-	s = strings.Trim(s, `"'`)
-	// Long-string edge: ignore.
+	s, _, _, ok := unquoteKey(sl.Literal)
+	if !ok {
+		return nil, "", false
+	}
 	return ce.Args[0], s, true
 }
 

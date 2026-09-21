@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/typelua/typelua/internal/token"
+	"github.com/typelua/typelua/internal/types"
 )
 
 // Severity of a diagnostic.
@@ -36,7 +37,8 @@ func (d Diagnostic) String() string {
 	if d.Span.File != "" {
 		loc = fmt.Sprintf("%s:%s: ", d.Span.File, d.Span.Start)
 	}
-	return fmt.Sprintf("%s%s[%s]: %s", loc, d.Severity, d.Code, d.Message)
+	// Ultra-deep types collapse (readability; shallow messages identical).
+	return fmt.Sprintf("%s%s[%s]: %s", loc, d.Severity, d.Code, types.Abbrev(d.Message))
 }
 
 // Helpers to construct diagnostics. Codes:

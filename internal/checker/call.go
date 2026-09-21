@@ -115,6 +115,13 @@ func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, 
 	fn = c.bindExplicitArgs(fn, explicit, callSpan, sub)
 	// Check args (expand? call args don't expand multi except last? In Lua, `f(g())` where g returns multi expands! Support: expand last arg if multi.
 	argTypes := c.checkCallArgs(args)
+	// Table literals against positional parameter types track member keys
+	// (interface implementations passed inline).
+	for i, a := range args {
+		if tl, ok := a.(*ast.TableLit); ok && i < len(fn.Params) {
+			c.recordTableKeys(tl, fn.Params[i].Type)
+		}
+	}
 	// Arity checks (Lua allows any count at runtime; statically enforce required).
 	req := 0
 	for _, p := range fn.Params {

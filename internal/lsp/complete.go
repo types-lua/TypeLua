@@ -117,7 +117,7 @@ func addMembers(t types.Type, add func(name, kind, detail string)) {
 	switch x := t.(type) {
 	case *types.Object:
 		for name, f := range x.Fields {
-			add(name, fieldKind(f.Type), f.Type.String())
+			add(name, fieldKind(f.Type), types.Abbrev(f.Type.String()))
 		}
 	case *types.Class:
 		for name, f := range x.Fields {
@@ -125,7 +125,7 @@ func addMembers(t types.Type, add func(name, kind, detail string)) {
 			if f.IsMethod {
 				kind = "method"
 			}
-			add(name, kind, f.Type.String())
+			add(name, kind, types.Abbrev(f.Type.String()))
 		}
 	case *types.ClassValue:
 		for name, f := range x.Statics {
@@ -133,7 +133,7 @@ func addMembers(t types.Type, add func(name, kind, detail string)) {
 			if f.IsMethod {
 				kind = "method"
 			}
-			add(name, kind, f.Type.String())
+			add(name, kind, types.Abbrev(f.Type.String()))
 		}
 		add("new", "method", "constructor")
 	case *types.Enum:
@@ -178,7 +178,7 @@ func (s *Server) completion(raw json.RawMessage) any {
 				items = append(items, map[string]any{
 					"label":  v.Name,
 					"kind":   completionKind(v.Sym.KindString()),
-					"detail": v.Sym.Type.String(),
+					"detail": types.Abbrev(v.Sym.Type.String()),
 				})
 			}
 			for _, t := range sc.ScopeTypes() {
