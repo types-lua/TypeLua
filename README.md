@@ -21,7 +21,7 @@ go build -o tlua ./cmd/tlua
 | `interfaces` | 结构化、`extends`、可选/只读、方法简写 |
 | `enums` | 字符串/数字自增枚举、穷举分支 |
 | `functions` | 多返回值、变参、闭包、方法定义/调用 |
-| `narrowing` | `nil`/`type()`/提前返回/`not`/`as`/`!` |
+| `narrowing` | `nil`/`type()`/提前返回/`not`/`as`/`!`/成员路径 |
 | `modules` | `return M` + `require as T` 边界注解 |
 | `oop` | 无`class`：接口+元表（`__index`/`setmetatable`） |
 | `stdlib` | `table/string/math/io/os`（动态垫片+自建类型边界） |
@@ -29,8 +29,8 @@ go build -o tlua ./cmd/tlua
 | `compat` | 5.1/LuaJIT 兼容子集（`--target 5.1` 验证） |
 | `class` | 类：继承/抽象/可见性/静态/泛型/`super`（真机运行验证） |
 | `conditional` | 条件类型/`infer`：分发、元组/函数/对象/类模式（真机运行验证） |
-| `macros` | 卫生宏：表达式/语句宏、遮蔽与捕获防护（真机运行验证） |
-| `advanced` | 显式泛型实参、映射类型、索引访问（真机运行验证） |
+| `macros` | 卫生宏：表达式/语句宏、变长 `...`、遮蔽与捕获防护（真机运行验证） |
+| `advanced` | 显式泛型实参、映射类型（含 `+?`/`-?`/`+readonly`/`-readonly` 与同态继承）、索引访问（真机运行验证） |
 
 ## tlua.json
 
@@ -70,9 +70,9 @@ local d = Dog.new("rex")
 - `internal/ast,parser`：递归下降 + Pratt + 错误恢复
 - `internal/types,checker`：结构子类型/泛型推断/窄化
 - `internal/emitter,config,compiler`：擦除发射 + `tlua.json` + 管线
-- `cmd/tlua`：`init/check/build/version`
+- `cmd/tlua`：`init/check/build/version/lsp`（stdio 语言服务器：诊断/悬停/定义/补全/引用/重命名，增量同步）
 
 ## 质量
 
 - `go test ./...`，`go vet ./...`
-- 解析器错误恢复 + 自举（`examples/`）+ 发射回环（emit 后仍可解析）
+- 解析器错误恢复（嵌套上限 + 空容忍后级）+ 自举（`examples/`）+ 发射回环（emit 后仍可解析）
