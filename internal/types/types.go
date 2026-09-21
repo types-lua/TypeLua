@@ -120,6 +120,7 @@ type Union struct {
 }
 
 func (t *Union) Kind() Kind { return KUnion }
+
 // typeString formats t with a visited set: shared *Object nodes reached
 // twice (recursive declarations) collapse to their name (or "{...}"),
 // so printing a cyclic type terminates. Only objects can recur

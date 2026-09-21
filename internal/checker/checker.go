@@ -2254,7 +2254,8 @@ func stringKeyName(sl *ast.StringLit) (string, token.Span, bool) {
 	return name, inner, true
 }
 
-func parseStringLiteral(lit string) (string, error) {	if len(lit) >= 2 && (lit[0] == '"' || lit[0] == '\'') {
+func parseStringLiteral(lit string) (string, error) {
+	if len(lit) >= 2 && (lit[0] == '"' || lit[0] == '\'') {
 		// Use strconv-ish unquoting for simple cases; Lua escapes differ, so best-effort.
 		inner := lit[1 : len(lit)-1]
 		return inner, nil
