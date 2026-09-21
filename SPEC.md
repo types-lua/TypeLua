@@ -191,7 +191,7 @@ direct = true
 - 解析：最小版本选择（MVS）——依赖的依赖参与求极大；`exact` 为 pin（与 caret 冲突即报错）；同 path 多源/多 revision 即报错（用 `replace` 消解）。
 - 完整性：`fetch` 复现 lock；上游 tag 挪动（同 version 不同 commit）报错，须显式 `get` 升级；`get` 具名升级、其余按 lock 复现。
 - 命令：`mod init`、`mod get <path[@query]>...`（无参=全升）、`mod fetch`、`mod vendor`（拷 `*.tl` 到 `tlua_modules/<path>/` + `modules.txt`）、`mod list [--indirect]`、`mod graph`。
-- 构建集成：`tlua_modules/**/*.tl` 自动参检参编（`dist/tlua_modules/...` 同构输出）；运行时 `require("github.com.foo.bar.baz")`（点转目录，`import ... from "..."` 为其语法糖），`LUA_PATH` 加 `tlua_modules/?.lua`；模块内互引请用全路径。
-- 模块消解（check/build）：点路径先找引用文件同目录，再找配置目录下 `tlua_modules`；命中程序内文件则按依赖序检查并用其 `return M` 类型（循环引用、自引用、缺失目标、`.d.tl` 一律回退 `any`；宏体内拼接出的 require 尽力而为）。
+- 构建集成：`tlua_modules/**/*.tl` 自动参检参编（`dist/tlua_modules/...` 同构输出）；运行时 `require("example.com.greet")`（点转目录，`import ... from "..."` 为其语法糖），`LUA_PATH` 加 `tlua_modules/?.lua;tlua_modules/?/init.lua`；模块内互引请用全路径。
+- 模块消解（check/build）：点路径先找引用文件同目录，再找配置目录下 `tlua_modules`；`example.com.greet` 先试 `greet.tl` 再试包根 `greet/init.tl`（Lua `init.lua` 惯例）；manifest 末段唯一的短名（`greet`）亦可（歧义则回退）；命中程序内文件则按依赖序检查并用其 `return M` 类型（循环引用、自引用、缺失目标、`.d.tl` 一律回退 `any`；宏体内拼接出的 require 尽力而为）。
 - 缓存：`~/.tlua/pkg/mod`（`TLUA_MODCACHE` 覆盖；`TLUA_OFFLINE=1` 离线，预热后 fetch/vendor/check 全可用）；`replace` 本地目录记 `commit = "local"`。
 - 限制：`mod tidy`（未用清理）暂无，请手工删依赖；`--offline` 只有环境变量开关。

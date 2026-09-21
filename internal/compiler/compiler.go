@@ -30,6 +30,8 @@ type Program struct {
 	Files []*SourceFile
 	Diags []diag.Diagnostic
 	// Per-file checker diags (same as Diags aggregated).
+	// shorts maps manifest short names to full module paths for this run.
+	shorts map[string]string
 }
 
 func NewProgram(cfg *config.Config) *Program {
@@ -83,6 +85,7 @@ func (p *Program) Check() {
 		StrictNilChecks: p.Cfg.StrictNilChecks(),
 		NoImplicitAny:   p.Cfg.NoImplicitAny(),
 	}
+	p.shorts = p.shortModules()
 	p.checkAll(opt)
 }
 

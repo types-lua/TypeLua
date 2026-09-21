@@ -1,6 +1,6 @@
 --- Mid-level dependency: formats titles using example.com/words.
 --- At runtime it requires the full dotted path from tlua_modules root.
-import W from "example.com.words.words"
+import W from "example.com.words"
 
 local M = {}
 

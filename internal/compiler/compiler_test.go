@@ -3,6 +3,7 @@ package compiler
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -302,5 +303,102 @@ print(n)
 	p.Check()
 	if p.HasErrors() {
 		t.Fatalf("chained requires should resolve:\n%s", p.FormatDiags())
+	}
+}
+
+// diskProject creates a real directory project for manifest-aware tests.
+func diskProject(t *testing.T, files map[string]string) (*Program, string) {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Default(dir)
+	cfg.CompilerOptions.RootDir = "."
+	p := NewProgram(cfg)
+	if err := p.Load(); err != nil {
+		t.Fatal(err)
+	}
+	return p, dir
+}
+
+func TestRequireInitPackage(t *testing.T) {
+	p, _ := diskProject(t, map[string]string{
+		"tlua.toml": "[package]\nname = \"app\"\n\n[dependencies.\"example.com/greet\"]\nversion = \"v1.0.0\"\n",
+		"tlua_modules/example.com/greet/init.tl": `local M = {}
+function M.hello(name: string): string return "hi " .. name end
+return M
+`,
+		"main.tl": `import G from "example.com.greet"
+local s: string = G.hello("x")
+print(s)
+`,
+	})
+	p.Check()
+	if p.HasErrors() {
+		t.Fatalf("package-root require should resolve init.tl:\n%s", p.FormatDiags())
+	}
+}
+
+func TestRequireShortName(t *testing.T) {
+	p, _ := diskProject(t, map[string]string{
+		"tlua.toml": "[package]\nname = \"app\"\n\n[dependencies.\"example.com/greet\"]\nversion = \"v1.0.0\"\n",
+		"tlua_modules/example.com/greet/init.tl": `local M = {}
+function M.hello(name: string): string return "hi " .. name end
+return M
+`,
+		"main.tl": `import G from "greet"
+local s: string = G.hello("x")
+print(s)
+`,
+	})
+	p.Check()
+	if p.HasErrors() {
+		t.Fatalf("unambiguous short name should resolve:\n%s", p.FormatDiags())
+	}
+}
+
+func TestRequireShortAmbiguousStaysAny(t *testing.T) {
+	p, _ := diskProject(t, map[string]string{
+		"tlua.toml": "[package]\nname = \"app\"\n\n[dependencies.\"example.com/a/greet\"]\nversion = \"v1.0.0\"\n\n[dependencies.\"example.com/b/greet\"]\nversion = \"v1.0.0\"\n",
+		"tlua_modules/example.com/a/greet/init.tl": `local M = {}
+function M.hello(name: string): number return 1 end
+return M
+`,
+		"main.tl": `import G from "greet"
+local s: string = G.hello("x")
+print(s)
+`,
+	})
+	p.Check()
+	if p.HasErrors() {
+		t.Fatalf("ambiguous short must degrade to any:\n%s", p.FormatDiags())
+	}
+}
+
+func TestRequireRelativeBeatsVendor(t *testing.T) {
+	p, _ := diskProject(t, map[string]string{
+		"sub.tl": `local M = {}
+function M.k(): string return "rel" end
+return M
+`,
+		"tlua_modules/sub/init.tl": `local M = {}
+function M.k(): number return 1 end
+return M
+`,
+		"main.tl": `import S from "sub"
+local s: string = S.k()
+print(s)
+`,
+	})
+	p.Check()
+	if p.HasErrors() {
+		t.Fatalf("relative require must win over vendor:\n%s", p.FormatDiags())
 	}
 }

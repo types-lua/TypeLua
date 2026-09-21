@@ -11,8 +11,13 @@ import (
 
 // Cross-file require resolution for Program.Check: dotted require paths
 // map to program files, which check in dependency order with memoization:
-//   1. relative to the requiring file's directory ("math_utils", "sub.mod"),
-//   2. under <config-dir>/tlua_modules (vendored dependencies).
+//
+//	import G from "example.com.greet"  (package root: greet/init.tl)
+//	import G from "example.com.greet.greet"  (plain file)
+//	import G from "greet"  (manifest short name, unambiguous last segment)
+//
+// Lookup order per base (requiring file's directory, then tlua_modules):
+// `<path>.tl` first, then `<path>/init.tl` (Lua init.lua convention).
 // Unresolved targets (missing files, .d.tl stubs, cycles in progress)
 // stay `any`, preserving classic single-file behavior as fallback.
 
@@ -28,20 +33,57 @@ func (p *Program) fileByPath(path string) *SourceFile {
 	return nil
 }
 
+// shortModules maps unambiguous manifest short names (last path segment)
+// to full module paths. Ambiguous shorts are dropped (full paths still
+// work); a missing/broken manifest means no short names.
+func (p *Program) shortModules() map[string]string {
+	proj, err := mod.LoadProject(p.Cfg.Dir)
+	if err != nil {
+		return nil
+	}
+	counts := map[string]int{}
+	for path := range proj.Manifest.Deps {
+		counts[lastSegment(path)]++
+	}
+	out := map[string]string{}
+	for path := range proj.Manifest.Deps {
+		if short := lastSegment(path); counts[short] == 1 {
+			out[short] = path
+		}
+	}
+	return out
+}
+
+func lastSegment(path string) string {
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
 // resolveRequire maps a dotted require path to a program source file.
 func (p *Program) resolveRequire(from *SourceFile, dotted string) *SourceFile {
+	if full, ok := p.shorts[dotted]; ok {
+		dotted = full
+	}
 	segs := strings.Split(dotted, ".")
 	for _, s := range segs {
 		if s == "" {
 			return nil
 		}
 	}
-	rel := filepath.FromSlash(strings.Join(segs, "/")) + ".tl"
-	if sf := p.fileByPath(filepath.Join(filepath.Dir(from.Path), rel)); sf != nil {
-		return sf
+	rel := filepath.FromSlash(strings.Join(segs, "/"))
+	bases := []string{
+		filepath.Join(filepath.Dir(from.Path), rel),
+		filepath.Join(p.Cfg.Dir, mod.VendorDir, rel),
 	}
-	if sf := p.fileByPath(filepath.Join(p.Cfg.Dir, mod.VendorDir, rel)); sf != nil {
-		return sf
+	for _, base := range bases {
+		if sf := p.fileByPath(base + ".tl"); sf != nil {
+			return sf
+		}
+		if sf := p.fileByPath(filepath.Join(base, "init.tl")); sf != nil {
+			return sf
+		}
 	}
 	return nil
 }
