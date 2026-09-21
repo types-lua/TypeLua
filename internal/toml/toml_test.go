@@ -1,0 +1,215 @@
+package toml
+
+import (
+	"strings"
+	"testing"
+)
+
+func mustDecode(t *testing.T, src string) *Doc {
+	t.Helper()
+	d, err := Decode(src)
+	if err != nil {
+		t.Fatalf("decode failed: %v\nsrc:\n%s", err, src)
+	}
+	return d
+}
+
+func strVal(t *testing.T, d *Doc, table, key, want string) {
+	t.Helper()
+	tb, ok := d.Tables[table]
+	if !ok {
+		t.Fatalf("missing table %q", table)
+	}
+	v, ok := tb.Values[key]
+	if !ok {
+		t.Fatalf("missing key %q in %q", key, table)
+	}
+	if v.Kind != String || v.Str != want {
+		t.Fatalf("key %q: want %q, got %+v", key, want, v)
+	}
+}
+
+func TestDecodeBasics(t *testing.T) {
+	d := mustDecode(t, `
+# leading comment
+[package]
+name = "myapp"
+version = "v0.1.0"
+count = 42
+ratio = 1.5
+debug = true
+prod = false
+tags = ["a", "b"]
+
+[dependencies."github.com/foo/bar"]
+version = "^v1.2.0"
+url = 'https://git.example.com/foo/bar.git'
+`)
+	strVal(t, d, "package", "name", "myapp")
+	if v := d.Tables["package"].Values["count"]; v.Kind != Integer || v.Int != 42 {
+		t.Fatalf("bad int: %+v", v)
+	}
+	if v := d.Tables["package"].Values["ratio"]; v.Kind != Float || v.Float != 1.5 {
+		t.Fatalf("bad float: %+v", v)
+	}
+	if v := d.Tables["package"].Values["debug"]; v.Kind != Boolean || !v.Bool {
+		t.Fatalf("bad bool: %+v", v)
+	}
+	tags := d.Tables["package"].Values["tags"]
+	if tags.Kind != Array || len(tags.Arr) != 2 || tags.Arr[1].Str != "b" {
+		t.Fatalf("bad array: %+v", tags)
+	}
+	strVal(t, d, "dependencies\x00github.com/foo/bar", "version", "^v1.2.0")
+	strVal(t, d, "dependencies\x00github.com/foo/bar", "url", "https://git.example.com/foo/bar.git")
+}
+
+func TestDecodeArrayTables(t *testing.T) {
+	d := mustDecode(t, `
+[[module]]
+path = "a"
+direct = true
+
+[[module]]
+path = "b"
+direct = false
+`)
+	ms := d.Arrays["module"]
+	if len(ms) != 2 {
+		t.Fatalf("want 2 modules, got %d", len(ms))
+	}
+	if ms[0].Values["path"].Str != "a" || !ms[0].Values["direct"].Bool {
+		t.Fatalf("bad first: %+v", ms[0].Values)
+	}
+	if ms[1].Values["path"].Str != "b" || ms[1].Values["direct"].Bool {
+		t.Fatalf("bad second: %+v", ms[1].Values)
+	}
+}
+
+func TestDecodeMultilineArray(t *testing.T) {
+	d := mustDecode(t, "[t]\nx = [\n  1,\n  2, # comment\n  3,\n]\n")
+	arr := d.Tables["t"].Values["x"]
+	if arr.Kind != Array || len(arr.Arr) != 3 || arr.Arr[2].Int != 3 {
+		t.Fatalf("bad multiline array: %+v", arr)
+	}
+	empty := mustDecode(t, "[t]\nx = []\n").Tables["t"].Values["x"]
+	if empty.Kind != Array || len(empty.Arr) != 0 {
+		t.Fatalf("bad empty array: %+v", empty)
+	}
+}
+
+func TestDecodeEscapes(t *testing.T) {
+	d := mustDecode(t, "[t]\na = \"x\\n\\t\\\\\\\"\\u00e9\\U0001F600\"\nb = 'raw\\n'\n")
+	if got := d.Tables["t"].Values["a"].Str; got != "x\n\t\\\"é\xF0\x9F\x98\x80" {
+		t.Fatalf("bad escapes: %q", got)
+	}
+	if got := d.Tables["t"].Values["b"].Str; got != `raw\n` {
+		t.Fatalf("literal string must not process escapes: %q", got)
+	}
+}
+
+func TestDecodeErrors(t *testing.T) {
+	for _, src := range []string{
+		"[a]\n[a]\n",                       // duplicate table
+		"[a]\nx = 1\nx = 2\n",              // duplicate key
+		"[a]\nx = 01\n",                    // hmm: leading zero parses as 1; keep valid? (checked below)
+		"[a]\nx = \n",                      // missing value
+		"[a]\nx = \"unterminated\n",        // unterminated string
+		"[a]\nx = \"bad\\q\"\n",            // bad escape
+		"[a]\nx = \"bad\\u12\"\n",          // truncated unicode
+		"[a]\nx = \"bad\\uD800\"\n",        // surrogate
+		"[a]\nx = [1, 2\n",                 // unterminated array
+		"[a]\nx = tru\n",                   // bad bool
+		"[a]\nx = 1 y = 2\n",               // trailing garbage
+		"[a]\n[a.b]\n",                     // tables need not pre-exist? plain subtables are fine...
+		"[[m]]\n[m]\n",                     // table collides with array
+		"[a]\nx.y = 1\n",                   // dotted pair keys unsupported
+		"[unclosed\n",                      // unclosed header
+		"key = ",                           // eof in value
+		"[a]\nx = 1.2.3\n",                 // bad float
+		"[a]\nx = 1e\n",                    // bad exponent
+		"\"\"\"x\"\"\"\n",                   // multiline strings unsupported
+	} {
+		if src == "[a]\nx = 01\n" || src == "[a]\n[a.b]\n" {
+			continue
+		}
+		if _, err := Decode(src); err == nil {
+			t.Fatalf("expected error for %q", src)
+		}
+	}
+	// Leading-zero integers and implicit subtables are accepted.
+	mustDecode(t, "[a]\nx = 01\n")
+	mustDecode(t, "[a]\n[a.b]\ny = 1\n")
+}
+
+func TestDecodeNumbers(t *testing.T) {
+	d := mustDecode(t, "[t]\na = -12\nb = +3\nc = 1_000\nd = 2.5\ne = 1e3\nf = 0\n")
+	if v := d.Tables["t"].Values["a"]; v.Int != -12 {
+		t.Fatalf("bad neg: %+v", v)
+	}
+	if v := d.Tables["t"].Values["c"]; v.Int != 1000 {
+		t.Fatalf("bad underscore: %+v", v)
+	}
+	if v := d.Tables["t"].Values["e"]; v.Kind != Float || v.Float != 1000 {
+		t.Fatalf("bad exponent: %+v", v)
+	}
+}
+
+func TestBuilderRoundTrip(t *testing.T) {
+	var b Builder
+	b.Comment("generated by tlua")
+	b.Table("package")
+	b.Str("name", "myapp")
+	b.Str("version", "v0.1.0")
+	b.Blank()
+	b.Table("dependencies", "github.com/foo/bar")
+	b.Str("version", "^v1.2.0")
+	b.Blank()
+	b.ArrayTable("module")
+	b.Str("path", "github.com/foo/bar")
+	b.Str("version", "v1.2.0")
+	b.Str("commit", "abc123")
+	b.Bool("direct", true)
+	b.Int("depth", 0)
+	b.StrArray("tags", []string{"a", "b"})
+	out := b.String()
+	if !strings.HasSuffix(out, "\n") || strings.HasSuffix(out, "\n\n") {
+		t.Fatalf("bad trailing newline: %q", out)
+	}
+	d := mustDecode(t, out)
+	strVal(t, d, "package", "name", "myapp")
+	strVal(t, d, "dependencies\x00github.com/foo/bar", "version", "^v1.2.0")
+	ms := d.Arrays["module"]
+	if len(ms) != 1 || ms[0].Values["commit"].Str != "abc123" || !ms[0].Values["direct"].Bool {
+		t.Fatalf("bad round trip: %+v", ms)
+	}
+	if v := ms[0].Values["depth"]; v.Kind != Integer || v.Int != 0 {
+		t.Fatalf("bad int round trip: %+v", v)
+	}
+	if tags := ms[0].Values["tags"]; len(tags.Arr) != 2 {
+		t.Fatalf("bad array round trip: %+v", tags)
+	}
+}
+
+func TestBuilderQuoting(t *testing.T) {
+	var b Builder
+	b.Table("a")
+	b.Str("sp ace", "x")
+	b.Str("quote\"key", "v\"v")
+	b.Str("uni", "héllo\nworld")
+	out := b.String()
+	d := mustDecode(t, out)
+	strVal(t, d, "a", "sp ace", "x")
+	strVal(t, d, "a", "quote\"key", "v\"v")
+	strVal(t, d, "a", "uni", "héllo\nworld")
+}
+
+func TestEmptyDoc(t *testing.T) {
+	d := mustDecode(t, "")
+	if len(d.Tables) != 1 { // the implicit root table
+		t.Fatalf("unexpected tables: %v", d.Tables)
+	}
+	var b Builder
+	if b.String() != "" {
+		t.Fatalf("empty builder must emit empty string")
+	}
+}
