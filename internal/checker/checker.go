@@ -15,6 +15,9 @@ type Options struct {
 	Strict          bool
 	StrictNilChecks bool
 	NoImplicitAny   bool
+	// Target selects version-gated builtins ("5.4" default, "5.1" hides
+	// 5.4-only APIs like coroutine.close). Empty means latest.
+	Target string
 	// RequireTypes maps dotted require paths ("a.b.c") to module types
 	// resolved by the driver (nil = every require is any, classic mode).
 	RequireTypes map[string]types.Type

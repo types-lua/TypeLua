@@ -47,9 +47,10 @@ func (c *Checker) defineBuiltins(sc *Scope) {
 	sc.vars["self"] = nil // placeholder; defined per-method.
 	delete(sc.vars, "self")
 	// Modules as any.
-	for _, m := range []string{"table", "string", "math", "io", "os", "coroutine", "debug", "package", "utf8", "bit32"} {
+	for _, m := range []string{"table", "string", "math", "io", "os", "debug", "package", "utf8", "bit32"} {
 		sc.vars[m] = &Symbol{Name: m, Kind: symVar, Type: types.Any}
 	}
+	sc.vars["coroutine"] = &Symbol{Name: "coroutine", Kind: symVar, Type: c.coroutineModule()}
 	// unpack compat.
 	sc.vars["unpack"] = &Symbol{Name: "unpack", Kind: symFunc, Type: &types.Func{HasVarArg: true, VarArg: anyT, Returns: []types.Type{anyT}}}
 	for _, s := range sc.vars {

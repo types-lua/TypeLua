@@ -739,3 +739,113 @@ class Box<T> {
 local x: `+nested+` = nil as any
 `)
 }
+
+func checkSrcOpt(src string, opt Options) []string {
+	f, pdiags := parser.ParseFile("test.tl", src)
+	if len(pdiags) != 0 {
+		var out []string
+		for _, d := range pdiags {
+			out = append(out, "parse: "+d.String())
+		}
+		return out
+	}
+	var out []string
+	for _, d := range CheckFile(f, opt) {
+		out = append(out, d.String())
+	}
+	return out
+}
+
+func TestCoroutine(t *testing.T) {
+	expectOK(t, `
+local co = coroutine.create(function() print("hi") end)
+local ok: boolean = coroutine.resume(co)
+local ok2, v = coroutine.resume(co, 1, "x")
+local st: string = coroutine.status(co)
+local w = coroutine.wrap(function(a: number) return a end)
+local t, main = coroutine.running()
+local y: boolean = coroutine.isyieldable()
+coroutine.close(co)
+print(ok, ok2, v, st, w, t, main, y)
+`)
+	// create rejects non-functions; resume/status/close need threads.
+	expectErr(t, `local co = coroutine.create(42)`)
+	expectErr(t, `
+local co = coroutine.create(function() end)
+coroutine.resume(123)
+`)
+	expectErr(t, `
+local co = coroutine.create(function() end)
+coroutine.status("x")
+`)
+	// Status literals are precise.
+	expectErr(t, `
+local co = coroutine.create(function() end)
+local n: number = coroutine.status(co)
+`)
+	expectOK(t, `
+local co = coroutine.create(function() end)
+local st = coroutine.status(co)
+if st == "dead" then
+  print("done")
+else
+  print("live")
+end
+`)
+}
+
+func TestCoroutine51(t *testing.T) {
+	opt := Options{Strict: true, StrictNilChecks: true, Target: "5.1"}
+	ok := `
+local co = coroutine.create(function() end)
+local ok, v = coroutine.resume(co)
+local st = coroutine.status(co)
+print(ok, v, st)
+`
+	if ds := checkSrcOpt(ok, opt); len(ds) != 0 {
+		t.Fatalf("5.1 core should pass, got %v", ds)
+	}
+	bad := `
+local co = coroutine.create(function() end)
+coroutine.close(co)
+`
+	if ds := checkSrcOpt(bad, opt); len(ds) == 0 {
+		t.Fatalf("close must fail on 5.1")
+	}
+	bad2 := `
+local y = coroutine.isyieldable()
+`
+	if ds := checkSrcOpt(bad2, opt); len(ds) == 0 {
+		t.Fatalf("isyieldable must fail on 5.1")
+	}
+}
+
+func TestLiteralNarrowing(t *testing.T) {
+	expectOK(t, `
+local function f(s: string | nil): string
+  if s == "a" then return s end
+  return ""
+end
+`)
+	expectOK(t, `
+type Level = "low" | "high"
+local function f(l: Level): string
+  if l ~= "low" then return l end
+  return "low"
+end
+`)
+	expectOK(t, `
+local function get(n: { mode?: string }): string
+  if n.mode == "fast" then
+    return n.mode
+  end
+  return ""
+end
+`)
+	// Mismatched literal stays put (no unsound narrowing).
+	expectOK(t, `
+local x: number = 1
+if x == "a" then print("impossible") end
+print(x)
+`)
+}

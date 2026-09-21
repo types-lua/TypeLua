@@ -84,6 +84,7 @@ func (p *Program) Check() {
 		Strict:          p.Cfg.Strict(),
 		StrictNilChecks: p.Cfg.StrictNilChecks(),
 		NoImplicitAny:   p.Cfg.NoImplicitAny(),
+		Target:          p.Cfg.Target(),
 	}
 	p.shorts = p.shortModules()
 	p.checkAll(opt)

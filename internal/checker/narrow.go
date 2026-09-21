@@ -1,6 +1,8 @@
 package checker
 
 import (
+	"strings"
+
 	"github.com/typelua/typelua/internal/ast"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
@@ -17,6 +19,7 @@ const (
 	narrowNil narrowKind = iota
 	narrowTypeof
 	narrowTruthy
+	narrowLit
 )
 
 // narrowOp is one root refinement. Ops apply sequentially against the
@@ -30,6 +33,8 @@ type narrowOp struct {
 	lit    string // narrowTypeof: `type()` literal
 	toType bool   // narrowTypeof: narrow towards (vs away from) lit
 	truthy bool   // narrowTruthy: Lua truthiness branch
+	rawLit string // narrowLit: raw string-literal spelling (`"a"`)
+	toLit  bool   // narrowLit: narrow towards (vs away from) the literal
 }
 
 // applyNarrowing installs shadowed (narrowed) variable types in the current scope for a branch.
@@ -53,6 +58,10 @@ func (c *Checker) applyNarrowing(cond ast.Expr, truthy bool) {
 		case narrowTruthy:
 			newT, ok = refineRootType(sym.Type, op.fields, func(cur types.Type) (types.Type, bool) {
 				return narrowTruthyOfType(cur, op.truthy)
+			})
+		case narrowLit:
+			newT, ok = refineRootType(sym.Type, op.fields, func(cur types.Type) (types.Type, bool) {
+				return narrowLitOfType(cur, op.rawLit, op.toLit)
 			})
 		}
 		if !ok {
@@ -99,6 +108,23 @@ func (c *Checker) narrowCond(cond ast.Expr, truthy bool) []narrowOp {
 				isEqualOp := b.Op == token.Eq
 				narrowTo := (isEqualOp == truthy)
 				return []narrowOp{{root: root, fields: fields, kind: narrowTypeof, lit: lit, toType: narrowTo}}
+			}
+			// `x == "lit"` / `~=` for plain idents and member paths.
+			if id, lit, ok := asLitCompare(b.L, b.R); ok {
+				isEqualOp := b.Op == token.Eq
+				return []narrowOp{{root: id, kind: narrowLit, rawLit: lit, toLit: isEqualOp == truthy}}
+			}
+			if id, lit, ok := asLitCompare(b.R, b.L); ok {
+				isEqualOp := b.Op == token.Eq
+				return []narrowOp{{root: id, kind: narrowLit, rawLit: lit, toLit: isEqualOp == truthy}}
+			}
+			if root, fields, lit, ok := asLitPathCompare(b.L, b.R); ok {
+				isEqualOp := b.Op == token.Eq
+				return []narrowOp{{root: root, fields: fields, kind: narrowLit, rawLit: lit, toLit: isEqualOp == truthy}}
+			}
+			if root, fields, lit, ok := asLitPathCompare(b.R, b.L); ok {
+				isEqualOp := b.Op == token.Eq
+				return []narrowOp{{root: root, fields: fields, kind: narrowLit, rawLit: lit, toLit: isEqualOp == truthy}}
 			}
 		}
 		// `a and b`: in true branch both hold; in false unknown.
@@ -298,6 +324,107 @@ func asTypeofPathCompare(b *ast.BinOpExpr) (string, []string, string, bool) {
 		}
 	}
 	return "", nil, "", false
+}
+
+// asLitCompare matches `x == "lit"` forms, returning the variable name
+// and the raw literal spelling.
+func asLitCompare(target, lit ast.Expr) (string, string, bool) {
+	id, ok := asIdent(target)
+	if !ok {
+		return "", "", false
+	}
+	sl, ok := lit.(*ast.StringLit)
+	if !ok {
+		return "", "", false
+	}
+	return id, sl.Literal, true
+}
+
+// asLitPathCompare matches `path.to.member == "lit"` forms.
+func asLitPathCompare(target, lit ast.Expr) (string, []string, string, bool) {
+	root, fields, ok := narrowPath(target)
+	if !ok || len(fields) == 0 {
+		return "", nil, "", false
+	}
+	sl, ok := lit.(*ast.StringLit)
+	if !ok {
+		return "", nil, "", false
+	}
+	return root, fields, sl.Literal, true
+}
+
+// normStrLit normalizes a raw string-literal spelling for comparison.
+func normStrLit(raw string) string {
+	s, _ := parseStringLiteral(raw)
+	return strings.Trim(s, `"'`)
+}
+
+// isStringPrimitive reports primitive string types (not literals, not any).
+func isStringPrimitive(t types.Type) bool {
+	if _, ok := t.(*types.Literal); ok {
+		return false
+	}
+	return t.Kind() == types.KString && !isAnyLike(t)
+}
+
+func hasStringPrimitive(ms []types.Type) bool {
+	for _, m := range ms {
+		if isStringPrimitive(m) {
+			return true
+		}
+	}
+	return false
+}
+
+// narrowLitOfType narrows a type by a string-literal comparison (shared by
+// variable and member narrowing). Comparison is spelling-insensitive
+// (`"a"` matches `'a'`); results reuse existing members (never synthesized),
+// and `any` stays `any`.
+func narrowLitOfType(cur types.Type, rawLit string, toLit bool) (types.Type, bool) {
+	want := normStrLit(rawLit)
+	match := func(m types.Type) bool {
+		lit, ok := m.(*types.Literal)
+		if !ok || lit.Base.String() != "string" {
+			return false
+		}
+		return normStrLit(lit.Value) == want
+	}
+	if toLit {
+		if u, ok := cur.(*types.Union); ok {
+			for _, m := range u.Types {
+				if match(m) {
+					return m, true
+				}
+			}
+			if hasStringPrimitive(u.Types) {
+				return &types.Literal{Value: rawLit, Base: types.String}, true
+			}
+			return nil, false
+		}
+		if match(cur) {
+			return cur, true
+		}
+		if isStringPrimitive(cur) {
+			return &types.Literal{Value: rawLit, Base: types.String}, true
+		}
+		return nil, false
+	}
+	if u, ok := cur.(*types.Union); ok {
+		var rest []types.Type
+		for _, m := range u.Types {
+			if !match(m) {
+				rest = append(rest, m)
+			}
+		}
+		if len(rest) != len(u.Types) {
+			return types.NewUnion(rest), true
+		}
+		return nil, false
+	}
+	if match(cur) {
+		return types.Never, true
+	}
+	return nil, false
 }
 
 // narrowNilOfType narrows a type by nil-ness (shared by variable and
