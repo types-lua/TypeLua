@@ -584,7 +584,153 @@ func TestStringIndexAndImplKeys(t *testing.T) {
 	}
 }
 
-func TestRenameTypeConflict(t *testing.T) {	h := newHarness("test")
+const genericURI = "file:///test/generic.tl"
+const genericSrc = `class Box<T> {
+  v: T,
+  constructor(v: T) self.v = v end,
+  get(): T return self.v end,
+}
+local b = Box.new<string>("hi")
+local v = b:get()
+local w = b.v
+`
+
+func TestGenericMemberRename(t *testing.T) {
+	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": genericURI, "version": 1, "text": genericSrc,
+	}})
+	doc := map[string]any{"uri": genericURI}
+	// Rename get through a generic instantiation: def (3) + call (6).
+	h.send("textDocument/rename", 100, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 6, "character": 13},
+		"newName": "fetch",
+	})
+	// References of the value field: def (1) + self uses (2, 3) + use (7).
+	h.send("textDocument/references", 101, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 7, "character": 12},
+		"context": map[string]any{"includeDeclaration": true},
+	})
+	h.send("shutdown", 102, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+	m := findMsg(msgs, "100")
+	if m == nil || m.Error != nil {
+		t.Fatalf("generic method rename failed: %+v", m)
+	}
+	var edit struct {
+		Changes map[string][]struct {
+			Range struct {
+				Start struct {
+					Line int `json:"line"`
+				} `json:"start"`
+			} `json:"range"`
+		} `json:"changes"`
+	}
+	if err := json.Unmarshal(m.Result, &edit); err != nil {
+		t.Fatal(err)
+	}
+	got := edit.Changes[genericURI]
+	if len(got) != 2 || got[0].Range.Start.Line != 3 || got[1].Range.Start.Line != 6 {
+		t.Fatalf("bad generic rename: %+v", got)
+	}
+	refs := findMsg(msgs, "101")
+	if refs == nil {
+		t.Fatalf("no references response")
+	}
+	var rlocs []struct {
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(refs.Result, &rlocs); err != nil {
+		t.Fatal(err)
+	}
+	if len(rlocs) != 4 {
+		t.Fatalf("bad generic references: %+v", rlocs)
+	}
+	for i, want := range []int{1, 2, 3, 7} {
+		if rlocs[i].Range.Start.Line != want {
+			t.Fatalf("bad generic references: %+v", rlocs)
+		}
+	}
+}
+
+func TestMemberCompletion(t *testing.T) {
+	h := newHarness("test")
+	openMembers(h)
+	doc := map[string]any{"uri": memberURI}
+	// After `d.`: instance members, no keywords.
+	h.send("textDocument/completion", 110, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 15, "character": 12},
+	})
+	// After `d:`: same members.
+	h.send("textDocument/completion", 111, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 16, "character": 12},
+	})
+	// After `Color.`: enum members.
+	h.send("textDocument/completion", 112, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 13, "character": 23},
+	})
+	h.send("shutdown", 113, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+	labels := func(id string) []string {
+		t.Helper()
+		m := findMsg(msgs, id)
+		if m == nil {
+			t.Fatalf("no completion %s", id)
+		}
+		var res struct {
+			Items []struct {
+				Label string `json:"label"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(m.Result, &res); err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, it := range res.Items {
+			out = append(out, it.Label)
+		}
+		return out
+	}
+	has := func(ls []string, want ...string) bool {
+		set := map[string]bool{}
+		for _, l := range ls {
+			set[l] = true
+		}
+		for _, w := range want {
+			if !set[w] {
+				return false
+			}
+		}
+		return true
+	}
+	dot := labels("110")
+	if !has(dot, "name", "greet") {
+		t.Fatalf("dot completion missing members: %v", dot)
+	}
+	if has(dot, "and", "while") {
+		t.Fatalf("dot completion must not list keywords: %v", dot)
+	}
+	colon := labels("111")
+	if !has(colon, "greet") {
+		t.Fatalf("colon completion missing method: %v", colon)
+	}
+	enum := labels("112")
+	if !has(enum, "Red", "Blue") {
+		t.Fatalf("enum completion missing members: %v", enum)
+	}
+}
+
+func TestRenameTypeConflict(t *testing.T) {
+	h := newHarness("test")
 	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
 	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
 		"uri": memberURI, "version": 1,
