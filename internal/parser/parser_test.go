@@ -261,3 +261,45 @@ func TestDeepNestingGuard(t *testing.T) {
 		}
 	}
 }
+
+func TestParseImport(t *testing.T) {
+	f := mustParse(t, `import G: Api from "example.com.greet.greet"`)
+	im, ok := f.Block.Stmts[0].(*ast.ImportStmt)
+	if !ok || im.Name == nil || im.Name.Name != "G" || im.Type == nil || im.Path.Literal != `"example.com.greet.greet"` {
+		t.Fatalf("bad import %+v", f.Block.Stmts[0])
+	}
+	f2 := mustParse(t, `import H from "example.com.other"`)
+	im2, ok := f2.Block.Stmts[0].(*ast.ImportStmt)
+	if !ok || im2.Name.Name != "H" || im2.Type != nil {
+		t.Fatalf("bad untyped import %+v", f2.Block.Stmts[0])
+	}
+	f3 := mustParse(t, `import "example.com.side"`)
+	im3, ok := f3.Block.Stmts[0].(*ast.ImportStmt)
+	if !ok || im3.Name != nil {
+		t.Fatalf("bad side-effect import %+v", f3.Block.Stmts[0])
+	}
+	// `import` stays a plain identifier everywhere else.
+	mustParse(t, `local import = 1`)
+	mustParse(t, `import("x")`)
+	mustParse(t, `import.foo()`)
+	mustParse(t, "local x = import")
+	// A bare `import` followed by a string on the NEXT line never glues
+	// into an import (it stays a string-call expression statement).
+	f4 := mustParse(t, "import\n\"x\"\n")
+	if len(f4.Block.Stmts) != 1 {
+		t.Fatalf("expected one statement, got %d", len(f4.Block.Stmts))
+	}
+	if _, ok := f4.Block.Stmts[0].(*ast.ImportStmt); ok {
+		t.Fatalf("newline must not glue an import")
+	}
+	// Errors, all recoverable.
+	for _, src := range []string{
+		`import G from`,
+		`import G: number from 42`,
+		`import 42 from "x"`,
+	} {
+		if _, diags := ParseFile("t.tl", src); len(diags) == 0 {
+			t.Fatalf("expected errors for %q", src)
+		}
+	}
+}

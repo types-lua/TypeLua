@@ -81,6 +81,9 @@ func (p *Parser) parseReturn() *ast.ReturnStmt {
 }
 
 func (p *Parser) parseStmt() ast.Stmt {
+	if p.isImportStart() {
+		return p.parseImport()
+	}
 	switch p.cur().Kind {
 	case token.Semi:
 		s := p.next()
@@ -129,6 +132,70 @@ func (p *Parser) parseStmt() ast.Stmt {
 	default:
 		return p.parseExprStmtOrAssign()
 	}
+}
+
+// isImportStart peeks `import "path"` / `import Name from` (soft keyword;
+// `import` stays a plain identifier everywhere else, including the
+// parenthesized call `import("x")`). The token after `import` must sit on
+// the same line, so a bare `import` statement followed by a string on the
+// next line is never glued into an import.
+func (p *Parser) isImportStart() bool {
+	if p.cur().Kind != token.Ident || p.cur().Literal != "import" {
+		return false
+	}
+	n1 := p.peek(1)
+	if n1.Span.Start.Line != p.cur().Span.Start.Line {
+		return false
+	}
+	if n1.Kind == token.String {
+		return true
+	}
+	if n1.Kind == token.Ident || isSoftKw(n1.Kind) {
+		n2 := p.peek(2)
+		// `import Name from` or `import Name: Type from`. (`import Name`
+		// alone can never start a valid expression statement, so the
+		// colon form needs no deeper lookahead.)
+		if (n2.Kind == token.Ident && n2.Literal == "from") || n2.Kind == token.Colon {
+			return true
+		}
+	}
+	return false
+}
+
+// parseImport parses the require sugar:
+//
+//	import "path"
+//	import Name from "path"
+//	import Name: Type from "path"
+func (p *Parser) parseImport() ast.Stmt {
+	start := p.next() // import
+	if p.at(token.String) {
+		t := p.next()
+		return &ast.ImportStmt{Path: &ast.StringLit{Literal: t.Literal, S: t.Span}, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+	}
+	name := p.parseIdentAllowSoft()
+	if name == nil {
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
+	var ty ast.TypeNode
+	if p.at(token.Colon) {
+		p.next()
+		ty = p.parseType()
+	}
+	if !p.at(token.Ident) || p.cur().Literal != "from" {
+		p.errorf("TL2016", p.cur().Span, "expected 'from' after import name, got %s", p.cur().Kind)
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
+	p.next() // from
+	if !p.at(token.String) {
+		p.errorf("TL2016", p.cur().Span, "expected module path string after 'from', got %s", p.cur().Kind)
+		p.synchronize()
+		return &ast.EmptyStmt{S: start.Span}
+	}
+	t := p.next()
+	return &ast.ImportStmt{Name: name, Type: ty, Path: &ast.StringLit{Literal: t.Literal, S: t.Span}, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
 func (p *Parser) parseDo() ast.Stmt {

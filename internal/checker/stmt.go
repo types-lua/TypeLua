@@ -78,6 +78,8 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 	case *ast.MacroDef:
 		// Unreachable via CheckFile (expansion runs first); defensive.
 		c.errorf("TL3700", st.Span(), "internal error: unexpanded macro '%s'", n.Name.Name)
+	case *ast.ImportStmt:
+		c.checkImport(n)
 	default:
 		c.errorf("TL3000", st.Span(), "unsupported statement %T", st)
 	}
@@ -217,6 +219,23 @@ func isPureList(lit *ast.TableLit) bool {
 		}
 	}
 	return true
+}
+
+// checkImport binds `import Name [: Type] from "path"` like
+// `local Name [: Type] = require("path")` (require returns any, which
+// flows into any annotation). The side-effect form binds nothing.
+func (c *Checker) checkImport(n *ast.ImportStmt) {
+	if n.Name == nil {
+		return
+	}
+	want := types.Type(types.Any)
+	if n.Type != nil {
+		want = c.resolveType(n.Type)
+	}
+	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
+		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
+	}
+	c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: want, Span: n.Name.Span()}))
 }
 
 func (c *Checker) checkLocalFunc(n *ast.LocalFuncDef) {

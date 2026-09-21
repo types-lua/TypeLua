@@ -52,6 +52,10 @@ func (s *Server) documentSymbols(raw json.RawMessage) any {
 			for _, id := range n.Names {
 				add(id.Name, 13, id.Span(), id.Span())
 			}
+		case *ast.ImportStmt:
+			if n.Name != nil {
+				add(n.Name.Name, 13, n.Span(), n.Name.Span())
+			}
 		case *ast.MacroDef:
 			add(n.Name.Name+" (macro)", 12, n.Span(), n.Name.Span())
 		}

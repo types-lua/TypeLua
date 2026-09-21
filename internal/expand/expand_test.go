@@ -194,3 +194,24 @@ local r = mk(1)
 		t.Fatalf("inner ... must survive:\n%s", out)
 	}
 }
+
+func TestImportInMacro(t *testing.T) {
+	// An import inside a macro body binds hygienically like a local.
+	out, codes := expandEmit(t, `
+macro m(q) do
+  import q from "p"
+  print(q)
+end
+m(42)
+`)
+	if len(codes) != 0 {
+		t.Fatalf("diags: %v", codes)
+	}
+	// Bound once, used once, both renamed; the argument never leaks in.
+	if strings.Count(out, "__tl_macro_1__q") != 2 {
+		t.Fatalf("import binding not hygienic:\n%s", out)
+	}
+	if strings.Contains(out, "print(42)") {
+		t.Fatalf("argument captured:\n%s", out)
+	}
+}

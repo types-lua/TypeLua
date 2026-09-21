@@ -41,6 +41,16 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 			}
 		}
 		e.nl()
+	case *ast.ImportStmt:
+		// Desugar: `local Name = require("path")` (bare require form).
+		e.pad()
+		if n.Name != nil {
+			e.write("local " + n.Name.Name + " = ")
+		}
+		e.write("require(")
+		e.emitExpr(n.Path)
+		e.write(")")
+		e.nl()
 	case *ast.LocalFuncDef:
 		e.pad()
 		e.write("local function " + n.Name.Name + "(")

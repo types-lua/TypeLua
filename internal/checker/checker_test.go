@@ -634,3 +634,29 @@ type Point = { x: number, y: number }
 local ro: RO<Point> = { x = 1, y = 2 }
 ro.x = 2`)
 }
+
+func TestImportStmt(t *testing.T) {
+	// Annotated import binds the declared type.
+	expectOK(t, `
+type GreetApi = { hello(name: string): string }
+import G: GreetApi from "example.com.greet.greet"
+local s: string = G.hello("x")
+`)
+	// Unannotated import is any.
+	expectOK(t, `
+import H from "example.com.other"
+local v = H.anything
+`)
+	// Side-effect form binds nothing.
+	expectOK(t, `import "example.com.side"`)
+	// Misuse still errors.
+	expectErr(t, `
+type GreetApi = { hello(name: string): string }
+import G: GreetApi from "example.com.greet.greet"
+local n: number = G
+`)
+	expectErr(t, `
+import G from "example.com.greet"
+import G from "example.com.other"
+`)
+}

@@ -193,6 +193,12 @@ func (r *renameCtx) renameStmt(st ast.Stmt) {
 			r.bindVar(id.Name)
 			id.Name = r.vars[id.Name]
 		}
+	case *ast.ImportStmt:
+		// The bound name is macro-local like any local.
+		if n.Name != nil {
+			r.bindVar(n.Name.Name)
+			n.Name.Name = r.vars[n.Name.Name]
+		}
 	case *ast.LocalFuncDef:
 		r.bindVar(n.Name.Name)
 		n.Name.Name = r.vars[n.Name.Name]

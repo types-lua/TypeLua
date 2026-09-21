@@ -173,6 +173,13 @@ func copyStmt(st ast.Stmt) ast.Stmt {
 		c.Names = copyIdents(n.Names)
 		c.Values = copyExprs(n.Values)
 		return &c
+	case *ast.ImportStmt:
+		c := *n
+		if n.Name != nil {
+			v := *n.Name
+			c.Name = &v
+		}
+		return &c
 	case *ast.LocalFuncDef:
 		c := *n
 		l := *n.Name

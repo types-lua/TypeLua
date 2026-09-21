@@ -163,6 +163,11 @@ func substStmt(st ast.Stmt, s *substCtx) {
 		for _, id := range n.Names {
 			s.pushShadow(id.Name)
 		}
+	case *ast.ImportStmt:
+		// The bound name shadows macro parameters from here on.
+		if n.Name != nil {
+			s.pushShadow(n.Name.Name)
+		}
 	case *ast.LocalFuncDef:
 		// Body sees the name (recursion); params shadow inside only.
 		s.pushShadow(n.Name.Name)

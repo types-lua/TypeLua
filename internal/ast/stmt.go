@@ -60,6 +60,23 @@ type LocalFuncDef struct {
 func (*LocalFuncDef) stmtNode()         {}
 func (n *LocalFuncDef) Span() token.Span { return n.S }
 
+// ImportStmt is require sugar:
+//
+//	import "path"                 (side-effect require)
+//	import Name from "path"       (local binding, any)
+//	import Name: Type from "path" (annotated binding)
+// It desugars to `local Name = require("path")` (bare require for the
+// side-effect form); `import` stays a plain identifier elsewhere.
+type ImportStmt struct {
+	Name *Ident    // nil for side-effect imports
+	Type TypeNode  // optional annotation
+	Path *StringLit
+	S    token.Span
+}
+
+func (*ImportStmt) stmtNode()          {}
+func (n *ImportStmt) Span() token.Span { return n.S }
+
 type FuncDefStmt struct {
 	Name     *FuncName
 	Generics []*GenericParam

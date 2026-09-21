@@ -1,9 +1,6 @@
 --- Mid-level dependency: formats titles using example.com/words.
 --- At runtime it requires the full dotted path from tlua_modules root.
-local W = require("example.com.words.words") as {
-  shout(s: string): string,
-  count(s: string): integer,
-}
+import W: { shout(s: string): string, count(s: string): integer } from "example.com.words.words"
 
 local M = {}
 

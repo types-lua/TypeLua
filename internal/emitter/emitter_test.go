@@ -84,3 +84,18 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+func TestEmitImport(t *testing.T) {
+	out := emit(t, `import G: Api from "example.com.greet.greet"`)
+	if out != "local G = require(\"example.com.greet.greet\")\n" {
+		t.Fatalf("got %q", out)
+	}
+	out = emit(t, `import H from "example.com.other"`)
+	if out != "local H = require(\"example.com.other\")\n" {
+		t.Fatalf("got %q", out)
+	}
+	out = emit(t, `import "example.com.side"`)
+	if out != "require(\"example.com.side\")\n" {
+		t.Fatalf("got %q", out)
+	}
+}
