@@ -2,6 +2,7 @@ package emitter
 
 import (
 	"strings"
+
 	"github.com/typelua/typelua/internal/ast"
 	"github.com/typelua/typelua/internal/sourcemap"
 )
