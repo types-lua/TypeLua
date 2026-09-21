@@ -458,6 +458,54 @@ end
 `)
 }
 
+func TestNarrowingTruthy(t *testing.T) {
+	// `if x then` removes nil.
+	expectOK(t, `
+local function f(x: string | nil): string
+  if x then return x end
+  return ""
+end
+`)
+	expectOK(t, `
+local function f(x: string | nil): string
+  if not x then return "d" end
+  return x
+end
+`)
+	// Booleans narrow to literals.
+	expectOK(t, `
+local function f(b: boolean): boolean
+  if b then return b end
+  return false
+end
+`)
+	// Member truthiness needs no nil comparison.
+	expectOK(t, `
+local function get(n: { next?: { v: number } }): number
+  if n.next then
+    return n.next.v
+  end
+  return -1
+end
+`)
+	// `and` refinements of the same root compose.
+	expectOK(t, `
+local function f(a: { x?: number, y?: string }): number
+  if a.x ~= nil and a.y ~= nil then
+    return a.x
+  end
+  return 0
+end
+`)
+	// Non-nullable values are untouched.
+	expectOK(t, `
+local function f(x: number): number
+  if x then return x end
+  return 0
+end
+`)
+}
+
 func TestNilTolerance(t *testing.T) {
 	// Hand-built broken ASTs (as error recovery may produce) must not crash.
 	broken := []*ast.File{

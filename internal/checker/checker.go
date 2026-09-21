@@ -2594,18 +2594,60 @@ func applySub(t types.Type, sub map[string]types.Type) types.Type {
 
 // ---------- narrowing ----------
 
+// narrowKind selects the type-level refinement of one narrowOp.
+type narrowKind int
+
+const (
+	narrowNil narrowKind = iota
+	narrowTypeof
+	narrowTruthy
+)
+
+// narrowOp is one root refinement. Ops apply sequentially against the
+// current (possibly already shadowed) binding, so `and`-chained refinements
+// of the same root compose instead of clobbering each other.
+type narrowOp struct {
+	root   string
+	fields []string
+	kind   narrowKind
+	isNil  bool   // narrowNil: narrow the member to nil
+	lit    string // narrowTypeof: `type()` literal
+	toType bool   // narrowTypeof: narrow towards (vs away from) lit
+	truthy bool   // narrowTruthy: Lua truthiness branch
+}
+
 // applyNarrowing installs shadowed (narrowed) variable types in the current scope for a branch.
 func (c *Checker) applyNarrowing(cond ast.Expr, truthy bool) {
-	over := c.narrowCond(cond, truthy)
-	for name, t := range over {
-		if sym := c.cur().lookupVar(name); sym != nil {
-			// Shadow in current scope.
-			c.cur().vars[name] = &Symbol{Name: name, Kind: sym.Kind, Type: t, Span: sym.Span, IsConst: sym.IsConst, IsBuiltin: sym.IsBuiltin, SameAs: symRoot(sym)}
+	for _, op := range c.narrowCond(cond, truthy) {
+		sym := c.cur().lookupVar(op.root)
+		if sym == nil {
+			continue
 		}
+		var newT types.Type
+		var ok bool
+		switch op.kind {
+		case narrowNil:
+			newT, ok = refineRootType(sym.Type, op.fields, func(cur types.Type) (types.Type, bool) {
+				return narrowNilOfType(cur, op.isNil)
+			})
+		case narrowTypeof:
+			newT, ok = refineRootType(sym.Type, op.fields, func(cur types.Type) (types.Type, bool) {
+				return narrowTypeofOfType(cur, op.lit, op.toType)
+			})
+		case narrowTruthy:
+			newT, ok = refineRootType(sym.Type, op.fields, func(cur types.Type) (types.Type, bool) {
+				return narrowTruthyOfType(cur, op.truthy)
+			})
+		}
+		if !ok {
+			continue
+		}
+		// Shadow in current scope.
+		c.cur().vars[op.root] = &Symbol{Name: op.root, Kind: sym.Kind, Type: newT, Span: sym.Span, IsConst: sym.IsConst, IsBuiltin: sym.IsBuiltin, SameAs: symRoot(sym)}
 	}
 }
 
-func (c *Checker) narrowCond(cond ast.Expr, truthy bool) map[string]types.Type {
+func (c *Checker) narrowCond(cond ast.Expr, truthy bool) []narrowOp {
 	// Strip parens and `not`.
 	if p, ok := cond.(*ast.ParenExpr); ok {
 		return c.narrowCond(p.E, truthy)
@@ -2619,47 +2661,43 @@ func (c *Checker) narrowCond(cond ast.Expr, truthy bool) map[string]types.Type {
 			isEq := b.Op == token.Eq
 			wantTruthy := isEq == truthy // e.g. `x == nil` true => x is nil.
 			if id, ok := asIdent(b.L); ok && isNilLit(b.R) {
-				return c.narrowNil(id, wantTruthy)
+				return []narrowOp{{root: id, kind: narrowNil, isNil: wantTruthy}}
 			}
 			if id, ok := asIdent(b.R); ok && isNilLit(b.L) {
-				return c.narrowNil(id, wantTruthy)
+				return []narrowOp{{root: id, kind: narrowNil, isNil: wantTruthy}}
 			}
 			// Member paths (`node.next == nil`): refine the root.
 			if root, fields, ok := narrowPath(b.L); ok && len(fields) > 0 && isNilLit(b.R) {
-				return c.narrowNilPath(root, fields, wantTruthy)
+				return []narrowOp{{root: root, fields: fields, kind: narrowNil, isNil: wantTruthy}}
 			}
 			if root, fields, ok := narrowPath(b.R); ok && len(fields) > 0 && isNilLit(b.L) {
-				return c.narrowNilPath(root, fields, wantTruthy)
+				return []narrowOp{{root: root, fields: fields, kind: narrowNil, isNil: wantTruthy}}
 			}
 			// `type(x) == "s"` / `~=`.
 			if tn, lit, ok := asTypeofCompare(b); ok {
 				isEqualOp := b.Op == token.Eq
 				narrowTo := (isEqualOp == truthy)
-				return c.narrowTypeof(tn, lit, narrowTo)
+				return []narrowOp{{root: tn, kind: narrowTypeof, lit: lit, toType: narrowTo}}
 			}
 			if root, fields, lit, ok := asTypeofPathCompare(b); ok {
 				isEqualOp := b.Op == token.Eq
 				narrowTo := (isEqualOp == truthy)
-				return c.narrowTypeofPath(root, fields, lit, narrowTo)
+				return []narrowOp{{root: root, fields: fields, kind: narrowTypeof, lit: lit, toType: narrowTo}}
 			}
 		}
-		// `a and b`: in true branch both true; in false unknown.
+		// `a and b`: in true branch both hold; in false unknown.
 		if b.Op == token.And && truthy {
-			m := c.narrowCond(b.L, true)
-			for k, v := range c.narrowCond(b.R, true) {
-				m[k] = v
-			}
-			return m
+			return append(c.narrowCond(b.L, true), c.narrowCond(b.R, true)...)
 		}
 		if b.Op == token.Or && !truthy {
-			m := c.narrowCond(b.L, false)
-			for k, v := range c.narrowCond(b.R, false) {
-				m[k] = v
-			}
-			return m
+			return append(c.narrowCond(b.L, false), c.narrowCond(b.R, false)...)
 		}
 	}
-	return map[string]types.Type{}
+	// Truthiness: `if x then` / `if node.next then` (only nil/false are falsy).
+	if root, fields, ok := narrowPath(cond); ok {
+		return []narrowOp{{root: root, fields: fields, kind: narrowTruthy, truthy: truthy}}
+	}
+	return nil
 }
 
 // narrowPath decomposes a narrowable lvalue (`x`, `x.y`, `x["y"]`) into
@@ -2844,18 +2882,6 @@ func asTypeofPathCompare(b *ast.BinOpExpr) (string, []string, string, bool) {
 	return "", nil, "", false
 }
 
-func (c *Checker) narrowNil(name string, isNil bool) map[string]types.Type {
-	sym := c.cur().lookupVar(name)
-	if sym == nil {
-		return map[string]types.Type{}
-	}
-	t, ok := narrowNilOfType(sym.Type, isNil)
-	if !ok {
-		return map[string]types.Type{}
-	}
-	return map[string]types.Type{name: t}
-}
-
 // narrowNilOfType narrows a type by nil-ness (shared by variable and
 // member narrowing).
 func narrowNilOfType(cur types.Type, isNil bool) (types.Type, bool) {
@@ -2870,49 +2896,6 @@ func narrowNilOfType(cur types.Type, isNil bool) (types.Type, bool) {
 		stripped = types.Never
 	}
 	return stripped, true
-}
-
-// narrowNilPath narrows the member at fields of the root variable.
-func (c *Checker) narrowNilPath(root string, fields []string, isNil bool) map[string]types.Type {
-	sym := c.cur().lookupVar(root)
-	if sym == nil {
-		return map[string]types.Type{}
-	}
-	refined, ok := refineRootType(sym.Type, fields, func(cur types.Type) (types.Type, bool) {
-		return narrowNilOfType(cur, isNil)
-	})
-	if !ok {
-		return map[string]types.Type{}
-	}
-	return map[string]types.Type{root: refined}
-}
-
-func (c *Checker) narrowTypeof(name, lit string, toType bool) map[string]types.Type {
-	sym := c.cur().lookupVar(name)
-	if sym == nil {
-		return map[string]types.Type{}
-	}
-	t, ok := narrowTypeofOfType(sym.Type, lit, toType)
-	if !ok {
-		return map[string]types.Type{}
-	}
-	return map[string]types.Type{name: t}
-}
-
-// narrowTypeofPath narrows the member at fields of the root variable by a
-// `type(...)` comparison.
-func (c *Checker) narrowTypeofPath(root string, fields []string, lit string, toType bool) map[string]types.Type {
-	sym := c.cur().lookupVar(root)
-	if sym == nil {
-		return map[string]types.Type{}
-	}
-	refined, ok := refineRootType(sym.Type, fields, func(cur types.Type) (types.Type, bool) {
-		return narrowTypeofOfType(cur, lit, toType)
-	})
-	if !ok {
-		return map[string]types.Type{}
-	}
-	return map[string]types.Type{root: refined}
 }
 
 // narrowTypeofOfType narrows a type by a `type(x)` literal comparison
@@ -2954,6 +2937,61 @@ func narrowTypeofOfType(cur types.Type, lit string, toType bool) (types.Type, bo
 		return types.Never, true
 	}
 	return nil, false
+}
+
+// narrowTruthyOfType narrows a type by Lua truthiness (only nil and false
+// are falsy). Reports false when nothing changes.
+func narrowTruthyOfType(cur types.Type, truthy bool) (types.Type, bool) {
+	if isAnyLike(cur) {
+		return nil, false
+	}
+	var ms []types.Type
+	if u, ok := cur.(*types.Union); ok {
+		ms = u.Types
+	} else {
+		ms = []types.Type{cur}
+	}
+	var keep []types.Type
+	for _, m := range ms {
+		switch {
+		case m.Kind() == types.KNil:
+			if !truthy {
+				keep = append(keep, m)
+			}
+		case isFalseLit(m):
+			if !truthy {
+				keep = append(keep, m)
+			}
+		case isTrueLit(m):
+			if truthy {
+				keep = append(keep, m)
+			}
+		case m.Kind() == types.KBoolean:
+			if truthy {
+				keep = append(keep, &types.Literal{Value: "true", Base: types.Boolean})
+			} else {
+				keep = append(keep, &types.Literal{Value: "false", Base: types.Boolean})
+			}
+		default:
+			if truthy {
+				keep = append(keep, m)
+			}
+		}
+	}
+	if len(keep) == len(ms) {
+		return nil, false
+	}
+	return types.NewUnion(keep), true
+}
+
+func isFalseLit(t types.Type) bool {
+	l, ok := t.(*types.Literal)
+	return ok && l.Base == types.Boolean && l.Value == "false"
+}
+
+func isTrueLit(t types.Type) bool {
+	l, ok := t.(*types.Literal)
+	return ok && l.Base == types.Boolean && l.Value == "true"
 }
 
 func typeofLiteralToType(s string) types.Type {
