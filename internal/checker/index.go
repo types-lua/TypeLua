@@ -142,6 +142,25 @@ func (c *Checker) recordStringIndex(key ast.Expr, objT types.Type) {
 		Member: &MemberRef{Owner: e, OwnerName: e.name, Name: name}})
 }
 
+// recordStructIndex records `obj["field"]` through a plain variable with
+// a tracked literal field (inner span, quotes preserved for edits).
+func (c *Checker) recordStructIndex(key, obj ast.Expr) {
+	if c.Index == nil {
+		return
+	}
+	sl, ok := key.(*ast.StringLit)
+	if !ok {
+		return
+	}
+	name, inner, ok := stringKeyName(sl)
+	if !ok {
+		return
+	}
+	if root := structRoot(c, obj); root != nil {
+		c.recordStructUse(inner, root, name)
+	}
+}
+
 // ownerEntry resolves a value type back to its nominal type declaration,
 // if any (class instance/value, named object such as an interface or enum
 // table, enum). Scope-aware: the name resolves at the use site.
@@ -165,6 +184,90 @@ func (c *Checker) ownerEntry(t types.Type) *typeEntry {
 		return nil
 	}
 	return c.cur().lookupType(name)
+}
+
+// recordStructLiteral records named keys of a table literal as structural
+// definitions under root (see recordStructDef).
+func (c *Checker) recordStructLiteral(root *Symbol, lit *ast.TableLit) {
+	if c.Index == nil || root == nil || lit == nil {
+		return
+	}
+	for _, f := range lit.Fields {
+		var name string
+		var sp token.Span
+		switch f.Kind {
+		case ast.NamedField:
+			if f.Key == nil {
+				continue
+			}
+			name, sp = f.Key.Name, f.Key.Span()
+		case ast.IndexedField:
+			sl, ok := f.KeyX.(*ast.StringLit)
+			if !ok {
+				continue
+			}
+			nm, inner, ok := stringKeyName(sl)
+			if !ok {
+				continue
+			}
+			name, sp = nm, inner
+		default:
+			continue
+		}
+		c.recordStructDef(root, name, sp)
+	}
+}
+
+// recordStructDef records an anonymous literal field under its root
+// variable (definition side of structural member tracking).
+func (c *Checker) recordStructDef(root *Symbol, name string, span token.Span) {
+	if c.Index == nil || root == nil {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, IsDef: true,
+		Member: &MemberRef{OwnerName: root.Name, Name: name, Kind: "field", StructOwner: root}})
+}
+
+// hasStructDef reports a recorded structural definition.
+func (c *Checker) hasStructDef(root *Symbol, name string) bool {
+	if c.Index == nil || root == nil {
+		return false
+	}
+	for i := range c.Index.Uses {
+		u := &c.Index.Uses[i]
+		if u.IsDef && u.Member != nil && u.Member.StructOwner == root && u.Member.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// recordStructUse records a member access through a plain variable whose
+// root holds a tracked literal field. Only direct flows unify (aliases,
+// params, and table values stay untracked); callers must resolve the base
+// identifier themselves.
+func (c *Checker) recordStructUse(span token.Span, root *Symbol, name string) {
+	if c.Index == nil || root == nil {
+		return
+	}
+	if !c.hasStructDef(root, name) {
+		return
+	}
+	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span,
+		Member: &MemberRef{OwnerName: root.Name, Name: name, StructOwner: root}})
+}
+
+// structRoot resolves a member-access base to its variable root symbol
+// (Ident only: deeper bases have no variable identity).
+func structRoot(c *Checker, obj ast.Expr) *Symbol {
+	id, ok := obj.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	if s := c.cur().lookupVar(id.Name); s != nil {
+		return symRoot(s)
+	}
+	return nil
 }
 
 func (c *Checker) recordScope(sc *Scope, span token.Span) {

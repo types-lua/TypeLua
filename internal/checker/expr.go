@@ -172,6 +172,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 		kt := c.checkExpr(n.Key)
 		if r := indexResult(ot, kt); r != nil {
 			c.recordStringIndex(n.Key, ot)
+			c.recordStructIndex(n.Key, n.Obj)
 			return r
 		}
 		if isAnyLike(ot) {
@@ -186,6 +187,9 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 				return types.Any
 			}
 			c.recordMemberUse(n.Field.Span(), ot, n.Field.Name)
+			if root := structRoot(c, n.Obj); root != nil {
+				c.recordStructUse(n.Field.Span(), root, n.Field.Name)
+			}
 			if f.Optional {
 				return types.NewUnion([]types.Type{f.Type, types.Nil})
 			}

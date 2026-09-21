@@ -38,7 +38,14 @@ func (d *document) occurrencesOf(root *checker.Symbol) []checker.SymUse {
 
 // memberMatch reports whether o is an occurrence of the same member.
 func memberMatch(o *checker.SymUse, m *checker.MemberRef) bool {
-	return o.Member != nil && o.Member.Owner == m.Owner && o.Member.Name == m.Name
+	if o.Member == nil || o.Member.Name != m.Name {
+		return false
+	}
+	if m.Owner != nil || o.Member.Owner != nil {
+		return o.Member.Owner == m.Owner
+	}
+	// Structural members unify by variable root (aliases untracked).
+	return o.Member.StructOwner == m.StructOwner && m.StructOwner != nil
 }
 
 func (d *document) memberOccurrences(m *checker.MemberRef) []checker.SymUse {
@@ -183,7 +190,12 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 		return nil, ErrInvalidParams, "no renameable symbol here"
 	}
 	// Member path: class/interface/enum members rename within the owner.
+	// Structural members (anonymous literals) list for references but
+	// refuse rename: aliases would silently miss occurrences.
 	if u.Member != nil {
+		if u.Member.Owner == nil {
+			return nil, ErrInvalidParams, "cannot rename structural members (aliases untracked)"
+		}
 		def, ok := doc.memberDefSpan(u.Member)
 		if !ok {
 			return nil, ErrInvalidParams, "no renameable member here"

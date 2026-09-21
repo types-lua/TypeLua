@@ -1149,3 +1149,83 @@ func TestMemberCompletionAnyFallsBack(t *testing.T) {
 		t.Fatalf("any base must fall back to plain completion: %+v", res.Items)
 	}
 }
+
+func TestStructuralMemberRefs(t *testing.T) {
+	const uri = "file:///test/struct.tl"
+	src := `local p = { x = 1, y = "s" }
+local a = p.x
+p.y = "t"
+local z = p["x"]
+`
+	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": uri, "version": 1, "text": src,
+	}})
+	doc := map[string]any{"uri": uri}
+	// References of `x`: literal def (0) + dot use (1) + string-index use (3).
+	h.send("textDocument/references", 150, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 1, "character": 13},
+		"context": map[string]any{"includeDeclaration": true},
+	})
+	// Definition of the write use jumps to the literal.
+	h.send("textDocument/definition", 151, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 2, "character": 3},
+	})
+	// Rename of structural members is refused (aliases untracked).
+	h.send("textDocument/rename", 152, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 1, "character": 13},
+		"newName":      "w",
+	})
+	h.send("shutdown", 153, nil)
+	h.send("exit", nil, nil)
+	<-h.done
+	msgs := h.readAll()
+
+	refs := findMsg(msgs, "150")
+	if refs == nil {
+		t.Fatalf("no references response")
+	}
+	var rlocs []struct {
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(refs.Result, &rlocs); err != nil {
+		t.Fatal(err)
+	}
+	var gotLines []int
+	for _, l := range rlocs {
+		gotLines = append(gotLines, l.Range.Start.Line)
+	}
+	for i, want := range []int{0, 1, 3} {
+		if i >= len(gotLines) || gotLines[i] != want {
+			t.Fatalf("bad structural references: %+v", gotLines)
+		}
+	}
+
+	def := findMsg(msgs, "151")
+	if def == nil {
+		t.Fatalf("no definition response")
+	}
+	var dlocs []struct {
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(def.Result, &dlocs); err != nil {
+		t.Fatal(err)
+	}
+	if len(dlocs) != 1 || dlocs[0].Range.Start.Line != 0 {
+		t.Fatalf("structural definition should jump to line 0: %+v", dlocs)
+	}
+
+	rn := findMsg(msgs, "152")
+	if rn == nil || rn.Error == nil {
+		t.Fatalf("structural rename must be refused, got %+v", rn)
+	}
+}

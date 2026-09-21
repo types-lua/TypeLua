@@ -150,7 +150,15 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 				c.recordTableKeys(tl, want)
 			}
 		}
-		c.recordDef(name.Span(), c.bindVar(name.Name, &Symbol{Name: name.Name, Kind: symVar, Type: final, Span: name.Span(), IsConst: isConst}))
+		bound := c.bindVar(name.Name, &Symbol{Name: name.Name, Kind: symVar, Type: final, Span: name.Span(), IsConst: isConst})
+		c.recordDef(name.Span(), bound)
+		// Anonymous literals also define structural members under the
+		// variable (unless a nominal type owns them; see recordTableKeys).
+		if i < len(n.Values) {
+			if tl, ok := n.Values[i].(*ast.TableLit); ok && c.ownerEntry(final) == nil {
+				c.recordStructLiteral(symRoot(bound), tl)
+			}
+		}
 	}
 	if len(valTypes) > len(n.Names) && len(n.Names) > 0 {
 		// Extra values dropped: allowed in Lua, no error.
@@ -404,6 +412,20 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 					want = types.Any
 				} else {
 					c.recordMemberUse(t.Field.Span(), ot, t.Field.Name)
+					if root := structRoot(c, t.Obj); root != nil {
+						c.recordStructUse(t.Field.Span(), root, t.Field.Name)
+					}
+					// Structural definition for `p.q = {...}` direct
+					// flows (nominally owned bases stay nominal).
+					if c.ownerEntry(ot) == nil {
+						if i < len(n.Values) {
+							if _, ok := n.Values[i].(*ast.TableLit); ok {
+								if base := structRoot(c, t.Obj); base != nil {
+									c.recordStructDef(base, t.Field.Name, t.Field.Span())
+								}
+							}
+						}
+					}
 					if f.Readonly {
 						readonly = true
 					}
@@ -421,6 +443,7 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 				want = types.Any
 			} else {
 				c.recordStringIndex(t.Key, ot)
+				c.recordStructIndex(t.Key, t.Obj)
 			}
 		default:
 			c.errorf("TL3017", tgt.Span(), "invalid assignment target")
@@ -445,6 +468,11 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 		if i < len(n.Values) {
 			if tl, ok := n.Values[i].(*ast.TableLit); ok {
 				c.recordTableKeys(tl, want)
+				// Structural definition for direct flows (`p = {...}`;
+				// nominally owned vars stay nominal).
+				if _, ok := tgt.(*ast.Ident); ok && sym != nil && c.ownerEntry(sym.Type) == nil {
+					c.recordStructLiteral(symRoot(sym), tl)
+				}
 			}
 		}
 		_ = sym

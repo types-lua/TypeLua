@@ -178,11 +178,15 @@ type SymUse struct {
 // MemberRef identifies one member occurrence of a nominal owner
 // (class, interface, or enum). Owner compares by pointer within one
 // index run; rename-safe since renaming never replaces the entry.
+// StructOwner covers anonymous object literals: the root variable holding
+// the literal (same-variable direct flows only; aliases untracked).
+// Exactly one of Owner/StructOwner is set.
 type MemberRef struct {
-	Owner     *TypeEntry
-	OwnerName string // e.g. "Dog"
-	Name      string // member name
-	Kind      string // "method", "field", or "member" (kind is "" at use sites)
+	Owner       *TypeEntry
+	OwnerName   string // e.g. "Dog", or the variable name for structural
+	Name        string // member name
+	Kind        string // "method", "field", or "member" (kind is "" at use sites)
+	StructOwner *Symbol
 }
 
 // ScopeSpan pairs a live scope with the block span that owns it.
