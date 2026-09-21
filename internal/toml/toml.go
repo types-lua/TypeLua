@@ -2,10 +2,11 @@
 //
 // Supported: tables `[a.b."c.d"]`, arrays of tables `[[a]]`, key/value
 // pairs with bare or quoted keys, and basic/literal strings, integers,
-// floats, booleans, and arrays (multiline, trailing commas, comments).
-// Unsupported (clear errors): inline tables, datetimes, hex/oct/bin
-// integers, multi-line strings. Decoding preserves nothing but values;
-// encoding is deterministic (callers order keys).
+// floats, booleans, arrays (multiline, trailing commas, comments), and
+// single-line inline tables.
+// Unsupported (clear errors): datetimes, hex/oct/bin integers, multi-line
+// strings. Decoding preserves nothing but values; encoding is
+// deterministic (callers order keys).
 package toml
 
 import (
@@ -23,6 +24,7 @@ const (
 	Float
 	Boolean
 	Array
+	Inline
 )
 
 // Value is one decoded value.
@@ -33,6 +35,7 @@ type Value struct {
 	Float float64
 	Bool  bool
 	Arr   []*Value
+	Map   map[string]*Value // Inline tables
 }
 
 func (v *Value) String() string {
@@ -54,6 +57,12 @@ func (v *Value) String() string {
 			parts = append(parts, e.String())
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
+	case Inline:
+		var parts []string
+		for _, k := range SortedKeys(v.Map) {
+			parts = append(parts, KeyString(k)+" = "+v.Map[k].String())
+		}
+		return "{ " + strings.Join(parts, ", ") + " }"
 	}
 	return ""
 }
@@ -297,6 +306,8 @@ func (p *parser) parseValue() (*Value, error) {
 		return &Value{Kind: String, Str: s}, nil
 	case c == '[':
 		return p.parseArray()
+	case c == '{':
+		return p.parseInline()
 	case c == 't' && strings.HasPrefix(p.src[p.pos:], "true") && !isBareKeyChar(peekAt(p.src, p.pos+4)):
 		p.pos += 4
 		return &Value{Kind: Boolean, Bool: true}, nil
@@ -450,6 +461,101 @@ func (p *parser) parseNumber() (*Value, error) {
 		return nil, p.fail("invalid integer %q", raw)
 	}
 	return &Value{Kind: Integer, Int: n}, nil
+}
+
+// parseInline parses a single-line `{ k = v, ... }` table (TOML forbids
+// newlines inside inline tables; dotted keys are rejected like pairs).
+func (p *parser) parseInline() (*Value, error) {
+	p.pos++ // {
+	out := &Value{Kind: Inline, Map: map[string]*Value{}}
+	for {
+		p.skipInlineSpace()
+		if p.pos >= len(p.src) {
+			return nil, p.fail("unterminated inline table")
+		}
+		if p.src[p.pos] == '}' {
+			p.pos++
+			return out, nil
+		}
+		segs, err := p.parseDottedKey()
+		if err != nil {
+			return nil, err
+		}
+		if len(segs) != 1 {
+			return nil, p.fail("dotted keys are not supported in inline tables")
+		}
+		key := segs[0]
+		p.skipInlineSpace()
+		if p.pos >= len(p.src) || p.src[p.pos] != '=' {
+			return nil, p.fail("expected '=' after key %q", key)
+		}
+		p.pos++
+		p.skipInlineSpace()
+		v, err := p.parseInlineValue()
+		if err != nil {
+			return nil, err
+		}
+		if _, dup := out.Map[key]; dup {
+			return nil, p.fail("duplicate key %q", key)
+		}
+		out.Map[key] = v
+		p.skipInlineSpace()
+		if p.pos >= len(p.src) {
+			return nil, p.fail("unterminated inline table")
+		}
+		if p.src[p.pos] == ',' {
+			p.pos++
+			continue
+		}
+		if p.src[p.pos] == '}' {
+			p.pos++
+			return out, nil
+		}
+		return nil, p.fail("expected ',' or '}' in inline table")
+	}
+}
+
+// parseInlineValue parses one inline-table value (nested inline tables
+// and arrays allowed).
+func (p *parser) parseInlineValue() (*Value, error) {
+	if p.pos >= len(p.src) {
+		return nil, p.fail("unexpected end in value")
+	}
+	c := p.src[p.pos]
+	switch {
+	case c == '"':
+		s, err := p.parseBasicRaw()
+		if err != nil {
+			return nil, err
+		}
+		return &Value{Kind: String, Str: s}, nil
+	case c == '\'':
+		s, err := p.parseLiteralRaw()
+		if err != nil {
+			return nil, err
+		}
+		return &Value{Kind: String, Str: s}, nil
+	case c == '{':
+		return p.parseInline()
+	case c == '[':
+		return p.parseArray()
+	case c == 't' && strings.HasPrefix(p.src[p.pos:], "true") && !isBareKeyChar(peekAt(p.src, p.pos+4)):
+		p.pos += 4
+		return &Value{Kind: Boolean, Bool: true}, nil
+	case c == 'f' && strings.HasPrefix(p.src[p.pos:], "false") && !isBareKeyChar(peekAt(p.src, p.pos+5)):
+		p.pos += 5
+		return &Value{Kind: Boolean, Bool: false}, nil
+	case c == '+' || c == '-' || c >= '0' && c <= '9':
+		return p.parseNumber()
+	default:
+		return nil, p.fail("invalid value starting with %q", c)
+	}
+}
+
+func (p *parser) skipInlineSpace() {
+	for p.pos < len(p.src) && (p.src[p.pos] == ' ' || p.src[p.pos] == '\t' || p.src[p.pos] == '\r') {
+		p.pos++
+	}
 }
 
 // parseArray parses a possibly multi-line [...] value.

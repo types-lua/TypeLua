@@ -213,3 +213,48 @@ func TestEmptyDoc(t *testing.T) {
 		t.Fatalf("empty builder must emit empty string")
 	}
 }
+
+func TestDecodeInlineTable(t *testing.T) {
+	d := mustDecode(t, "[t]\na = { version = \"^v1.0.0\", url = 'https://x/y.git' }\nb = { path = \"./deps/local\" }\nempty = {}\n")
+	a := d.Tables["t"].Values["a"]
+	if a.Kind != Inline || a.Map["version"].Str != "^v1.0.0" || a.Map["url"].Str != "https://x/y.git" {
+		t.Fatalf("bad inline: %+v", a)
+	}
+	if b := d.Tables["t"].Values["b"]; b.Map["path"].Str != "./deps/local" {
+		t.Fatalf("bad path inline: %+v", b)
+	}
+	if e := d.Tables["t"].Values["empty"]; e.Kind != Inline || len(e.Map) != 0 {
+		t.Fatalf("bad empty inline: %+v", e)
+	}
+	// Nested inline + trailing comma + round trip through String().
+	d2 := mustDecode(t, "[t]\nn = { a = { b = 1 }, c = [1, 2], }\n")
+	n := d2.Tables["t"].Values["n"]
+	if n.Map["a"].Map["b"].Int != 1 || len(n.Map["c"].Arr) != 2 {
+		t.Fatalf("bad nested inline: %+v", n)
+	}
+	s := n.String()
+	d3 := mustDecode(t, "[t]\nn = "+s+"\n")
+	if d3.Tables["t"].Values["n"].Map["a"].Map["b"].Int != 1 {
+		t.Fatalf("inline round trip failed: %q", s)
+	}
+}
+
+func TestDecodeInlineErrors(t *testing.T) {
+	for _, src := range []string{
+		"[t]\na = { version = \"x\"\n", // newline inside
+		"[t]\na = { version }\n",       // missing =
+		"[t]\na = { version = \"x\" \"y\" }\n",
+		"[t]\na = { version = \"x\", version = \"y\" }\n",
+		"[t]\na = { a.b = 1 }\n", // dotted keys rejected
+		"[t]\na = { version = \"x\"\n",
+	} {
+		if _, err := Decode(src); err == nil {
+			t.Fatalf("expected error for %q", src)
+		}
+	}
+	// Trailing comma is fine.
+	d := mustDecode(t, "[t]\na = { version = \"x\", }\n")
+	if d.Tables["t"].Values["a"].Map["version"].Str != "x" {
+		t.Fatalf("trailing comma rejected")
+	}
+}
