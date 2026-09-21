@@ -170,16 +170,16 @@ macro wrap(f, ...) = f(...)             -- 变长：多余实参收集于 `...`
 name = "myapp"
 version = "v0.1.0"
 
-[dependencies."github.com/foo/bar"]
-version = "^v1.2.0"          # latest | v1.2.3 精确 | ^v1.2.0 | 分支名 | commit SHA
-# url = "https://git.example.com/foo/bar.git"   # 可选：自建站/本地测试
-
-[replace]
-"github.com/foo/bar" = "../local-bar"   # 本地目录（或另一 URL）
+[dependencies]
+"github.com/foo/bar" = "^v1.2.0"                          # 版本简写
+"example.com/notes" = { version = "^v0.2.0" }             # 显式表
+"example.com/words" = { version = "^v1.0.0", url = "https://git.example.com/words.git" }  # 自建站
+"example.com/local" = { path = "./deps/local" }           # 本地目录（跳过版本解析）
 ```
 
 ```toml
-# tlua.lock（精确锁定，精确到 commit；direct 区分直接/间接依赖）
+# tlua.lock（精确锁定，精确到 commit；direct 区分直接/间接依赖；
+# dir 记录本地来源，standalone vendor/graph 全离线可用）
 [[module]]
 path = "github.com/foo/bar"
 version = "v1.2.0"
@@ -187,8 +187,8 @@ commit = "619d2cd6ee7d2c71b5ffce85eedff83eb9b30fc9"
 direct = true
 ```
 
-- 版本：git tag 的严格 semver（`v1.2.3`，`latest` 取最高正式版，预发布永不自动选）；分支/SHA 为 pin。
-- 解析：最小版本选择（MVS）——依赖的依赖参与求极大；`exact` 为 pin（与 caret 冲突即报错）；同 path 多源/多 revision 即报错（用 `replace` 消解）。
+- 版本：git tag 的严格 semver（`v1.2.3`，`latest` 取最高正式版，预发布永不自动选）；分支/SHA 为 pin；`{ path }` 本地项跳过版本（用其 manifest 版本记 lock，无则 `v0.0.0-local`）。
+- 解析：最小版本选择（MVS）——依赖的依赖参与求极大；`exact` 为 pin（与 caret 冲突即报错）；同 path 多源/多 revision 即报错。`path` 相对其所在 manifest（Cargo 一致），传递 path 链（`notes -> ../words`）离线可达；远端 manifest 的裸 path（无 version）直接报错（发布规则：给它加 version）。
 - 完整性：`fetch` 复现 lock；上游 tag 挪动（同 version 不同 commit）报错，须显式 `get` 升级；`get` 具名升级、其余按 lock 复现。
 - 命令：`mod init`、`mod get <path[@query]>...`（无参=全升）、`mod fetch`、`mod vendor`（拷 `*.tl` 到 `tlua_modules/<path>/` + `modules.txt`）、`mod list [--indirect]`、`mod graph`。
 - 构建集成：`tlua_modules/**/*.tl` 自动参检参编（`dist/tlua_modules/...` 同构输出）；运行时 `require("example.com.greet")`（点转目录，`import ... from "..."` 为其语法糖），`LUA_PATH` 加 `tlua_modules/?.lua;tlua_modules/?/init.lua`；模块内互引请用全路径。

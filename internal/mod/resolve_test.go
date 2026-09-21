@@ -39,6 +39,10 @@ func (f *fakeReg) ResolveRev(_ context.Context, path string, _ Dep, rev string) 
 	return "", fmt.Errorf("unknown rev %q for %q", rev, path)
 }
 
+func (f *fakeReg) LocalDir(_ string) (string, bool) {
+	return "", false
+}
+
 func lockMap(l *Lock) map[string]LockEntry {
 	m := map[string]LockEntry{}
 	for _, e := range l.Entries {

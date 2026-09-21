@@ -69,6 +69,11 @@ func KeyString(s string) string {
 	return strconv.Quote(s)
 }
 
+// Raw writes a preformatted line verbatim.
+func (b *Builder) Raw(s string) {
+	b.sb.WriteString(s)
+}
+
 // Str writes `key = "value"`.
 func (b *Builder) Str(key, val string) {
 	fmt.Fprintf(&b.sb, "%s = %s\n", KeyString(key), strconv.Quote(val))

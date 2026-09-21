@@ -267,50 +267,86 @@ func (g *GitRegistry) ResolveRev(ctx context.Context, path string, dep Dep, rev 
 	return RevParse(ctx, mirror, rev)
 }
 
-// replaceRegistry overlays local-directory replacements.
-type replaceRegistry struct {
-	base    Registry
-	replace map[string]string // path -> local dir or URL
-	rootDir string
+// LocalDir implements Registry (base registries have no local content).
+func (g *GitRegistry) LocalDir(_ string) (string, bool) {
+	return "", false
 }
 
-// ReplaceRegistry wraps reg with replace directives (local dirs or URLs).
+// replaceRegistry overlays local-directory replacements and records
+// transitive path links (resolved against each manifest's own directory,
+// Cargo-style) for the resolving run.
+type replaceRegistry struct {
+	base     Registry
+	replace  map[string]string // root manifest replaces, project-relative
+	rootDir  string
+	recorded map[string]string // discovered transitive links, absolute dirs
+}
+
+// ReplaceRegistry wraps reg with replace directives. Always wrapped (even
+// empty) so transitive path links record uniformly.
 func ReplaceRegistry(reg Registry, replace map[string]string, rootDir string) Registry {
-	if len(replace) == 0 {
-		return reg
+	if replace == nil {
+		replace = map[string]string{}
 	}
-	return &replaceRegistry{base: reg, replace: replace, rootDir: rootDir}
+	return &replaceRegistry{base: reg, replace: replace, rootDir: rootDir, recorded: map[string]string{}}
 }
 
 func (r *replaceRegistry) localDir(path string) (string, bool) {
-	tgt, ok := r.replace[path]
-	if !ok {
-		return "", false
+	if tgt, ok := r.replace[path]; ok {
+		if !filepath.IsAbs(tgt) {
+			tgt = filepath.Join(r.rootDir, tgt)
+		}
+		return tgt, true
 	}
-	if isURLTarget(tgt) {
-		return "", false
+	if tgt, ok := r.recorded[path]; ok {
+		return tgt, true
 	}
-	if !filepath.IsAbs(tgt) {
-		tgt = filepath.Join(r.rootDir, tgt)
-	}
-	return tgt, true
+	return "", false
 }
 
-func isURLTarget(t string) bool {
-	return strings.Contains(t, "://") || strings.HasPrefix(t, "git@")
+// LocalDir implements Registry.
+func (r *replaceRegistry) LocalDir(path string) (string, bool) {
+	return r.localDir(path)
 }
 
 func (r *replaceRegistry) readLocal(path, dir string) *Manifest {
-	raw, err := os.ReadFile(filepath.Join(dir, ManifestName))
+	m, err := r.readLocalStrict(path, dir)
 	if err != nil {
 		return NewManifest(path)
+	}
+	return m
+}
+
+// readLocalStrict reads and validates a local manifest (errors loud).
+func (r *replaceRegistry) readLocalStrict(path, dir string) (*Manifest, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, ManifestName))
+	if err != nil {
+		return nil, err
 	}
 	m, err := ParseManifest(string(raw))
 	if err != nil {
-		return NewManifest(path)
+		return nil, fmt.Errorf("bad %s in %s: %v", ManifestName, dir, err)
 	}
 	m.Name = path
-	return m
+	return m, nil
+}
+
+// recordLinks remembers transitive path links against the manifest's own
+// directory (Cargo-style relative paths).
+func (r *replaceRegistry) recordLinks(dir string, m *Manifest) {
+	for path, dep := range m.Deps {
+		if dep.Path == "" {
+			continue
+		}
+		if _, ok := r.replace[path]; ok {
+			continue // root replace wins
+		}
+		tgt := dep.Path
+		if !filepath.IsAbs(tgt) {
+			tgt = filepath.Join(dir, tgt)
+		}
+		r.recorded[path] = tgt
+	}
 }
 
 func (r *replaceRegistry) Tags(ctx context.Context, path string, dep Dep) (map[string]string, error) {
@@ -322,25 +358,42 @@ func (r *replaceRegistry) Tags(ctx context.Context, path string, dep Dep) (map[s
 		}
 		return map[string]string{ver: "local"}, nil
 	}
-	if tgt, ok := r.replace[path]; ok && isURLTarget(tgt) {
-		dep.URL = tgt
-	}
 	return r.base.Tags(ctx, path, dep)
 }
 
 func (r *replaceRegistry) Manifest(ctx context.Context, path, commit string) (*Manifest, error) {
 	if dir, ok := r.localDir(path); ok {
-		return r.readLocal(path, dir), nil
+		m, err := r.readLocalStrict(path, dir)
+		if err != nil {
+			return nil, err
+		}
+		r.recordLinks(dir, m)
+		return m, nil
 	}
-	return r.base.Manifest(ctx, path, commit)
+	m, err := r.base.Manifest(ctx, path, commit)
+	if err != nil || m == nil {
+		return m, err
+	}
+	// Remote manifests: path links only compose with a version (Cargo
+	// publish rule); bare ones name their fix explicitly. Work on a copy
+	// (registries may share manifest objects).
+	cp := &Manifest{Name: m.Name, Version: m.Version, Deps: map[string]*Dep{}, Replace: m.Replace}
+	for dp, dd := range m.Deps {
+		nd := &Dep{Query: dd.Query, URL: dd.URL}
+		if dd.Path != "" {
+			if dd.Query == "" {
+				return nil, fmt.Errorf("path dependency %q of %q needs a version to be usable transitively", dp, path)
+			}
+			// Version governs remotely; the path stays local-only.
+		}
+		cp.Deps[dp] = nd
+	}
+	return cp, nil
 }
 
 func (r *replaceRegistry) ResolveRev(ctx context.Context, path string, dep Dep, rev string) (string, error) {
 	if _, ok := r.localDir(path); ok {
 		return "local", nil
-	}
-	if tgt, ok := r.replace[path]; ok && isURLTarget(tgt) {
-		dep.URL = tgt
 	}
 	return r.base.ResolveRev(ctx, path, dep, rev)
 }

@@ -7,11 +7,14 @@ import (
 
 // LockEntry pins one module: exact version plus the commit it resolved to.
 // Direct marks manifest-listed modules; the rest are indirect.
+// Dir records a local source directory (project-relative, forward
+// slashes) for locally-forced entries; empty otherwise.
 type LockEntry struct {
 	Path    string
 	Version string
 	Commit  string
 	Direct  bool
+	Dir     string
 }
 
 // Lock is tlua.lock.

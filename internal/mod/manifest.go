@@ -45,11 +45,16 @@ func ValidHostPath(p string) bool {
 	return strings.Contains(first, ".")
 }
 
-// Dep is one manifest dependency: a version query plus an optional
-// fetch-URL override (for self-hosted git or local testing).
+// Dep is one manifest dependency (Cargo-style):
+//
+//	"example.com/greet" = "^v1.0.0"                          (version shorthand)
+//	"example.com/notes" = { version = "^v0.2.0" }             (explicit)
+//	"example.com/words" = { version = "^v1.0.0", url = "..." } (self-hosted fetch source)
+//	"example.com/local" = { path = "./deps/local" }           (local directory, versions bypassed)
 type Dep struct {
 	Query string // "latest", exact "v1.2.3", caret "^v1.2.0", branch, or commit SHA
-	URL   string // optional override
+	URL   string // optional fetch-source override
+	Path  string // optional local directory (replaces fetching entirely)
 }
 
 // Manifest is tlua.toml.
@@ -74,14 +79,21 @@ func (m *Manifest) Validate() error {
 		if !ValidPath(p) {
 			return fmt.Errorf("invalid module path %q", p)
 		}
-		if d.URL == "" && !ValidHostPath(p) {
-			return fmt.Errorf("module path %q needs a dotted host or an explicit url", p)
+		if d.URL == "" && d.Path == "" && !ValidHostPath(p) {
+			return fmt.Errorf("module path %q needs a dotted host, an explicit url, or a path", p)
 		}
-		if strings.TrimSpace(d.Query) == "" {
-			return fmt.Errorf("module %q needs a version query", p)
+		if d.URL != "" && d.Path != "" {
+			return fmt.Errorf("module %q: url and path are exclusive", p)
 		}
-		if _, err := ParseQuery(d.Query); err != nil {
-			return fmt.Errorf("module %q: %v", p, err)
+		if d.Path == "" {
+			if strings.TrimSpace(d.Query) == "" {
+				// A bare url without version tracks latest.
+				if d.URL == "" {
+					return fmt.Errorf("module %q needs a version query", p)
+				}
+			} else if _, err := ParseQuery(d.Query); err != nil {
+				return fmt.Errorf("module %q: %v", p, err)
+			}
 		}
 	}
 	for p, r := range m.Replace {

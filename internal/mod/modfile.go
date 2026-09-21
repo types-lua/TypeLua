@@ -3,6 +3,8 @@ package mod
 import (
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/typelua/typelua/internal/toml"
 )
@@ -33,43 +35,52 @@ func ParseManifest(src string) (*Manifest, error) {
 			}
 		}
 	}
-	const depPrefix = "dependencies\x00"
-	for key, t := range d.Tables {
-		if len(key) <= len(depPrefix) || key[:len(depPrefix)] != depPrefix {
-			continue
-		}
-		path := key[len(depPrefix):]
-		dep := &Dep{}
-		for k, v := range t.Values {
-			if v.Kind != toml.String {
-				return nil, fmt.Errorf("dependency %q: %q must be a string", path, k)
-			}
-			switch k {
-			case "version":
+	const depTable = "dependencies"
+	if dt, ok := d.Tables[depTable]; ok {
+		for path, v := range dt.Values {
+			dep := &Dep{}
+			switch v.Kind {
+			case toml.String:
 				dep.Query = v.Str
-			case "url":
-				dep.URL = v.Str
+			case toml.Inline:
+				for k, fv := range v.Map {
+					if fv.Kind != toml.String {
+						return nil, fmt.Errorf("dependency %q: %q must be a string", path, k)
+					}
+					switch k {
+					case "version":
+						dep.Query = fv.Str
+					case "url":
+						dep.URL = fv.Str
+					case "path":
+						dep.Path = fv.Str
+					default:
+						return nil, fmt.Errorf("dependency %q: unknown key %q", path, k)
+					}
+				}
 			default:
-				return nil, fmt.Errorf("dependency %q: unknown key %q", path, k)
+				return nil, fmt.Errorf("dependency %q must be a version string or inline table", path)
 			}
+			if dep.Query == "" && dep.Path == "" {
+				// A bare url tracks latest.
+				dep.Query = "latest"
+			}
+			m.Deps[path] = dep
 		}
-		m.Deps[path] = dep
 	}
-	if rt, ok := d.Tables["replace"]; ok {
-		for k, v := range rt.Values {
-			if v.Kind != toml.String {
-				return nil, fmt.Errorf("replace %q must be a string", k)
-			}
-			m.Replace[k] = v.Str
+	// Local path dependencies act as replacements.
+	for path, dep := range m.Deps {
+		if dep.Path != "" {
+			m.Replace[path] = dep.Path
 		}
+	}
+	if _, ok := d.Tables["replace"]; ok {
+		return nil, fmt.Errorf("the [replace] table was removed; use `{ path = ... }` inside [dependencies]")
 	}
 	// Reject unknown top-level tables (typo guard).
-	// Bare [dependencies]/[replace] headers (empty sections) are allowed.
+	// Bare [dependencies] headers (empty sections) are allowed.
 	for key := range d.Tables {
-		if key == "" || key == "package" || key == "replace" || key == "dependencies" {
-			continue
-		}
-		if len(key) > len(depPrefix) && key[:len(depPrefix)] == depPrefix {
+		if key == "" || key == "package" || key == "dependencies" {
 			continue
 		}
 		return nil, fmt.Errorf("unknown table %q", key)
@@ -83,7 +94,8 @@ func ParseManifest(src string) (*Manifest, error) {
 	return m, nil
 }
 
-// EncodeManifest renders tlua.toml deterministically.
+// EncodeManifest renders tlua.toml deterministically (Cargo-style single
+// [dependencies] table; version shorthands where possible).
 func EncodeManifest(m *Manifest) string {
 	var b toml.Builder
 	b.Comment("tlua package manifest (tlua.toml)")
@@ -92,23 +104,35 @@ func EncodeManifest(m *Manifest) string {
 	if m.Version != "" {
 		b.Str("version", m.Version)
 	}
-	for _, p := range toml.SortedKeys(m.Deps) {
+	if len(m.Deps) != 0 {
 		b.Blank()
-		b.Table("dependencies", p)
-		d := m.Deps[p]
-		b.Str("version", d.Query)
-		if d.URL != "" {
-			b.Str("url", d.URL)
-		}
-	}
-	if len(m.Replace) != 0 {
-		b.Blank()
-		b.Table("replace")
-		for _, p := range toml.SortedKeys(m.Replace) {
-			b.Str(p, m.Replace[p])
+		b.Table("dependencies")
+		for _, p := range toml.SortedKeys(m.Deps) {
+			d := m.Deps[p]
+			key := toml.KeyString(p)
+			switch {
+			case d.Query != "" && d.URL == "" && d.Path == "":
+				b.Str(p, d.Query)
+			default:
+				var parts []string
+				if d.Query != "" {
+					parts = append(parts, "version = "+quoteToml(d.Query))
+				}
+				if d.URL != "" {
+					parts = append(parts, "url = "+quoteToml(d.URL))
+				}
+				if d.Path != "" {
+					parts = append(parts, "path = "+quoteToml(d.Path))
+				}
+				b.Raw(key + " = { " + strings.Join(parts, ", ") + " }\n")
+			}
 		}
 	}
 	return b.String()
+}
+
+func quoteToml(s string) string {
+	return strconv.Quote(s)
 }
 
 // ParseLock parses tlua.lock content.
@@ -143,6 +167,11 @@ func ParseLock(src string) (*Lock, error) {
 					return nil, fmt.Errorf("module.direct must be a boolean")
 				}
 				e.Direct = v.Bool
+			case "dir":
+				if v.Kind != toml.String {
+					return nil, fmt.Errorf("module.dir must be a string")
+				}
+				e.Dir = v.Str
 			default:
 				return nil, fmt.Errorf("unknown module key %q", k)
 			}
@@ -189,6 +218,9 @@ func EncodeLock(l *Lock) string {
 		b.Str("version", e.Version)
 		b.Str("commit", e.Commit)
 		b.Bool("direct", e.Direct)
+		if e.Dir != "" {
+			b.Str("dir", e.Dir)
+		}
 	}
 	return b.String()
 }

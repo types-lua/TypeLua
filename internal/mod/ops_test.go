@@ -91,13 +91,13 @@ func TestGetFetchVendor(t *testing.T) {
 	// repoA depends on B.
 	repoA := gitRepo(t, map[string]map[string]string{
 		"v1.0.0": {
-			"tlua.toml": "[package]\nname = \"example.com/a\"\nversion = \"v1.0.0\"\n\n[dependencies.\"example.com/b\"]\nversion = \"^v1.0.0\"\nurl = \"" + repoB + "\"\n",
+			"tlua.toml": "[package]\nname = \"example.com/a\"\nversion = \"v1.0.0\"\n\n[dependencies]\n\"example.com/b\" = { version = \"^v1.0.0\", url = \"" + repoB + "\" }\n",
 			"main.tl":   "local M = {}\nfunction M.x(): number return 1 end\nreturn M\n",
 		},
 	}, "v1.0.0")
 
 	projDir := filepath.Join(tmp, "proj")
-	p := writeProject(t, projDir, "[package]\nname = \"myapp\"\n\n[dependencies.\"example.com/a\"]\nversion = \"^v1.0.0\"\nurl = \""+repoA+"\"\n")
+	p := writeProject(t, projDir, "[package]\nname = \"myapp\"\n\n[dependencies]\n\"example.com/a\" = { version = \"^v1.0.0\", url = \""+repoA+"\" }\n")
 	cache := NewCache(filepath.Join(tmp, "modcache"))
 
 	l, err := Get(ctx, p, cache, []string{"example.com/a"})
@@ -172,14 +172,14 @@ func TestGetReplaceLocal(t *testing.T) {
 	os.WriteFile(filepath.Join(localB, "util.tl"), []byte("local M = {}\nreturn M\n"), 0o644)
 	repoA := gitRepo(t, map[string]map[string]string{
 		"v1.0.0": {
-			"tlua.toml": "[package]\nname = \"example.com/a\"\nversion = \"v1.0.0\"\n\n[dependencies.\"example.com/b\"]\nversion = \"^v1.0.0\"\n",
+			"tlua.toml": "[package]\nname = \"example.com/a\"\nversion = \"v1.0.0\"\n\n[dependencies]\n\"example.com/b\" = \"^v1.0.0\"\n",
 			"main.tl":   "local M = {}\nreturn M\n",
 		},
 	}, "v1.0.0")
 	// Note: A's manifest has no url for B; replace supplies it (no probing).
 	projDir := filepath.Join(tmp, "proj")
 	p := writeProject(t, projDir,
-		"[package]\nname = \"myapp\"\n\n[dependencies.\"example.com/a\"]\nversion = \"v1.0.0\"\nurl = \""+repoA+"\"\n\n[replace]\n\"example.com/b\" = \""+localB+"\"\n")
+		"[package]\nname = \"myapp\"\n\n[dependencies]\n\"example.com/a\" = { version = \"v1.0.0\", url = \""+repoA+"\" }\n\"example.com/b\" = { path = \""+localB+"\" }\n")
 	cache := NewCache(filepath.Join(tmp, "modcache"))
 	l, err := Get(ctx, p, cache, []string{"example.com/a"})
 	if err != nil {
@@ -190,8 +190,9 @@ func TestGetReplaceLocal(t *testing.T) {
 	if !ok {
 		t.Fatalf("b missing: %+v", l.Entries)
 	}
-	if b.Commit != "local" || b.Direct {
-		t.Fatalf("replaced b must be indirect+local: %+v", b)
+	// Declared (for its path) means direct in Cargo terms; content local.
+	if b.Commit != "local" || !b.Direct {
+		t.Fatalf("replaced b must be direct+local: %+v", b)
 	}
 	if b.Version != "v9.9.9" {
 		t.Fatalf("replaced version must follow local manifest, got %q", b.Version)
@@ -255,5 +256,63 @@ func TestHelpers(t *testing.T) {
 	l.Set(LockEntry{Path: "example.com/a", Version: "v2.0.0", Commit: "c"})
 	if pins := pinsForFetch(m, l); len(pins) != 0 {
 		t.Fatalf("stale pin kept: %v", pins)
+	}
+}
+
+// TestGetTransitiveLocal covers a local chain: root -> mid -> leaf, where
+// the mid module links the leaf via a manifest-relative path. The leaf
+// stays indirect and records its source dir in the lock.
+func TestGetTransitiveLocal(t *testing.T) {
+	requireGit(t)
+	ctx := testCtx()
+	tmp := t.TempDir()
+	mkmod := func(name, manifest string) {
+		dir := filepath.Join(tmp, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "tlua.toml"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "init.tl"), []byte("local M = {}\nreturn M\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkmod("leaf", "[package]\nname = \"example.com/leaf\"\nversion = \"v1.0.0\"\n")
+	mkmod("mid", "[package]\nname = \"example.com/mid\"\nversion = \"v0.2.0\"\n\n[dependencies]\n\"example.com/leaf\" = { path = \"../leaf\", version = \"^v1.0.0\" }\n")
+	projDir := filepath.Join(tmp, "proj")
+	p := writeProject(t, projDir, "[package]\nname = \"myapp\"\n\n[dependencies]\n\"example.com/mid\" = { path = \"../mid\" }\n")
+	cache := NewCache(filepath.Join(tmp, "modcache"))
+	l, err := Get(ctx, p, cache, []string{"example.com/mid"})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	m := lockMap(l)
+	leaf, ok := m["example.com/leaf"]
+	if !ok {
+		t.Fatalf("leaf missing: %+v", l.Entries)
+	}
+	if leaf.Direct {
+		t.Fatalf("transitive leaf must be indirect: %+v", leaf)
+	}
+	if leaf.Commit != "local" || leaf.Version != "v1.0.0" {
+		t.Fatalf("bad leaf pin: %+v", leaf)
+	}
+	if leaf.Dir == "" {
+		t.Fatalf("leaf must record its source dir: %+v", leaf)
+	}
+	// Standalone vendor/graph work from the lock alone (fresh registry).
+	if err := p.Vendor(ctx, cache); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(projDir, "tlua_modules", "example.com", "leaf", "init.tl")); err != nil {
+		t.Fatalf("leaf not vendored: %v", err)
+	}
+	g, err := ModuleGraph(ctx, p, cache)
+	if err != nil {
+		t.Fatalf("graph: %v", err)
+	}
+	if len(g.Edges["example.com/mid"]) != 1 || g.Edges["example.com/mid"][0] != "example.com/leaf" {
+		t.Fatalf("bad graph: %+v", g.Edges)
 	}
 }

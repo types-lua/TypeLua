@@ -10,7 +10,8 @@ func TestManifestRoundTrip(t *testing.T) {
 	m.Version = "v0.1.0"
 	m.Deps["github.com/foo/bar"] = &Dep{Query: "^v1.2.0"}
 	m.Deps["example.com/x/y"] = &Dep{Query: "v0.3.1", URL: "https://git.example.com/x/y.git"}
-	m.Replace["github.com/foo/bar"] = "../local-bar"
+	m.Deps["example.com/local"] = &Dep{Path: "../local-bar"}
+	m.Replace["example.com/local"] = "../local-bar"
 	out := EncodeManifest(m)
 	back, err := ParseManifest(out)
 	if err != nil {
@@ -19,14 +20,17 @@ func TestManifestRoundTrip(t *testing.T) {
 	if back.Name != "myapp" || back.Version != "v0.1.0" {
 		t.Fatalf("bad package: %+v", back)
 	}
-	if d := back.Deps["github.com/foo/bar"]; d == nil || d.Query != "^v1.2.0" {
-		t.Fatalf("bad dep: %+v", back.Deps)
+	if d := back.Deps["github.com/foo/bar"]; d == nil || d.Query != "^v1.2.0" || d.URL != "" || d.Path != "" {
+		t.Fatalf("bad shorthand dep: %+v", back.Deps)
 	}
-	if d := back.Deps["example.com/x/y"]; d == nil || d.URL != "https://git.example.com/x/y.git" {
+	if d := back.Deps["example.com/x/y"]; d == nil || d.Query != "v0.3.1" || d.URL != "https://git.example.com/x/y.git" {
 		t.Fatalf("bad url dep: %+v", back.Deps)
 	}
-	if back.Replace["github.com/foo/bar"] != "../local-bar" {
-		t.Fatalf("bad replace: %+v", back.Replace)
+	if d := back.Deps["example.com/local"]; d == nil || d.Path != "../local-bar" {
+		t.Fatalf("bad path dep: %+v", back.Deps)
+	}
+	if back.Replace["example.com/local"] != "../local-bar" {
+		t.Fatalf("path dep must derive replace: %+v", back.Replace)
 	}
 	// Deterministic: encode twice identical.
 	if out2 := EncodeManifest(back); out2 != out {
@@ -40,10 +44,13 @@ func TestManifestErrors(t *testing.T) {
 		"[package]\nname = 1\n",                       // non-string name
 		"[package]\nname = \"x\"\nbogus = 1\n",        // unknown key
 		"[package]\nname = \"x\"\n[unknown]\na = 1\n", // unknown table
-		"[package]\nname = \"x\"\n[dependencies.\"bad path!\"]\nversion = \"v1.0.0\"\n",
-		"[package]\nname = \"x\"\n[dependencies.\"a/b\"]\n", // missing query
-		"[package]\nname = \"x\"\n[dependencies.\"a/b\"]\nversion = \"nope..bad query!\"\n",
-		"[package]\nname = \"x\"\n[dependencies.\"a/b\"]\nversion = \"v1.0.0\"\nextra = 1\n",
+		"[package]\nname = \"x\"\n[dependencies]\n\"bad path!\" = \"v1.0.0\"\n",
+		"[package]\nname = \"x\"\n[dependencies]\n\"a/b\" = \"\"\n", // missing query
+		"[package]\nname = \"x\"\n[dependencies]\n\"a/b\" = \"nope..bad query!\"\n",
+		"[package]\nname = \"x\"\n[dependencies]\n\"a/b\" = { version = \"v1.0.0\", extra = 1 }\n",
+		"[package]\nname = \"x\"\n[dependencies]\n\"a/b\" = { version = \"v1.0.0\", url = \"u\", path = \"p\" }\n",
+		"[package]\nname = \"x\"\n[dependencies]\n\"a/b\" = 42\n",
+		"[package]\nname = \"x\"\n[replace]\n\"a/b\" = \"../x\"\n", // replace table removed
 		"[[module]]\npath = \"x\"\n", // arrays rejected in manifest
 	} {
 		if _, err := ParseManifest(src); err == nil {
@@ -53,6 +60,14 @@ func TestManifestErrors(t *testing.T) {
 	// Empty section headers are valid.
 	if _, err := ParseManifest("[package]\nname = \"x\"\n[dependencies]\n"); err != nil {
 		t.Fatalf("empty dep table should be valid: %v", err)
+	}
+	// Url-only deps track latest.
+	m, err := ParseManifest("[package]\nname = \"x\"\n[dependencies]\n\"a/b\" = { url = \"https://x/y.git\" }\n")
+	if err != nil {
+		t.Fatalf("url-only dep rejected: %v", err)
+	}
+	if m.Deps["a/b"].Query != "latest" {
+		t.Fatalf("url-only must default to latest: %+v", m.Deps["a/b"])
 	}
 }
 

@@ -1,13 +1,6 @@
 [package]
 name = "pkgs-demo"
 
-[dependencies."example.com/greet"]
-version = "^v1.0.0"
-
-[dependencies."example.com/notes"]
-version = "^v0.2.0"
-
-[replace]
-"example.com/greet" = "./deps/greet"
-"example.com/notes" = "./deps/notes"
-"example.com/words" = "./deps/words"
+[dependencies]
+"example.com/greet" = { path = "./deps/greet" }
+"example.com/notes" = { path = "./deps/notes" }

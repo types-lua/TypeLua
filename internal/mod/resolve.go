@@ -24,29 +24,25 @@ type Registry interface {
 	Manifest(ctx context.Context, path, commit string) (*Manifest, error)
 	// ResolveRev resolves a branch name or commit SHA to a commit.
 	ResolveRev(ctx context.Context, path string, dep Dep, rev string) (string, error)
+	// LocalDir reports a locally-forced content directory for path
+	// (root manifest replaces and discovered transitive path links).
+	LocalDir(path string) (string, bool)
 }
 
 // Resolve runs Minimal Version Selection over the root manifest,
 // returning the full module closure (direct + indirect) as a lock.
 func Resolve(ctx context.Context, root *Manifest, reg Registry) (*Lock, error) {
-	l, _, err := resolveWith(ctx, root, reg, nil)
-	return l, err
-}
-
-// ResolveForced resolves with pre-selected modules that skip tag lookup
-// (used for local replacements). Transitive requirements still resolve.
-func ResolveForced(ctx context.Context, root *Manifest, reg Registry, forced map[string]Resolved) (*Lock, error) {
-	l, _, err := resolveWith(ctx, root, reg, forced)
+	l, _, err := resolveWith(ctx, root, reg)
 	return l, err
 }
 
 // resolveWith also returns the fetch source (explicit URL or "") per path.
-func resolveWith(ctx context.Context, root *Manifest, reg Registry, forced map[string]Resolved) (*Lock, map[string]string, error) {
+func resolveWith(ctx context.Context, root *Manifest, reg Registry) (*Lock, map[string]string, error) {
 	if err := root.Validate(); err != nil {
 		return nil, nil, err
 	}
 	r := &resolver{root: root, reg: reg}
-	if err := r.run(ctx, forced); err != nil {
+	if err := r.run(ctx); err != nil {
 		return nil, nil, err
 	}
 	return r.lock(), r.sources, nil
@@ -65,12 +61,20 @@ type resolver struct {
 	processed map[string]bool
 }
 
-func (r *resolver) run(ctx context.Context, forced map[string]Resolved) error {
+func (r *resolver) run(ctx context.Context) error {
 	r.queries = map[string][]Query{}
 	r.sources = map[string]string{}
 	r.selected = map[string]*Resolved{}
 	r.processed = map[string]bool{}
 	for p, d := range r.root.Deps {
+		if _, ok := r.reg.LocalDir(p); ok {
+			// Locally forced content: versions bypassed entirely. The
+			// queue still expands it for transitive requirements below.
+			if err := r.pinSource(p, *d); err != nil {
+				return err
+			}
+			continue
+		}
 		q, err := ParseQuery(d.Query)
 		if err != nil {
 			return fmt.Errorf("module %q: %v", p, err)
@@ -82,16 +86,13 @@ func (r *resolver) run(ctx context.Context, forced map[string]Resolved) error {
 	}
 	// Worklist of paths needing (re)selection.
 	queue := sortedKeys(r.queries)
-	for p, f := range forced {
-		f := f
-		f.Path = p
-		r.selected[p] = &f
+	for p := range r.localSeeds() {
 		queue = append(queue, p)
 	}
 	for len(queue) > 0 {
 		p := queue[0]
 		queue = queue[1:]
-		if _, ok := forced[p]; !ok {
+		if _, ok := r.reg.LocalDir(p); !ok {
 			changed, err := r.selectOne(ctx, p)
 			if err != nil {
 				return err
@@ -99,6 +100,10 @@ func (r *resolver) run(ctx context.Context, forced map[string]Resolved) error {
 			if !changed {
 				continue
 			}
+		} else if done, err := r.selectLocal(ctx, p); err != nil {
+			return err
+		} else if !done {
+			continue
 		}
 		sel := r.selected[p]
 		key := p + "\x00" + sel.Version
@@ -114,6 +119,11 @@ func (r *resolver) run(ctx context.Context, forced map[string]Resolved) error {
 			continue
 		}
 		for dp, dd := range m.Deps {
+			if _, ok := r.reg.LocalDir(dp); ok {
+				// Content forced locally; queue for expansion only.
+				queue = append(queue, dp)
+				continue
+			}
 			q, err := ParseQuery(dd.Query)
 			if err != nil {
 				return fmt.Errorf("module %q requires %q: %v", p, dp, err)
@@ -126,6 +136,36 @@ func (r *resolver) run(ctx context.Context, forced map[string]Resolved) error {
 		}
 	}
 	return nil
+}
+
+// localSeeds lists root requirements served from local directories.
+func (r *resolver) localSeeds() map[string]bool {
+	out := map[string]bool{}
+	for p := range r.root.Deps {
+		if _, ok := r.reg.LocalDir(p); ok {
+			out[p] = true
+		}
+	}
+	return out
+}
+
+// selectLocal selects locally-forced content by manifest version.
+func (r *resolver) selectLocal(ctx context.Context, p string) (bool, error) {
+	m, err := r.reg.Manifest(ctx, p, "local")
+	if err != nil {
+		return false, fmt.Errorf("module %q: %v", p, err)
+	}
+	ver := "v0.0.0-local"
+	if m != nil && m.Version != "" {
+		if _, err := ParseVersion(m.Version); err == nil {
+			ver = m.Version
+		}
+	}
+	if cur := r.selected[p]; cur != nil && cur.Version == ver && cur.Commit == "local" {
+		return false, nil
+	}
+	r.selected[p] = &Resolved{Path: p, Version: ver, Commit: "local"}
+	return true, nil
 }
 
 // pinSource records the fetch URL for a path, rejecting conflicts.

@@ -77,7 +77,7 @@ func (p *Project) SaveLock() error {
 // replaceDir resolves a local replace target to an absolute directory.
 func (p *Project) replaceDir(path string) (string, bool) {
 	tgt, ok := p.Manifest.Replace[path]
-	if !ok || isURLTarget(tgt) {
+	if !ok {
 		return "", false
 	}
 	if !filepath.IsAbs(tgt) {
@@ -210,62 +210,47 @@ func Get(ctx context.Context, p *Project, cache *Cache, specs []string) (*Lock, 
 	return l, nil
 }
 
-// resolveLocked resolves with pins plus forced local replacements,
-// returning the lock and the fetch source (explicit URL or "") per path.
+// resolveLocked resolves with pins, returning the lock and the fetch
+// source (explicit URL or "") per path. Locally-forced content (root
+// replaces and discovered transitive path links) bypasses lookup inside
+// the resolver; backfillLockDirs records where it came from.
 func (p *Project) resolveLocked(ctx context.Context, cache *Cache, pins map[string]string) (*Lock, map[string]string, error) {
 	reg := p.registryFor(cache)
-	forced := map[string]Resolved{}
-	for path := range p.Manifest.Replace {
-		if dir, ok := p.replaceDir(path); ok {
-			ver := replaceVersion(dir)
-			forced[path] = Resolved{Path: path, Version: ver, Commit: "local"}
-		}
-	}
-	if len(forced) == 0 {
-		cp := &Manifest{Name: p.Manifest.Name, Version: p.Manifest.Version, Deps: map[string]*Dep{}, Replace: p.Manifest.Replace}
-		for path, d := range p.Manifest.Deps {
-			nd := &Dep{Query: d.Query, URL: d.URL}
-			if v, ok := pins[path]; ok {
-				nd.Query = v
-			}
-			cp.Deps[path] = nd
-		}
-		return resolveWith(ctx, cp, reg, nil)
-	}
-	// Pins for replaced paths are meaningless; drop them.
-	for path := range forced {
-		delete(pins, path)
-	}
-	// Pins for the rest become exact queries (tags must still exist);
-	// forced locals bypass lookup entirely.
 	cp := &Manifest{Name: p.Manifest.Name, Version: p.Manifest.Version, Deps: map[string]*Dep{}, Replace: p.Manifest.Replace}
 	for path, d := range p.Manifest.Deps {
-		nd := &Dep{Query: d.Query, URL: d.URL}
+		nd := &Dep{Query: d.Query, URL: d.URL, Path: d.Path}
 		if v, ok := pins[path]; ok {
-			if _, isForced := forced[path]; !isForced {
+			if _, isForced := reg.LocalDir(path); !isForced {
 				nd.Query = v
 			}
 		}
 		cp.Deps[path] = nd
 	}
-	return resolveWith(ctx, cp, reg, forced)
+	l, sources, err := resolveWith(ctx, cp, reg)
+	if err != nil {
+		return nil, nil, err
+	}
+	p.backfillLockDirs(reg, l)
+	return l, sources, nil
 }
 
-// replaceVersion reads a local replacement's manifest version,
-// falling back to a local pseudo-version.
-func replaceVersion(dir string) string {
-	raw, err := os.ReadFile(filepath.Join(dir, ManifestName))
-	if err != nil {
-		return "v0.0.0-local"
+// backfillLockDirs records project-relative source dirs for local entries
+// (portable across checkouts; standalone vendor/graph need no resolver).
+func (p *Project) backfillLockDirs(reg Registry, l *Lock) {
+	for i := range l.Entries {
+		e := &l.Entries[i]
+		if e.Commit != "local" {
+			e.Dir = ""
+			continue
+		}
+		if dir, ok := reg.LocalDir(e.Path); ok {
+			if rel, err := filepath.Rel(p.Dir, dir); err == nil {
+				e.Dir = filepath.ToSlash(rel)
+			} else {
+				e.Dir = dir
+			}
+		}
 	}
-	m, err := ParseManifest(string(raw))
-	if err != nil || m.Version == "" {
-		return "v0.0.0-local"
-	}
-	if _, err := ParseVersion(m.Version); err != nil {
-		return "v0.0.0-local"
-	}
-	return m.Version
 }
 
 // splitSpec splits `path[@query]` at the first `@`
@@ -327,11 +312,27 @@ func shortSHA(s string) string {
 	return s
 }
 
+// localSourceDir resolves a locked local entry to an absolute directory:
+// the lock's recorded dir first, then the root replace table (old locks).
+func (p *Project) localSourceDir(e LockEntry) (string, bool) {
+	if e.Commit != "local" {
+		return "", false
+	}
+	if e.Dir != "" {
+		dir := e.Dir
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(p.Dir, filepath.FromSlash(dir))
+		}
+		return dir, true
+	}
+	return p.replaceDir(e.Path)
+}
+
 // downloadAll ensures every locked module tree is present.
 // sources maps paths to explicit fetch URLs (may be empty per path).
 func (p *Project) downloadAll(ctx context.Context, cache *Cache, l *Lock, sources map[string]string) error {
 	for _, e := range l.Entries {
-		if dir, ok := p.replaceDir(e.Path); ok {
+		if dir, ok := p.localSourceDir(e); ok {
 			if _, err := os.Stat(dir); err != nil {
 				return fmt.Errorf("replace target for %q unavailable: %v", e.Path, err)
 			}
@@ -344,7 +345,7 @@ func (p *Project) downloadAll(ctx context.Context, cache *Cache, l *Lock, source
 		url := sources[e.Path]
 		if url == "" {
 			var err error
-			url, err = sourceURL(ctx, cache, p, e.Path)
+			url, err = p.sourceURL(ctx, cache, e.Path)
 			if err != nil {
 				return err
 			}
@@ -357,10 +358,7 @@ func (p *Project) downloadAll(ctx context.Context, cache *Cache, l *Lock, source
 }
 
 // sourceURL returns the fetch URL for a locked path.
-func sourceURL(ctx context.Context, cache *Cache, p *Project, path string) (string, error) {
-	if tgt, ok := p.Manifest.Replace[path]; ok && isURLTarget(tgt) {
-		return tgt, nil
-	}
+func (p *Project) sourceURL(ctx context.Context, cache *Cache, path string) (string, error) {
 	if d := p.Manifest.Deps[path]; d != nil && d.URL != "" {
 		return d.URL, nil
 	}
@@ -391,7 +389,7 @@ func (p *Project) Vendor(ctx context.Context, cache *Cache) error {
 	var lines []string
 	for _, e := range SortedEntries(p.Lock) {
 		var src string
-		if dir, ok := p.replaceDir(e.Path); ok {
+		if dir, ok := p.localSourceDir(e); ok {
 			src = dir
 		} else {
 			dst := cache.TreeDir(e.Path, e.Version)
@@ -479,14 +477,14 @@ func ModuleGraph(ctx context.Context, p *Project, cache *Cache) (*Graph, error) 
 	for _, e := range SortedEntries(p.Lock) {
 		g.Nodes = append(g.Nodes, e)
 		var m *Manifest
-		if dir, ok := p.replaceDir(e.Path); ok {
-			m = readLocalManifest(e.Path, dir)
+		if dir, ok := p.localSourceDir(e); ok {
+			m = readLocalManifest(dir)
 		} else {
 			dst := cache.TreeDir(e.Path, e.Version)
 			if cache.TreeCommit(dst) == "" {
 				return nil, fmt.Errorf("%s@%s not downloaded (run `tlua mod fetch` first)", e.Path, e.Version)
 			}
-			m = readLocalManifest(e.Path, dst)
+			m = readLocalManifest(dst)
 		}
 		if m == nil {
 			continue
@@ -501,7 +499,7 @@ func ModuleGraph(ctx context.Context, p *Project, cache *Cache) (*Graph, error) 
 	return g, nil
 }
 
-func readLocalManifest(path, dir string) *Manifest {
+func readLocalManifest(dir string) *Manifest {
 	raw, err := os.ReadFile(filepath.Join(dir, ManifestName))
 	if err != nil {
 		return nil
@@ -510,6 +508,5 @@ func readLocalManifest(path, dir string) *Manifest {
 	if err != nil {
 		return nil
 	}
-	_ = path
 	return m
 }
