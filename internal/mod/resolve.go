@@ -29,14 +29,27 @@ type Registry interface {
 // Resolve runs Minimal Version Selection over the root manifest,
 // returning the full module closure (direct + indirect) as a lock.
 func Resolve(ctx context.Context, root *Manifest, reg Registry) (*Lock, error) {
+	l, _, err := resolveWith(ctx, root, reg, nil)
+	return l, err
+}
+
+// ResolveForced resolves with pre-selected modules that skip tag lookup
+// (used for local replacements). Transitive requirements still resolve.
+func ResolveForced(ctx context.Context, root *Manifest, reg Registry, forced map[string]Resolved) (*Lock, error) {
+	l, _, err := resolveWith(ctx, root, reg, forced)
+	return l, err
+}
+
+// resolveWith also returns the fetch source (explicit URL or "") per path.
+func resolveWith(ctx context.Context, root *Manifest, reg Registry, forced map[string]Resolved) (*Lock, map[string]string, error) {
 	if err := root.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	r := &resolver{root: root, reg: reg}
-	if err := r.run(ctx); err != nil {
-		return nil, err
+	if err := r.run(ctx, forced); err != nil {
+		return nil, nil, err
 	}
-	return r.lock(), nil
+	return r.lock(), r.sources, nil
 }
 
 type resolver struct {
@@ -52,7 +65,7 @@ type resolver struct {
 	processed map[string]bool
 }
 
-func (r *resolver) run(ctx context.Context) error {
+func (r *resolver) run(ctx context.Context, forced map[string]Resolved) error {
 	r.queries = map[string][]Query{}
 	r.sources = map[string]string{}
 	r.selected = map[string]*Resolved{}
@@ -69,15 +82,23 @@ func (r *resolver) run(ctx context.Context) error {
 	}
 	// Worklist of paths needing (re)selection.
 	queue := sortedKeys(r.queries)
+	for p, f := range forced {
+		f := f
+		f.Path = p
+		r.selected[p] = &f
+		queue = append(queue, p)
+	}
 	for len(queue) > 0 {
 		p := queue[0]
 		queue = queue[1:]
-		changed, err := r.selectOne(ctx, p)
-		if err != nil {
-			return err
-		}
-		if !changed {
-			continue
+		if _, ok := forced[p]; !ok {
+			changed, err := r.selectOne(ctx, p)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				continue
+			}
 		}
 		sel := r.selected[p]
 		key := p + "\x00" + sel.Version
