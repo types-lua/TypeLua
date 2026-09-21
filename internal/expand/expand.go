@@ -15,7 +15,7 @@ const maxExpandDepth = 64
 type macroDef struct {
 	name      string
 	params    []string
-	hasVarArg bool // trailing `...` collects extra call arguments
+	hasVarArg bool       // trailing `...` collects extra call arguments
 	body      ast.Expr   // expression macro
 	block     *ast.Block // statement macro
 	isExpr    bool

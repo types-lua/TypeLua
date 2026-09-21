@@ -423,7 +423,8 @@ func TestNilTolerance(t *testing.T) {
 	}
 }
 
-func TestMappedModifiers(t *testing.T) {	// Homomorphic: unmarked mapping over keyof inherits base modifiers.
+func TestMappedModifiers(t *testing.T) {
+	// Homomorphic: unmarked mapping over keyof inherits base modifiers.
 	expectOK(t, `
 type Base = { x: number, y?: string, readonly z: boolean }
 type H = { [K in keyof Base]: Base[K] }
