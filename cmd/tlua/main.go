@@ -34,6 +34,8 @@ func run(args []string) error {
 		return nil
 	case "init":
 		return cmdInit(args[1:])
+	case "mod":
+		return cmdMod(args[1:])
 	case "check":
 		return cmdCheck(args[1:])
 	case "build":
@@ -52,6 +54,12 @@ func usage() {
 
 Usage:
   tlua init [--dir .]                 create tlua.json + example
+  tlua mod init [--dir .] [--name n]  create tlua.toml package manifest
+  tlua mod get <path[@query]>...      add/update deps, resolve, download, lock
+  tlua mod fetch                       resolve + download all locked modules
+  tlua mod vendor                      copy locked sources into tlua_modules/
+  tlua mod list [--indirect]           list locked modules (direct by default)
+  tlua mod graph                       print the locked dependency graph
   tlua check [files...]               type-check only
   tlua build [files...] [--outDir dist] [--target 5.4]
   tlua lsp                          language server over stdio
