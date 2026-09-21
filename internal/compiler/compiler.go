@@ -74,19 +74,16 @@ func (p *Program) LoadSources(srcs map[string]string) {
 	}
 }
 
-// Check runs the type checker on all files (each file checked independently with shared builtins;
-// type decls are per-file for v1 — cross-file imports via require are `any`).
+// Check runs the type checker on all files in dependency order (see
+// require.go): each file sees the module types of its requirements,
+// falling back to `any` per edge when unresolved.
 func (p *Program) Check() {
 	opt := checker.Options{
 		Strict:          p.Cfg.Strict(),
 		StrictNilChecks: p.Cfg.StrictNilChecks(),
 		NoImplicitAny:   p.Cfg.NoImplicitAny(),
 	}
-	for _, sf := range p.Files {
-		ds := checker.CheckFile(sf.File, opt)
-		// Rewrite file names to relative if needed (already relative for in-mem).
-		p.Diags = append(p.Diags, ds...)
-	}
+	p.checkAll(opt)
 }
 
 // HasErrors reports whether any error-severity diagnostic exists.

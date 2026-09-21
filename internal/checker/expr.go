@@ -45,6 +45,14 @@ func (c *Checker) checkExpr(e ast.Expr) types.Type {
 func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 	switch n := e.(type) {
 	case *ast.CallExpr:
+		// `require("dotted.path")` resolves through the driver's module
+		// types (any when unresolved or shadowed by a local).
+		if id, ok := n.Func.(*ast.Ident); ok && id.Name == "require" && len(n.Args) == 1 {
+			if lit, ok := n.Args[0].(*ast.StringLit); ok && !isShadowedRequire(c) {
+				c.checkExpr(n.Func) // record the builtin use
+				return []types.Type{c.requirePathType(lit)}
+			}
+		}
 		// `Point.new(...)` gets instantiation checks (abstract/private).
 		if fe, ok := n.Func.(*ast.FieldExpr); ok && fe.Field.Name == "new" {
 			if id, ok := fe.Obj.(*ast.Ident); ok {

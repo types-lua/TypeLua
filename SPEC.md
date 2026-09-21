@@ -73,7 +73,7 @@ import G: GreetApi from "example.com.greet.greet"  -- 糖：local G = require(..
 - `export`/`declare` 仅修饰声明；`declare` 无发射。
 - 泛型：`<T>`, `<T extends C>`, `<T = Default>`；调用时推断，也支持显式 `f<T>()`（含 `obj:m<T>()`、`C.new<T>()`、`C<T>()`；不足位用推断/默认值补齐，超位与约束违反报错）。
 - 属性：`local x <const> = 1`，`local h <close> = ...`（`--target 5.1` 时剥离）。
-- `import` 三式：`import "p"`（副作用）、`import N from "p"`（`any` 绑定）、`import N: T from "p"`（注解绑定，均与同名局部重定义同报错）；`import` 仍是普通标识符（`local import = 1`、`import("x")`、跨行字符串调用不受影响）。
+- `import` 三式：`import "p"`（副作用）、`import N from "p"`、`import N: T from "p"`；检查按依赖拓扑排序并从源文件推断模块类型（无注解即可用，有注解则校验一致，不一致报 `TL3010`）；`import` 仍是普通标识符（`local import = 1`、`import("x")`、跨行字符串调用不受影响）。
 
 ## 4. 类（class 运行时）
 
@@ -191,6 +191,7 @@ direct = true
 - 解析：最小版本选择（MVS）——依赖的依赖参与求极大；`exact` 为 pin（与 caret 冲突即报错）；同 path 多源/多 revision 即报错（用 `replace` 消解）。
 - 完整性：`fetch` 复现 lock；上游 tag 挪动（同 version 不同 commit）报错，须显式 `get` 升级；`get` 具名升级、其余按 lock 复现。
 - 命令：`mod init`、`mod get <path[@query]>...`（无参=全升）、`mod fetch`、`mod vendor`（拷 `*.tl` 到 `tlua_modules/<path>/` + `modules.txt`）、`mod list [--indirect]`、`mod graph`。
-- 构建集成：`tlua_modules/**/*.tl` 自动参检参编（`dist/tlua_modules/...` 同构输出）；运行时 `require("github.com.foo.bar.baz")`（点转目录，`import X: T from "..."` 为其语法糖），`LUA_PATH` 加 `tlua_modules/?.lua`；模块内互引请用全路径。
+- 构建集成：`tlua_modules/**/*.tl` 自动参检参编（`dist/tlua_modules/...` 同构输出）；运行时 `require("github.com.foo.bar.baz")`（点转目录，`import ... from "..."` 为其语法糖），`LUA_PATH` 加 `tlua_modules/?.lua`；模块内互引请用全路径。
+- 模块消解（check/build）：点路径先找引用文件同目录，再找配置目录下 `tlua_modules`；命中程序内文件则按依赖序检查并用其 `return M` 类型（循环引用、自引用、缺失目标、`.d.tl` 一律回退 `any`；宏体内拼接出的 require 尽力而为）。
 - 缓存：`~/.tlua/pkg/mod`（`TLUA_MODCACHE` 覆盖；`TLUA_OFFLINE=1` 离线，预热后 fetch/vendor/check 全可用）；`replace` 本地目录记 `commit = "local"`。
 - 限制：`mod tidy`（未用清理）暂无，请手工删依赖；`--offline` 只有环境变量开关。

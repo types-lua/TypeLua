@@ -222,8 +222,9 @@ func isPureList(lit *ast.TableLit) bool {
 }
 
 // checkImport binds `import Name [: Type] from "path"` like
-// `local Name [: Type] = require("path")` (require returns any, which
-// flows into any annotation). The side-effect form binds nothing.
+// `local Name [: Type] = require("path")`. Without an annotation the
+// driver-resolved module type applies (any when unresolved); with one,
+// the resolved type must satisfy it.
 func (c *Checker) checkImport(n *ast.ImportStmt) {
 	if n.Name == nil {
 		return
@@ -231,6 +232,13 @@ func (c *Checker) checkImport(n *ast.ImportStmt) {
 	want := types.Type(types.Any)
 	if n.Type != nil {
 		want = c.resolveType(n.Type)
+		if got := c.requirePathType(n.Path); !isAnyLike(got) {
+			if !types.IsAssignable(got, want, c.opt.toTypes()) {
+				c.errorf("TL3010", n.Name.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
+			}
+		}
+	} else {
+		want = c.requirePathType(n.Path)
 	}
 	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
 		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)

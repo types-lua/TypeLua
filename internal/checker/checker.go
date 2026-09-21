@@ -15,6 +15,9 @@ type Options struct {
 	Strict          bool
 	StrictNilChecks bool
 	NoImplicitAny   bool
+	// RequireTypes maps dotted require paths ("a.b.c") to module types
+	// resolved by the driver (nil = every require is any, classic mode).
+	RequireTypes map[string]types.Type
 }
 
 func DefaultOptions() Options {
@@ -241,6 +244,18 @@ func CheckFile(f *ast.File, opt Options) []diag.Diagnostic {
 // CheckFileIndexed type-checks and additionally returns the position index
 // used by language servers. The index is always populated.
 func CheckFileIndexed(f *ast.File, opt Options) ([]diag.Diagnostic, *SymIndex) {
+	diags, idx, _ := checkFileModule(f, opt)
+	return diags, idx
+}
+
+// CheckFileModule checks like CheckFileIndexed and additionally reports
+// the module's own return type (a top-level `return M` identifier looked
+// up in the surviving top scope, else Any).
+func CheckFileModule(f *ast.File, opt Options) ([]diag.Diagnostic, *SymIndex, types.Type) {
+	return checkFileModule(f, opt)
+}
+
+func checkFileModule(f *ast.File, opt Options) ([]diag.Diagnostic, *SymIndex, types.Type) {
 	c := New(opt)
 	c.file = f.Name
 	// Macros expand before checking (definitions erase; idempotent).
@@ -252,5 +267,19 @@ func CheckFileIndexed(f *ast.File, opt Options) ([]diag.Diagnostic, *SymIndex) {
 		c.recordScope(c.cur(), f.Block.Span())
 	}
 	c.checkBlock(f.Block)
-	return c.diags, c.Index
+	return c.diags, c.Index, c.moduleType(f)
+}
+
+// moduleType reports the type of the file's top-level `return M`
+// identifier (looked up in the surviving top scope), else Any.
+func (c *Checker) moduleType(f *ast.File) types.Type {
+	if f.Block == nil || f.Block.Ret == nil || len(f.Block.Ret.Exprs) == 0 {
+		return types.Any
+	}
+	if id, ok := f.Block.Ret.Exprs[0].(*ast.Ident); ok {
+		if s := c.cur().lookupVar(id.Name); s != nil && s.Type != nil {
+			return s.Type
+		}
+	}
+	return types.Any
 }
