@@ -8,9 +8,9 @@ import (
 
 // fakeReg is an in-memory Registry: tags and manifests per module path.
 type fakeReg struct {
-	tags map[string]map[string]string      // path -> tag -> commit
-	mani map[string]map[string]*Manifest   // path -> commit -> manifest
-	revs map[string]map[string]string      // path -> rev -> commit
+	tags map[string]map[string]string    // path -> tag -> commit
+	mani map[string]map[string]*Manifest // path -> commit -> manifest
+	revs map[string]map[string]string    // path -> rev -> commit
 }
 
 func (f *fakeReg) Tags(_ context.Context, path string, _ Dep) (map[string]string, error) {

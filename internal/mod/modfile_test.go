@@ -36,15 +36,15 @@ func TestManifestRoundTrip(t *testing.T) {
 
 func TestManifestErrors(t *testing.T) {
 	for _, src := range []string{
-		"[package]\n",                                             // empty name
-		"[package]\nname = 1\n",                                   // non-string name
-		"[package]\nname = \"x\"\nbogus = 1\n",                    // unknown key
-		"[package]\nname = \"x\"\n[unknown]\na = 1\n",             // unknown table
+		"[package]\n",                                 // empty name
+		"[package]\nname = 1\n",                       // non-string name
+		"[package]\nname = \"x\"\nbogus = 1\n",        // unknown key
+		"[package]\nname = \"x\"\n[unknown]\na = 1\n", // unknown table
 		"[package]\nname = \"x\"\n[dependencies.\"bad path!\"]\nversion = \"v1.0.0\"\n",
-		"[package]\nname = \"x\"\n[dependencies.\"a/b\"]\n",       // missing query
+		"[package]\nname = \"x\"\n[dependencies.\"a/b\"]\n", // missing query
 		"[package]\nname = \"x\"\n[dependencies.\"a/b\"]\nversion = \"nope..bad query!\"\n",
 		"[package]\nname = \"x\"\n[dependencies.\"a/b\"]\nversion = \"v1.0.0\"\nextra = 1\n",
-		"[[module]]\npath = \"x\"\n",                             // arrays rejected in manifest
+		"[[module]]\npath = \"x\"\n", // arrays rejected in manifest
 	} {
 		if _, err := ParseManifest(src); err == nil {
 			t.Fatalf("expected error for %q", src)

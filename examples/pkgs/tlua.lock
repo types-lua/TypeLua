@@ -1,0 +1,6 @@
+# tlua lockfile (tlua.lock) - exact pins; edit via `tlua mod get`
+[[module]]
+path = "example.com/greet"
+version = "v1.0.0"
+commit = "local"
+direct = true

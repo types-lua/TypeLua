@@ -11,7 +11,7 @@ go build -o tlua ./cmd/tlua
 ./tlua build   # -> dist/*.lua
 ```
 
-示例见 `examples/*/`（17 个文件，`tlua check` 全过），规范见 `SPEC.md`。
+示例见 `examples/*/`（20 个文件，`tlua check` 全过），规范见 `SPEC.md`。
 
 | 示例 | 覆盖 |
 |---|---|
@@ -31,6 +31,7 @@ go build -o tlua ./cmd/tlua
 | `conditional` | 条件类型/`infer`：分发、元组/函数/对象/类模式（真机运行验证） |
 | `macros` | 卫生宏：表达式/语句宏、变长 `...`、遮蔽与捕获防护（真机运行验证） |
 | `advanced` | 显式泛型实参、映射类型（含 `+?`/`-?`/`+readonly`/`-readonly` 与同态继承）、索引访问（真机运行验证） |
+| `pkgs` | 包管理：`tlua.toml` + `replace` 本地依赖 + vendor（离线可验） |
 
 ## tlua.json
 
@@ -70,6 +71,7 @@ local d = Dog.new("rex")
 - `internal/ast,parser`：递归下降 + Pratt + 错误恢复
 - `internal/types,checker`：结构子类型/泛型推断/窄化
 - `internal/emitter,config,compiler`：擦除发射 + `tlua.json` + 管线
+- `internal/toml,mod`：TOML 子集 + 去中心化包管理（manifest/lock/MVS/git 拉取/缓存/vendor）
 - `cmd/tlua`：`init/check/build/version/lsp`（stdio 语言服务器：诊断/悬停/定义/补全/引用/重命名，增量同步）
 
 ## 质量

@@ -109,25 +109,25 @@ func TestDecodeEscapes(t *testing.T) {
 
 func TestDecodeErrors(t *testing.T) {
 	for _, src := range []string{
-		"[a]\n[a]\n",                       // duplicate table
-		"[a]\nx = 1\nx = 2\n",              // duplicate key
-		"[a]\nx = 01\n",                    // hmm: leading zero parses as 1; keep valid? (checked below)
-		"[a]\nx = \n",                      // missing value
-		"[a]\nx = \"unterminated\n",        // unterminated string
-		"[a]\nx = \"bad\\q\"\n",            // bad escape
-		"[a]\nx = \"bad\\u12\"\n",          // truncated unicode
-		"[a]\nx = \"bad\\uD800\"\n",        // surrogate
-		"[a]\nx = [1, 2\n",                 // unterminated array
-		"[a]\nx = tru\n",                   // bad bool
-		"[a]\nx = 1 y = 2\n",               // trailing garbage
-		"[a]\n[a.b]\n",                     // tables need not pre-exist? plain subtables are fine...
-		"[[m]]\n[m]\n",                     // table collides with array
-		"[a]\nx.y = 1\n",                   // dotted pair keys unsupported
-		"[unclosed\n",                      // unclosed header
-		"key = ",                           // eof in value
-		"[a]\nx = 1.2.3\n",                 // bad float
-		"[a]\nx = 1e\n",                    // bad exponent
-		"\"\"\"x\"\"\"\n",                   // multiline strings unsupported
+		"[a]\n[a]\n",                // duplicate table
+		"[a]\nx = 1\nx = 2\n",       // duplicate key
+		"[a]\nx = 01\n",             // hmm: leading zero parses as 1; keep valid? (checked below)
+		"[a]\nx = \n",               // missing value
+		"[a]\nx = \"unterminated\n", // unterminated string
+		"[a]\nx = \"bad\\q\"\n",     // bad escape
+		"[a]\nx = \"bad\\u12\"\n",   // truncated unicode
+		"[a]\nx = \"bad\\uD800\"\n", // surrogate
+		"[a]\nx = [1, 2\n",          // unterminated array
+		"[a]\nx = tru\n",            // bad bool
+		"[a]\nx = 1 y = 2\n",        // trailing garbage
+		"[a]\n[a.b]\n",              // tables need not pre-exist? plain subtables are fine...
+		"[[m]]\n[m]\n",              // table collides with array
+		"[a]\nx.y = 1\n",            // dotted pair keys unsupported
+		"[unclosed\n",               // unclosed header
+		"key = ",                    // eof in value
+		"[a]\nx = 1.2.3\n",          // bad float
+		"[a]\nx = 1e\n",             // bad exponent
+		"\"\"\"x\"\"\"\n",           // multiline strings unsupported
 	} {
 		if src == "[a]\nx = 01\n" || src == "[a]\n[a.b]\n" {
 			continue

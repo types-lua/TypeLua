@@ -155,3 +155,38 @@ macro wrap(f, ...) = f(...)             -- 变长：多余实参收集于 `...`
 - 递归类型的打印截断（回指显示名，如 `Node{ next?: Node }`）；错误信息中超深类型的冗长。
 - 泛型约束/默认值中的自引用；64 层实例化上限内的误伤（源码手写 64 层以上嵌套实例化）。
 - 成员补全不过滤 `private`；链式 `a.b.` 只解析末级标识符（单标识符）；补全不对 `any` 展开。
+
+## 11. 包管理（去中心化，TOML）
+
+无中央仓库：模块即 git 仓库，路径即地址（`github.com/owner/repo[/sub]`，亦支持 gitee/gitlab/自建站，`url` 覆盖更异形布局）。
+
+```toml
+# tlua.toml
+[package]
+name = "myapp"
+version = "v0.1.0"
+
+[dependencies."github.com/foo/bar"]
+version = "^v1.2.0"          # latest | v1.2.3 精确 | ^v1.2.0 | 分支名 | commit SHA
+# url = "https://git.example.com/foo/bar.git"   # 可选：自建站/本地测试
+
+[replace]
+"github.com/foo/bar" = "../local-bar"   # 本地目录（或另一 URL）
+```
+
+```toml
+# tlua.lock（精确锁定，精确到 commit；direct 区分直接/间接依赖）
+[[module]]
+path = "github.com/foo/bar"
+version = "v1.2.0"
+commit = "619d2cd6ee7d2c71b5ffce85eedff83eb9b30fc9"
+direct = true
+```
+
+- 版本：git tag 的严格 semver（`v1.2.3`，`latest` 取最高正式版，预发布永不自动选）；分支/SHA 为 pin。
+- 解析：最小版本选择（MVS）——依赖的依赖参与求极大；`exact` 为 pin（与 caret 冲突即报错）；同 path 多源/多 revision 即报错（用 `replace` 消解）。
+- 完整性：`fetch` 复现 lock；上游 tag 挪动（同 version 不同 commit）报错，须显式 `get` 升级；`get` 具名升级、其余按 lock 复现。
+- 命令：`mod init`、`mod get <path[@query]>...`（无参=全升）、`mod fetch`、`mod vendor`（拷 `*.tl` 到 `tlua_modules/<path>/` + `modules.txt`）、`mod list [--indirect]`、`mod graph`。
+- 构建集成：`tlua_modules/**/*.tl` 自动参检参编（`dist/tlua_modules/...` 同构输出）；运行时 `require("github.com.foo.bar.baz")`（点转目录），`LUA_PATH` 加 `tlua_modules/?.lua`；模块内互引请用全路径。
+- 缓存：`~/.tlua/pkg/mod`（`TLUA_MODCACHE` 覆盖；`TLUA_OFFLINE=1` 离线，预热后 fetch/vendor/check 全可用）；`replace` 本地目录记 `commit = "local"`。
+- 限制：`mod tidy`（未用清理）暂无，请手工删依赖；`--offline` 只有环境变量开关。

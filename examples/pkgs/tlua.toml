@@ -1,0 +1,8 @@
+[package]
+name = "pkgs-demo"
+
+[dependencies."example.com/greet"]
+version = "^v1.0.0"
+
+[replace]
+"example.com/greet" = "./deps/greet"
