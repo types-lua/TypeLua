@@ -23,7 +23,10 @@ type message struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
-	Result  any             `json:"result,omitempty"`
+	// Result is always serialized (possibly null): JSON-RPC requires every
+	// response to carry either result or error, and strict clients reject
+	// a response with neither.
+	Result  any             `json:"result"`
 	Error   *respError      `json:"error,omitempty"`
 }
 
