@@ -105,6 +105,7 @@ func (p *Program) HasErrors() bool {
 // For safety, we emit every non-decl file (even empty) to preserve build shape.
 func (p *Program) Emit() ([]string, error) {
 	var emitted []string
+	withPrelude := NeedsModPath(p)
 	opt := emitter.Options{Target: p.Cfg.Target()}
 	for _, sf := range p.Files {
 		if sf.IsDecl {
@@ -115,6 +116,9 @@ func (p *Program) Emit() ([]string, error) {
 			continue
 		}
 		out, mappings := emitter.EmitFileWithMap(sf.File, opt)
+		if withPrelude {
+			out, mappings = PrependPrelude(out, mappings)
+		}
 		rel, err := filepath.Rel(filepath.Join(p.Cfg.Dir, p.Cfg.RootDir()), sf.Path)
 		if err != nil {
 			rel = filepath.Base(sf.Path)

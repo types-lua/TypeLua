@@ -1,7 +1,7 @@
 --- Package demo with direct + indirect dependencies (all local, no network):
 ---   tlua mod fetch    # resolve -> tlua.lock (words lands as indirect)
 ---   tlua mod vendor   # copy sources -> tlua_modules/
----   tlua check && tlua build
+---   tlua check && tlua build && lua dist/main.lua   # 产物自带运行时自举，开箱即跑
 --- Imports name packages, not files (`init.tl` is the package root);
 --- a manifest short name (`greet`) works too when unambiguous.
 --- require maps dotted paths under tlua_modules (see SPEC §11).

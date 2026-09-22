@@ -199,8 +199,9 @@ direct = true
 - 解析：最小版本选择（MVS）——依赖的依赖参与求极大；`exact` 为 pin（与 caret 冲突即报错）；同 path 多源/多 revision 即报错。`path` 相对其所在 manifest（Cargo 一致），传递 path 链（`notes -> ../words`）离线可达；远端 manifest 的裸 path（无 version）直接报错（发布规则：给它加 version）。
 - 完整性：`fetch` 复现 lock；上游 tag 挪动（同 version 不同 commit）报错，须显式 `get` 升级；`get` 具名升级、其余按 lock 复现。
 - 命令：`mod init`、`mod get <path[@query]>...`（无参=全升）、`mod fetch`、`mod vendor`（拷 `*.tl` 到 `tlua_modules/<path>/` + `modules.txt`）、`mod list [--indirect]`、`mod graph`。
-- 构建集成：`tlua_modules/**/*.tl` 自动参检参编（`dist/tlua_modules/...` 同构输出）；运行时 `require("example.com.greet")`（点转目录，`import ... from "..."` 为其语法糖），`LUA_PATH` 加 `tlua_modules/?.lua;tlua_modules/?/init.lua`；模块内互引请用全路径。
-- 模块消解（check/build）：点路径先找引用文件同目录，再找配置目录下 `tlua_modules`；`example.com.greet` 先试 `greet.tl` 再试包根 `greet/init.tl`（Lua `init.lua` 惯例）；manifest 末段唯一的短名（`greet`）亦可（歧义则回退）；命中程序内文件则按依赖序检查并用其 `return M` 类型（循环引用、自引用、缺失目标、`.d.tl` 一律回退 `any`；宏体内拼接出的 require 尽力而为）。
+- 构建集成：`tlua_modules/**/*.tl` 自动参检参编（`dist/tlua_modules/...` 同构输出）；运行时 `require("example.com.greet")`（点转目录，`import ... from "..."` 为其语法糖），模块内互引请用全路径。
+- 运行时自举：凡含 `require`/`import` 的程序，每个产物文件头部自动带 bootstrap（多文件幂等，`__tl_` 前缀保留）：按运行脚本所在目录前置 `<dir>/?.lua;<dir>/?/init.lua`，并追加一个 searcher（5.2+ `package.searchers` / 5.1 `package.loaders`，标准加载器之后）服务点式 vendor 目录（`<dir>/tlua_modules/<点式路径>.lua` 与 `.../init.lua`，候选展开与编译期同序）。因此 `lua dist/main.lua`（项目根或绝对路径）开箱即跑；用户 `LUA_PATH` 保留（只前置/追加，不替换）；同名并存时工程内文件优先于 vendor（与检查一致）；stdin 方式运行（`lua - < file`）无法定位脚本目录，不支持。
+- 模块消解（check/build）：点路径先找引用文件同目录，再找配置目录下 `tlua_modules`；多点路径按候选逐级尝试（全斜杠优先，如 `example/com/greet`，再逐段保留前导点，如 `example.com/greet`，与 manifest/vendor 的域名式布局一致）；`example.com.greet` 先试 `greet.tl` 再试包根 `greet/init.tl`（Lua `init.lua` 惯例）；manifest 末段唯一的短名（`greet`）亦可（歧义则回退）；命中程序内文件则按依赖序检查并用其 `return M` 类型（循环引用、自引用、缺失目标、`.d.tl` 一律回退 `any`；宏体内拼接出的 require 尽力而为）。
 - 缓存：`~/.tlua/pkg/mod`（`TLUA_MODCACHE` 覆盖；`TLUA_OFFLINE=1` 离线，预热后 fetch/vendor/check 全可用）；`replace` 本地目录记 `commit = "local"`。
 - 限制：`mod tidy`（未用清理）暂无，请手工删依赖；`--offline` 只有环境变量开关。
 

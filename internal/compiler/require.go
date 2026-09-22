@@ -61,6 +61,25 @@ func lastSegment(path string) string {
 	return path
 }
 
+// candidateRels expands a dotted require path into candidate relatives.
+// k=1 is all slashes (historical behavior, tried first); larger k preserves
+// leading dots for domain-style module paths ("example.com.greet" also
+// tries "example.com/greet", matching the manifest/vendor layout where the
+// first segment keeps its dots).
+func candidateRels(dotted string) []string {
+	segs := strings.Split(dotted, ".")
+	var out []string
+	for k := 1; k <= len(segs); k++ {
+		head := strings.Join(segs[:k], ".")
+		if k == len(segs) {
+			out = append(out, filepath.FromSlash(head))
+		} else {
+			out = append(out, filepath.FromSlash(head+"/"+strings.Join(segs[k:], "/")))
+		}
+	}
+	return out
+}
+
 // resolveRequire maps a dotted require path to a program source file.
 func (p *Program) resolveRequire(from *SourceFile, dotted string) *SourceFile {
 	if full, ok := p.shorts[dotted]; ok {
@@ -72,17 +91,18 @@ func (p *Program) resolveRequire(from *SourceFile, dotted string) *SourceFile {
 			return nil
 		}
 	}
-	rel := filepath.FromSlash(strings.Join(segs, "/"))
-	bases := []string{
-		filepath.Join(filepath.Dir(from.Path), rel),
-		filepath.Join(p.Cfg.Dir, mod.VendorDir, rel),
-	}
-	for _, base := range bases {
-		if sf := p.fileByPath(base + ".tl"); sf != nil {
-			return sf
+	for _, rel := range candidateRels(dotted) {
+		bases := []string{
+			filepath.Join(filepath.Dir(from.Path), rel),
+			filepath.Join(p.Cfg.Dir, mod.VendorDir, rel),
 		}
-		if sf := p.fileByPath(filepath.Join(base, "init.tl")); sf != nil {
-			return sf
+		for _, base := range bases {
+			if sf := p.fileByPath(base + ".tl"); sf != nil {
+				return sf
+			}
+			if sf := p.fileByPath(filepath.Join(base, "init.tl")); sf != nil {
+				return sf
+			}
 		}
 	}
 	return nil
