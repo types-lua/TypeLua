@@ -9,6 +9,7 @@ go build -o tlua ./cmd/tlua
 ./tlua init
 ./tlua check
 ./tlua build   # -> dist/*.lua
+./tlua build --watch   # 或 ./tlua watch：监听改动持续增量编译（对标 tsc --watch）
 ```
 
 示例见 `examples/*/`（25 个文件，`tlua check` 全过），规范见 `SPEC.md`。
@@ -73,7 +74,8 @@ local d = Dog.new("rex")
 - `internal/types,checker`：结构子类型/泛型推断/窄化
 - `internal/emitter,config,compiler`：擦除发射 + `tlua.json` + 管线
 - `internal/toml,mod`：TOML 子集 + 去中心化包管理（manifest/lock/MVS/git 拉取/缓存/vendor）
-- `cmd/tlua`：`init/check/build/version/lsp`（stdio 语言服务器：诊断/悬停/定义/补全/引用/重命名，增量同步）
+- `cmd/tlua`：`init/check/build/version/lsp`（stdio 语言服务器：诊断/悬停/定义/补全/引用/重命名，增量同步）；
+  `check/build --watch`（及 `watch` 子命令）：轮询 + 去抖的持续编译，改动（含新增/删除/`tlua.json`）自动重编，删源自动清陈旧产物，坏配置/单轮崩溃不退出
 
 ## 质量
 

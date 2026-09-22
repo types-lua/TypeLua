@@ -104,14 +104,14 @@ func (p *Program) HasErrors() bool {
 // Type-only decls are erased by the emitter; `declare function` empty bodies are skipped at file level?
 // For safety, we emit every non-decl file (even empty) to preserve build shape.
 func (p *Program) Emit() ([]string, error) {
-	outDir := p.Cfg.OutDir()
-	if !filepath.IsAbs(outDir) {
-		outDir = filepath.Join(p.Cfg.Dir, outDir)
-	}
 	var emitted []string
 	opt := emitter.Options{Target: p.Cfg.Target()}
 	for _, sf := range p.Files {
 		if sf.IsDecl {
+			continue
+		}
+		dst, ok := OutputForFile(p.Cfg, sf.Path)
+		if !ok {
 			continue
 		}
 		out, mappings := emitter.EmitFileWithMap(sf.File, opt)
@@ -120,9 +120,7 @@ func (p *Program) Emit() ([]string, error) {
 			rel = filepath.Base(sf.Path)
 		}
 		srcRel := filepath.ToSlash(rel)
-		rel = strings.TrimSuffix(rel, ".tl") + ".lua"
 		// Handle `.d.tl` already skipped; `foo.tl` -> `foo.lua`.
-		dst := filepath.Join(outDir, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return emitted, err
 		}

@@ -40,6 +40,8 @@ func run(args []string) error {
 		return cmdCheck(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
+	case "watch":
+		return cmdWatch(args[1:])
 	case "lsp":
 		os.Exit(lsp.Run(os.Stdin, os.Stdout, Version))
 		return nil
@@ -60,8 +62,9 @@ Usage:
   tlua mod vendor                      copy locked sources into tlua_modules/
   tlua mod list [--indirect]           list locked modules (direct by default)
   tlua mod graph                       print the locked dependency graph
-  tlua check [files...]               type-check only
-  tlua build [files...] [--outDir dist] [--target 5.4]
+  tlua check [files...] [--watch] [-w] [--pollInterval ms] [--debounce ms]
+  tlua build [files...] [--outDir dist] [--target 5.4] [--watch] [-w]
+  tlua watch [files...] [--outDir dist] [--target 5.4]
   tlua lsp                          language server over stdio
   tlua version                        print version`)
 }
@@ -115,14 +118,14 @@ print(dist(p, { x = 4, y = 6 }))
 	return nil
 }
 
-func loadCfgFor(paths []string, outDir, target string, sourceMap bool) (*config.Config, error) {
+func loadCfgFor(paths []string, outDir, target string, sourceMap bool) (*config.Config, string, error) {
 	cwd, _ := os.Getwd()
 	cfgPath := config.FindUp(cwd)
 	var cfg *config.Config
 	if cfgPath != "" {
 		c, err := config.Load(cfgPath)
 		if err != nil {
-			return nil, fmt.Errorf("bad %s: %v", cfgPath, err)
+			return nil, "", fmt.Errorf("bad %s: %v", cfgPath, err)
 		}
 		cfg = c
 	} else {
@@ -136,24 +139,30 @@ func loadCfgFor(paths []string, outDir, target string, sourceMap bool) (*config.
 	}
 	if target != "" {
 		if target != "5.4" && target != "5.1" {
-			return nil, fmt.Errorf("invalid --target %q (want 5.4 or 5.1)", target)
+			return nil, "", fmt.Errorf("invalid --target %q (want 5.4 or 5.1)", target)
 		}
 		cfg.CompilerOptions.Target = target
 	}
 	if sourceMap {
 		cfg.CompilerOptions.SourceMap = true
 	}
-	return cfg, nil
+	return cfg, cfgPath, nil
 }
 
 func cmdCheck(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	var wf watchFlags
+	bindWatchFlags(fs, &wf)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := loadCfgFor(fs.Args(), "", "", false)
+	resolveWatchFlags(&wf)
+	cfg, cfgPath, err := loadCfgFor(fs.Args(), "", "", false)
 	if err != nil {
 		return err
+	}
+	if wf.enabled {
+		return runWatch(modeCheck, cfg, cfgPath, cliOverrides{paths: fs.Args()}, wf)
 	}
 	p := compiler.NewProgram(cfg)
 	if err := p.Load(); err != nil {
@@ -175,12 +184,26 @@ func cmdBuild(args []string) error {
 	outDir := fs.String("outDir", "", "output directory")
 	target := fs.String("target", "", "lua target: 5.4 or 5.1")
 	sourceMap := fs.Bool("sourceMap", false, "emit .lua.map source maps")
+	var wf watchFlags
+	bindWatchFlags(fs, &wf)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := loadCfgFor(fs.Args(), *outDir, *target, *sourceMap)
+	resolveWatchFlags(&wf)
+	cfg, cfgPath, err := loadCfgFor(fs.Args(), *outDir, *target, *sourceMap)
 	if err != nil {
 		return err
+	}
+	if wf.enabled {
+		return runWatch(modeBuild, cfg, cfgPath, cliOverrides{
+			paths:     fs.Args(),
+			outDir:    *outDir,
+			target:    *target,
+			sourceMap: *sourceMap,
+			hasOutDir: *outDir != "",
+			hasTarget: *target != "",
+			hasSrcMap: *sourceMap,
+		}, wf)
 	}
 	p := compiler.NewProgram(cfg)
 	if err := p.Load(); err != nil {

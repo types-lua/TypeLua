@@ -122,6 +122,10 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 
 - `tlua.json` 对标 `tsconfig.json`：`compilerOptions.{target,strict,strictNilChecks,noImplicitAny,outDir,rootDir,sourceMap}` + `include/exclude/files`。
 - 管线：lex → parse（错误恢复）→ check（含宏展开）→ emit，与 `tsc` 同构。
+- 监听：`tlua check/build --watch`（`-w`，另有 `watch` 子命令，`--pollInterval/--debounce` 可调）对标 `tsc --watch`：
+  监听集 = `ListFiles` 结果 + `tlua.json`/`tlua.toml`/`tlua.lock`，`outDir` 下恒不监听（发射永不自触发）；
+  轮询 + 去抖合并连击，基准在每次重编后刷新（编期改动不丢）；删源删其 `OutputForFile` 产物（仅 `.lua` + `.map`）；
+  配置热重载（坏 JSON 沿用旧配置并告警），错误只报告不退出，单轮 panic 被捕获继续，`SIGINT`/`SIGTERM` 以 exit 0 结束。
 - 诊断码：`TL1xxx` 词法、`TL2xxx` 语法（含 `TL203x` 类成员、`TL2038` 宏形参、`TL2041` 宏变长位置、`TL2015` 嵌套过深）、`TL3xxx` 类型（含 `TL3234` 显式实参、`TL3602` 映射域、`TL3603` 索引访问、`TL37xx` 宏展开）、`TL4xxx` 工程。
 - 嵌套上限 256 层（表达式/类型/块分别计数），超限报 `TL2015` 并截断恢复；`?` 与条件分支的歧义由推测性前瞻消解（`? True :` 归条件，否则归可选）。
 - 恢复兜底：残缺 AST 绝不击垮后级——checker/emitter 对空节点宽容（报错已由 parser 记录）。
