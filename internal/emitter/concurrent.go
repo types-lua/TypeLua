@@ -24,15 +24,30 @@ const concurrentPrelude = `if not __tl_run then
   __tl_select_waiters = {}
   __tl_running = nil
   __tl_task_count = 0
+  __tl_pump_dirty = false
+  __tl_fallback_clock = 0
+  -- Lua 5.1 (and LuaJIT) cannot yield out of a generic-for iterator call.
+  __tl_iter_can_wait = true
+  if _VERSION == "Lua 5.1" then
+    __tl_iter_can_wait = false
+  end
   local function __tl_now()
-    if os and os.clock then
-      return os.clock()
+    if os then
+      if os.clock then
+        return os.clock()
+      end
+      if os.time then
+        return os.time()
+      end
     end
-    return 0
+    -- Degraded sandbox without clocks: a call counter still makes timers
+    -- (and the idle spin) terminate instead of hanging forever.
+    __tl_fallback_clock = __tl_fallback_clock + 1
+    return __tl_fallback_clock
   end
   local __tl_unpack = table.unpack or unpack
   function __tl_spawn(fn)
-    local t = {waiting = false, done = false, resume_args = nil, wake_err = nil}
+    local t = {waiting = false, done = false, resume_args = nil, resume_n = 0, wake_err = nil}
     __tl_task_count = __tl_task_count + 1
     t.co = coroutine.create(function()
       fn()
@@ -76,7 +91,10 @@ const concurrentPrelude = `if not __tl_run then
       return
     end
     t.waiting = false
+    -- Capture the value count explicitly: {nil, false} has no reliable
+    -- length border, so unpacking by # would drop trailing false/error slots.
     t.resume_args = {...}
+    t.resume_n = select("#", ...)
     __tl_ready[#__tl_ready + 1] = t
   end
   local function __tl_wake_select(sw, idx, v, ok, errmsg)
@@ -84,6 +102,7 @@ const concurrentPrelude = `if not __tl_run then
       return
     end
     sw.done = true
+    __tl_pump_dirty = true
     __tl_unpark_select(sw)
     __tl_wake_task(sw.task, idx, v, ok, errmsg)
   end
@@ -91,7 +110,7 @@ const concurrentPrelude = `if not __tl_run then
     if ch.head <= ch.tail then
       return true, ch.buf[ch.head], true
     end
-    if ch.closed then
+    if ch.isclosed then
       return true, nil, false
     end
     if #ch.sendq > 0 then
@@ -100,15 +119,15 @@ const concurrentPrelude = `if not __tl_run then
     return false
   end
   local function __tl_peek_send(ch)
-    if ch.closed then
+    if ch.isclosed then
       return "closed"
     end
     if ch.head <= ch.tail then
       -- Buffered value present: space iff under capacity.
-      if ch.tail - ch.head + 1 < ch.cap then
+      if ch.tail - ch.head + 1 < ch.capacity then
         return true
       end
-    elseif ch.cap > 0 then
+    elseif ch.capacity > 0 then
       return true
     end
     if #ch.recvq > 0 then
@@ -121,8 +140,11 @@ const concurrentPrelude = `if not __tl_run then
       local s = table.remove(ch.sendq, 1)
       if s.sel then
         if not s.sel.done then
-          local idx = s.case_idx
-          __tl_wake_select(s.sel, idx, nil, nil)
+          -- A parked select-sender whose case wins: its value must land
+          -- in the freed buffer slot (dropping it would lose data).
+          ch.tail = ch.tail + 1
+          ch.buf[ch.tail] = s.val
+          __tl_wake_select(s.sel, s.case_idx, nil, nil)
           return true
         end
       elseif not s.task.done and s.task.waiting then
@@ -143,7 +165,7 @@ const concurrentPrelude = `if not __tl_run then
       __tl_pump_selects()
       return v, true
     end
-    if ch.closed then
+    if ch.isclosed then
       return nil, false
     end
     if #ch.sendq > 0 then
@@ -168,7 +190,7 @@ const concurrentPrelude = `if not __tl_run then
     error("internal error: channel not ready")
   end
   local function __tl_do_send(ch, v)
-    if ch.closed then
+    if ch.isclosed then
       error("send on closed channel")
     end
     while #ch.recvq > 0 do
@@ -186,7 +208,7 @@ const concurrentPrelude = `if not __tl_run then
         return
       end
     end
-    if ch.cap > 0 then
+    if ch.capacity > 0 then
       ch.tail = ch.tail + 1
       ch.buf[ch.tail] = v
       __tl_pump_selects()
@@ -194,42 +216,59 @@ const concurrentPrelude = `if not __tl_run then
     end
     error("internal error: channel not ready")
   end
+  -- Waking a parked selector: run the pump non-reentrantly and keep
+  -- re-scanning while wakes happen (a wake can make other waiters ready).
+  -- Each pass uses a snapshot, so unparking mid-pass is safe.
+  local __tl_pumping = false
   function __tl_pump_selects()
-    local snapshot = {}
-    for i = 1, #__tl_select_waiters do
-      snapshot[i] = __tl_select_waiters[i]
+    if __tl_pumping then
+      return
     end
-    for _, sw in ipairs(snapshot) do
-      if not sw.done then
-        for ci, g in ipairs(sw.cases) do
-          if g.kind == "recv" then
-            local ready = __tl_peek_recv(g.ch)
-            if ready then
-              local v, ok = __tl_do_recv(g.ch)
-              __tl_wake_select(sw, ci, v, ok)
-              break
+    __tl_pumping = true
+    repeat
+      __tl_pump_dirty = false
+      local snapshot = {}
+      for i = 1, #__tl_select_waiters do
+        snapshot[i] = __tl_select_waiters[i]
+      end
+      for _, sw in ipairs(snapshot) do
+        if not sw.done then
+          for ci, g in ipairs(sw.cases) do
+            local woke = false
+            if g.kind == "recv" then
+              if __tl_peek_recv(g.ch) then
+                local v, ok = __tl_do_recv(g.ch)
+                __tl_wake_select(sw, ci, v, ok)
+                woke = true
+              end
+            elseif g.kind == "send" then
+              local st = __tl_peek_send(g.ch)
+              if st == true then
+                __tl_do_send(g.ch, g.val)
+                __tl_wake_select(sw, ci, nil, nil)
+                woke = true
+              elseif st == "closed" then
+                -- Attribute the failure to the selector itself (raising
+                -- here would blame whatever task happened to pump).
+                __tl_wake_select(sw, ci, nil, nil, "send on closed channel")
+                woke = true
+              end
+            elseif g.kind == "sleep" then
+              -- Per-case absolute deadline: with several sleep cases the
+              -- earliest one must not fire the first case listed.
+              if __tl_now() >= g.at then
+                __tl_wake_select(sw, ci, nil, nil)
+                woke = true
+              end
             end
-          elseif g.kind == "send" then
-            local st = __tl_peek_send(g.ch)
-            if st == true then
-              __tl_do_send(g.ch, g.val)
-              __tl_wake_select(sw, ci, nil, nil)
-              break
-            elseif st == "closed" then
-              -- Attribute the failure to the selector itself (raising
-              -- here would blame whatever task happened to pump).
-              __tl_wake_select(sw, ci, nil, nil, "send on closed channel")
-              break
-            end
-          elseif g.kind == "sleep" then
-            if __tl_now() >= sw.deadline then
-              __tl_wake_select(sw, ci, nil, nil)
+            if woke then
               break
             end
           end
         end
       end
-    end
+    until not __tl_pump_dirty
+    __tl_pumping = false
   end
   local function __tl_require_task(what)
     local self = __tl_running
@@ -272,10 +311,10 @@ const concurrentPrelude = `if not __tl_run then
     return a[1], a[2]
   end
   function __tl_chan_close(ch)
-    if ch.closed then
+    if ch.isclosed then
       error("close of closed channel")
     end
-    ch.closed = true
+    ch.isclosed = true
     while #ch.recvq > 0 do
       local r = table.remove(ch.recvq, 1)
       if r.sel then
@@ -300,9 +339,9 @@ const concurrentPrelude = `if not __tl_run then
     local deadline = nil
     for _, g in ipairs(specs) do
       if g.kind == "sleep" then
-        local d = __tl_now() + (tonumber(g.after) or 0)
-        if deadline == nil or d < deadline then
-          deadline = d
+        g.at = __tl_now() + (tonumber(g.after) or 0)
+        if deadline == nil or g.at < deadline then
+          deadline = g.at
         end
       end
     end
@@ -323,7 +362,7 @@ const concurrentPrelude = `if not __tl_run then
           error("send on closed channel")
         end
       elseif g.kind == "sleep" then
-        if deadline ~= nil and __tl_now() >= deadline then
+        if __tl_now() >= g.at then
           return ci, nil, nil
         end
       end
@@ -365,6 +404,27 @@ const concurrentPrelude = `if not __tl_run then
   local __tl_chan_mt = {__index = {
     send = function(self, v) return __tl_chan_send(self, v) end,
     recv = function(self) return __tl_chan_recv(self) end,
+    -- Non-blocking variants (never park, callable from sync code):
+    -- trySend returns false when the channel is full (unbuffered: no
+    -- waiting receiver); tryRecv returns nil, false when nothing is
+    -- buffered (and nil, false on a drained closed channel too).
+    trySend = function(self, v)
+      local st = __tl_peek_send(self)
+      if st == true then
+        __tl_do_send(self, v)
+        return true
+      elseif st == "closed" then
+        error("send on closed channel")
+      end
+      return false
+    end,
+    tryRecv = function(self)
+      local ready = __tl_peek_recv(self)
+      if ready then
+        return __tl_do_recv(self)
+      end
+      return nil, false
+    end,
     close = function(self) return __tl_chan_close(self) end,
     len = function(self)
       if self.head <= self.tail then
@@ -372,10 +432,25 @@ const concurrentPrelude = `if not __tl_run then
       end
       return 0
     end,
-    cap = function(self) return self.cap end,
-    closed = function(self) return self.closed end,
+    cap = function(self) return self.capacity end,
+    closed = function(self) return self.isclosed end,
     iter = function(self)
+      -- On Lua 5.1 a yield cannot cross the generic-for iterator call, so
+      -- a blocking iterator is impossible there: drain what is buffered
+      -- (or the closed signal) and fail with guidance instead of letting
+      -- the VM raise "attempt to yield across C-call boundary".
       return function()
+        local ready = __tl_peek_recv(self)
+        if not ready and __tl_iter_can_wait == false then
+          error("ch:iter() cannot wait on Lua 5.1 (yield cannot cross the for-loop iterator); use 'while true do select { case local v, ok = ch:recv() then ... } end'")
+        end
+        if ready then
+          local v, ok = __tl_do_recv(self)
+          if ok then
+            return v
+          end
+          return nil
+        end
         local v, ok = __tl_chan_recv(self)
         if ok then
           return v
@@ -389,7 +464,7 @@ const concurrentPrelude = `if not __tl_run then
     if c < 0 then
       error("makeChan: capacity must be >= 0")
     end
-    local ch = {buf = {}, head = 1, tail = 0, cap = c, closed = false, sendq = {}, recvq = {}}
+    local ch = {buf = {}, head = 1, tail = 0, capacity = c, isclosed = false, sendq = {}, recvq = {}}
     setmetatable(ch, __tl_chan_mt)
     return ch
   end
@@ -471,7 +546,7 @@ const concurrentPrelude = `if not __tl_run then
       return main_fn()
     end
     local main_rets = nil
-    local main_task = {waiting = false, done = false, resume_args = nil, wake_err = nil}
+    local main_task = {waiting = false, done = false, resume_args = nil, resume_n = 0, wake_err = nil}
     main_task.co = coroutine.create(function()
       local function pack(...) return {n = select("#", ...), ...} end
       main_rets = pack(main_fn())
@@ -482,14 +557,23 @@ const concurrentPrelude = `if not __tl_run then
     __tl_ready[#__tl_ready + 1] = main_task
     while true do
       local now = __tl_now()
+      -- Collect fired timers first: pumping can remove other entries
+      -- (a woken select unparks its timers), so mutating while scanning
+      -- would corrupt the reverse iteration.
+      local fired = nil
       for i = #__tl_timers, 1, -1 do
-        local tm = __tl_timers[i]
-        if now >= tm.wake then
-          table.remove(__tl_timers, i)
+        if now >= __tl_timers[i].wake then
+          local tm = table.remove(__tl_timers, i)
+          if fired == nil then
+            fired = {}
+          end
+          fired[#fired + 1] = tm
+        end
+      end
+      if fired ~= nil then
+        for _, tm in ipairs(fired) do
           if tm.task ~= nil then
             __tl_wake_task(tm.task)
-          elseif tm.select_waiter ~= nil and not tm.select_waiter.done then
-            __tl_pump_selects()
           end
         end
       end
@@ -513,9 +597,10 @@ const concurrentPrelude = `if not __tl_run then
         end
       else
         __tl_running = t
-        t.resume_args = t.resume_args or {}
-        local ok, err = coroutine.resume(t.co, __tl_unpack(t.resume_args, 1, #(t.resume_args)))
+        local n = t.resume_n or 0
+        local ok, err = coroutine.resume(t.co, __tl_unpack(t.resume_args or {}, 1, n))
         t.resume_args = nil
+        t.resume_n = 0
         __tl_running = nil
         if not ok then
           error(err)
@@ -589,23 +674,29 @@ func (e *emitter) emitSelect(n *ast.SelectStmt) {
 	e.write("local __tl_idx_" + tag + ", __tl_v_" + tag + ", __tl_ok_" + tag +
 		" = __tl_select(__tl_specs_" + tag + ", " + hasDef + ")")
 	e.nl()
+	// `repeat ... until true` gives `break` inside a case Go-like
+	// semantics: it leaves the select, not an enclosing loop (a nested
+	// loop inside the case still owns its own `break`).
+	e.pad()
+	e.write("repeat")
+	e.nl()
 	first := true
 	for i, sc := range n.Cases {
 		e.pad()
 		if first {
-			e.write("if")
+			e.write("    if")
 			first = false
 		} else {
-			e.write("elseif")
+			e.write("    elseif")
 		}
 		e.write(" __tl_idx_" + tag + " == " + strconv.Itoa(i+1) + " then")
 		e.nl()
 		if sc.Recv != nil && len(sc.RecvVars) > 0 {
 			e.pad()
 			if sc.RecvLocal {
-				e.write("    local ")
+				e.write("        local ")
 			} else {
-				e.write("    ")
+				e.write("        ")
 			}
 			for j, v := range sc.RecvVars {
 				if j > 0 {
@@ -619,29 +710,28 @@ func (e *emitter) emitSelect(n *ast.SelectStmt) {
 			}
 			e.nl()
 		}
-		e.emitBlock(sc.Block, e.indent+1)
-		if sc.Block != nil && sc.Block.Ret != nil {
-			// emitBlock already emitted the (defer-aware) return.
-		}
+		e.emitBlock(sc.Block, e.indent+2)
 	}
 	e.pad()
 	if n.Default != nil {
 		if first {
 			// Only default: no condition needed, but keep shape uniform.
-			e.write("if true then")
+			e.write("    if true then")
 			e.nl()
 		} else {
-			e.write("else")
+			e.write("    else")
 			e.nl()
 		}
-		e.emitBlock(n.Default, e.indent+1)
-	} else {
-		e.write("end")
+		e.emitBlock(n.Default, e.indent+2)
+		e.pad()
+		e.write("    end")
 		e.nl()
-		return
+	} else {
+		e.write("    end")
+		e.nl()
 	}
 	e.pad()
-	e.write("end")
+	e.write("until true")
 	e.nl()
 }
 

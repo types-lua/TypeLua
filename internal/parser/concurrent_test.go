@@ -61,6 +61,16 @@ func TestParseSpawn(t *testing.T) {
 	if _, ok := f.Block.Stmts[0].(*ast.SpawnStmt); !ok {
 		t.Fatalf("not spawn anon %T", f.Block.Stmts[0])
 	}
+	// The trailing call is optional: `spawn function() ... end` runs with
+	// no arguments.
+	f = mustParse(t, `spawn function() print(1) end`)
+	gs, ok := f.Block.Stmts[0].(*ast.SpawnStmt)
+	if !ok {
+		t.Fatalf("not spawn anon %T", f.Block.Stmts[0])
+	}
+	if call, ok := gs.Call.(*ast.CallExpr); !ok || len(call.Args) != 0 {
+		t.Fatalf("zero-arg spawn anon misparsed: %+v", gs.Call)
+	}
 	// `spawn(x)` stays a call; `local spawn = 1` stays a variable.
 	f = mustParse(t, `local r = spawn(1)`)
 	la := f.Block.Stmts[0].(*ast.LocalAssign)

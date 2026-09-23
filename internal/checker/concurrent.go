@@ -217,15 +217,20 @@ func (c *Checker) chanElem(t types.Type, sp token.Span) types.Type {
 	return types.Any
 }
 
-// chanMethodType resolves `send/recv/close/len/cap/closed/iter` on chan<T>.
-// Blocking methods (send/recv/iter) are async-marked so the checker can
-// reject them outside async tasks (TL3805).
+// chanMethodType resolves `send/recv/trySend/tryRecv/close/len/cap/closed/iter`
+// on chan<T>. Blocking methods (send/recv/iter) are async-marked so the
+// checker can reject them outside async tasks (TL3805); the try* variants
+// and the introspection helpers are callable from sync code.
 func chanMethodType(elem types.Type, name string) (types.Type, bool) {
 	switch name {
 	case "send":
 		return &types.Func{Params: []types.FuncParam{{Name: "value", Type: elem}}, IsAsync: true}, true
 	case "recv":
 		return &types.Func{Returns: []types.Type{elem, types.Boolean}, IsAsync: true}, true
+	case "trySend":
+		return &types.Func{Params: []types.FuncParam{{Name: "value", Type: elem}}, Returns: []types.Type{types.Boolean}}, true
+	case "tryRecv":
+		return &types.Func{Returns: []types.Type{elem, types.Boolean}}, true
 	case "close":
 		return &types.Func{}, true
 	case "len", "cap":

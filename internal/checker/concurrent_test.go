@@ -169,6 +169,22 @@ local function g(): void
   spawn p()
 end
 `)
+	// An anonymous spawn body runs as a task: implicitly async, so
+	// await/select/blocking calls are allowed inside it.
+	expectOK(t, `
+local ch: chan<integer> = makeChan<integer>(1)
+local function g(): void
+  spawn function()
+    select {
+      case local v = ch:recv() then
+        print(v)
+      default then
+        print("empty")
+    }
+    await sleep(0.01)
+  end
+end
+`)
 	// Async class methods behave the same.
 	expectOK(t, `
 class W {
@@ -222,6 +238,22 @@ local function g(): void
   print(ch:len(), ch:cap(), ch:closed())
   mu:unlock()
   mu:tryLock()
+end
+`)
+	// trySend/tryRecv never park: callable from sync code, typed.
+	expectOK(t, `
+local ch: chan<string> = makeChan<string>(1)
+local function g(): void
+  local ok: boolean = ch:trySend("x")
+  local v: string | nil, ok2: boolean = ch:tryRecv()
+  print(ok, v, ok2)
+end
+`)
+	// trySend element type is enforced.
+	expectErr(t, `
+local ch: chan<string> = makeChan<string>(1)
+local function g(): void
+  ch:trySend(1)
 end
 `)
 }

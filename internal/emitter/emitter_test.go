@@ -207,3 +207,16 @@ class C {
 		t.Fatalf("ctor defer not registered:\n%s", out)
 	}
 }
+
+func TestAnonymousCallParenthesized(t *testing.T) {
+	// Lua requires parentheses around a function literal before a call:
+	// `function() end()` is a syntax error.
+	out := emit(t, `local f = function() return 1 end()`)
+	if out != "local f = (function() return 1 end)()\n" {
+		t.Fatalf("got %q", out)
+	}
+	out = emit(t, `local f = function(x: number) return x end(1)`)
+	if !strings.Contains(out, "(function(x) return x end)(1)") {
+		t.Fatalf("got %q", out)
+	}
+}

@@ -165,7 +165,15 @@ func (e *emitter) emitExpr(x ast.Expr) {
 				break
 			}
 		}
-		e.emitExpr(n.Func)
+		// Lua requires parentheses around a function literal before a
+		// call: `(function() end)()`, not `function() end()`.
+		if _, ok := n.Func.(*ast.FuncLit); ok {
+			e.write("(")
+			e.emitExpr(n.Func)
+			e.write(")")
+		} else {
+			e.emitExpr(n.Func)
+		}
 		e.write("(")
 		for i, a := range n.Args {
 			if i > 0 {
@@ -187,7 +195,13 @@ func (e *emitter) emitExpr(x ast.Expr) {
 				break
 			}
 		}
-		e.emitExpr(n.Obj)
+		if _, ok := n.Obj.(*ast.FuncLit); ok {
+			e.write("(")
+			e.emitExpr(n.Obj)
+			e.write(")")
+		} else {
+			e.emitExpr(n.Obj)
+		}
 		e.write(":" + n.Method.Name + "(")
 		for i, a := range n.Args {
 			if i > 0 {

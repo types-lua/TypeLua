@@ -233,7 +233,8 @@ func (p *Parser) isSpawnStart() bool {
 
 func (p *Parser) parseSpawn() ast.Stmt {
 	start := p.next() // spawn
-	// Anonymous `spawn function() ... end(args)`.
+	// Anonymous `spawn function() ... end(args)`: the body runs as a task,
+	// so it is implicitly async (await/select allowed inside).
 	if p.at(token.Function) || (isIdentNamed(p.cur(), "async") && p.peek(1).Kind == token.Function && sameLine(p.cur(), p.peek(1))) {
 		var fn ast.Expr
 		if isIdentNamed(p.cur(), "async") {
@@ -254,13 +255,14 @@ func (p *Parser) parseSpawn() ast.Stmt {
 			}
 			fb := p.parseFuncBody(false)
 			fb.Generics = fgen
+			fb.IsAsync = true
 			fn = fb
 		}
+		// `spawn function() ... end(args)`; the trailing call is optional
+		// (`spawn function() ... end` spawns with no arguments).
 		args := p.parseCallArgs()
 		if args == nil {
-			p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected call arguments after 'spawn function() ... end'")
-			p.synchronize()
-			return &ast.EmptyStmt{S: start.Span}
+			args = []ast.Expr{}
 		}
 		call := &ast.CallExpr{Func: fn, Args: args, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 		return &ast.SpawnStmt{Call: call, S: call.Span()}

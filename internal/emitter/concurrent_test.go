@@ -90,3 +90,51 @@ func TestRuntimePreludeLua51Safe(t *testing.T) {
 		t.Fatalf("runtime must stay 5.1-safe (no goto):\n%.500s", out)
 	}
 }
+
+func TestEmitSelectShapes(t *testing.T) {
+	// select compiles to `repeat ... until true` (Go-like break) with an
+	// if-chain; check the exact shape for all three case/default layouts.
+	shape := func(body string) string {
+		return "        repeat\n" + body + "        until true\n"
+	}
+	out := emitConc(t, `local async function f(): void
+  select {
+    case ch:recv() then
+      print(1)
+    default then
+      break
+  }
+end`)
+	want := shape("            if __tl_idx_1 == 1 then\n" +
+		"                print(1)\n" +
+		"            else\n" +
+		"                break\n" +
+		"            end\n")
+	if !strings.Contains(out, want) {
+		t.Fatalf("select+default shape:\ngot\n%s\nwant substring\n%s", out, want)
+	}
+	out = emitConc(t, `local async function f(): void
+  select {
+    case ch:recv() then
+      print(1)
+  }
+end`)
+	want = shape("            if __tl_idx_1 == 1 then\n" +
+		"                print(1)\n" +
+		"            end\n")
+	if !strings.Contains(out, want) {
+		t.Fatalf("select no-default shape:\ngot\n%s\nwant substring\n%s", out, want)
+	}
+	out = emitConc(t, `local async function f(): void
+  select {
+    default then
+      print("d")
+  }
+end`)
+	want = shape("            if true then\n" +
+		"                print(\"d\")\n" +
+		"            end\n")
+	if !strings.Contains(out, want) {
+		t.Fatalf("select default-only shape:\ngot\n%s\nwant substring\n%s", out, want)
+	}
+}

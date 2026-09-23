@@ -22,10 +22,23 @@ func runConcProject(t *testing.T, main string) string {
 // returns stdout plus the Lua exit error (nil on success), so tests can
 // assert on programs that fail at runtime (e.g. send on closed channel).
 func runConcProjectFiles(t *testing.T, files map[string]string) (string, error) {
+	return runConcProjectFilesTarget(t, "5.4", files)
+}
+
+func runConcProjectFilesTarget(t *testing.T, target string, files map[string]string) (string, error) {
 	t.Helper()
 	lua := findLua()
 	if lua == "" {
 		t.Skip("no lua interpreter on PATH")
+	}
+	if target == "5.1" {
+		// Prefer a real 5.1 when checking the 5.1 runtime paths.
+		for _, c := range []string{"lua5.1", "luajit"} {
+			if p, err := exec.LookPath(c); err == nil {
+				lua = p
+				break
+			}
+		}
 	}
 	dir := t.TempDir()
 	write := func(name, content string) {
@@ -37,7 +50,7 @@ func runConcProjectFiles(t *testing.T, files map[string]string) (string, error) 
 			t.Fatal(err)
 		}
 	}
-	write("tlua.json", `{"compilerOptions": {"target": "5.4", "strict": true, "rootDir": ".", "outDir": "dist"},
+	write("tlua.json", `{"compilerOptions": {"target": "`+target+`", "strict": true, "rootDir": ".", "outDir": "dist"},
 "include": ["**/*.tl"], "exclude": ["dist"]}`)
 	for name, content := range files {
 		write(name, content)
@@ -278,5 +291,355 @@ await main()
 	}
 	if !strings.Contains(out, "send on closed channel") {
 		t.Fatalf("selector must report send-on-closed, got %q", out)
+	}
+}
+
+func TestConcurrentSelectSenderValuePreserved(t *testing.T) {
+	// A parked select-sender whose case wins when buffer space frees up
+	// must actually deliver its value (it used to be dropped).
+	out := runConcProject(t, `local ch: chan<integer> = makeChan<integer>(1)
+async function sel_sender(): void
+  select {
+    case ch:send(99) then
+      print("select-sent")
+    case timeout(2.0) then
+      print("SENDER TIMEOUT (bad)")
+  }
+end
+async function main(): void
+  await ch:send(1)
+  spawn sel_sender()
+  await sleep(0.02)
+  local v1 = await ch:recv()
+  local v2 = await ch:recv()
+  print("v1", v1, "v2", v2)
+end
+await main()
+`)
+	want := "v1\t1\tv2\t99\nselect-sent\n"
+	if out != want {
+		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestConcurrentMultiTimeoutPicksEarliest(t *testing.T) {
+	// With several sleep cases the earliest deadline wins even when it is
+	// listed later; the first-listed (5s) case must not fire early.
+	out := runConcProject(t, `local ch: chan<integer> = makeChan<integer>()
+async function main(): void
+  select {
+    case timeout(5.0) then
+      print("5s fired early (bad)")
+    case timeout(0.05) then
+      print("short fired")
+    case ch:recv() then
+      print("recv (bad)")
+  }
+end
+await main()
+`)
+	if out != "short fired\n" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestConcurrentBreakExitsSelect(t *testing.T) {
+	// `break` in a select case leaves the select (Go semantics), not an
+	// enclosing loop; a nested loop inside the case keeps its own break.
+	out := runConcProject(t, `local ch: chan<integer> = makeChan<integer>(1)
+async function main(): void
+  local outer: integer = 0
+  while outer < 3 do
+    outer = outer + 1
+    select {
+      case ch:recv() then
+        print("recv (bad)")
+      default then
+        break
+    }
+    print("after select", outer)
+  end
+  print("done", outer)
+  local n: integer = 0
+  select {
+    case ch:recv() then
+      print("bad")
+    default then
+      while true do
+        n = n + 1
+        if n >= 2 then
+          break
+        end
+      end
+      print("inner broke at", n)
+  }
+  print("still in task")
+end
+await main()
+`)
+	want := "after select\t1\nafter select\t2\nafter select\t3\ndone\t3\ninner broke at\t2\nstill in task\n"
+	if out != want {
+		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestConcurrentTryChannelOps(t *testing.T) {
+	// trySend/tryRecv never park, are callable from sync code, and agree
+	// with the introspection helpers (cap/closed are methods, not fields).
+	out := runConcProject(t, `local ch: chan<string> = makeChan<string>(1)
+local function sync_probe(): void
+  print("tryRecv empty:", ch:tryRecv())
+  print("trySend:", ch:trySend("a"))
+  print("trySend full:", ch:trySend("b"))
+  print("len", ch:len(), "cap", ch:cap(), "closed", ch:closed())
+  local v, ok = ch:tryRecv()
+  print("tryRecv:", v, ok)
+  print("tryRecv empty again:", ch:tryRecv())
+  ch:close()
+  print("closed now", ch:closed())
+  local v2, ok2 = ch:tryRecv()
+  print("after close:", v2, ok2)
+end
+sync_probe()
+async function receiver(un: chan<integer>): void
+  await sleep(0.01)
+  local got = await un:recv()
+  print("receiver got", got)
+end
+async function main(): void
+  local un: chan<integer> = makeChan<integer>()
+  print("unbuffered trySend:", un:trySend(1))
+  spawn receiver(un)
+  await sleep(0.03)
+  print("unbuffered trySend parked:", un:trySend(7))
+end
+await main()
+`)
+	want := "tryRecv empty:\tnil\tfalse\n" +
+		"trySend:\ttrue\n" +
+		"trySend full:\tfalse\n" +
+		"len\t1\tcap\t1\tclosed\tfalse\n" +
+		"tryRecv:\ta\ttrue\n" +
+		"tryRecv empty again:\tnil\tfalse\n" +
+		"closed now\ttrue\n" +
+		"after close:\tnil\tfalse\n" +
+		"unbuffered trySend:\tfalse\n" +
+		"unbuffered trySend parked:\ttrue\n" +
+		"receiver got\t7\n"
+	if out != want {
+		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestConcurrentCloseWakesAllSelectors(t *testing.T) {
+	// Closing wakes every parked selector with (nil, false): `ok` must be
+	// exactly false (the resume-arity fix keeps trailing false/error slots).
+	out := runConcProject(t, `local N: integer = 6
+local ch: chan<integer> = makeChan<integer>(1)
+local wg = WaitGroup.new()
+local sawFalse: integer = 0
+local mu = Mutex.new()
+async function waiter(id: integer): void
+  select {
+    case local v, ok = ch:recv() then
+      await mu:lock()
+      if v == nil and ok == false then
+        sawFalse = sawFalse + 1
+      end
+      mu:unlock()
+    case timeout(1.0) then
+      print("waiter", id, "TIMEOUT (bad)")
+  }
+  wg:done()
+end
+async function main(): void
+  wg:add(N)
+  for i: integer = 1, N do
+    spawn waiter(i)
+  end
+  await sleep(0.02)
+  ch:close()
+  await wg:wait()
+  print("sawFalse", sawFalse)
+end
+await main()
+`)
+	want := "sawFalse\t6\n"
+	if out != want {
+		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestConcurrentStressFanIn(t *testing.T) {
+	// Many selectors over shared buffered channels, drained by close:
+	// exactly-once delivery and correct sum (exercises pump re-entrancy).
+	out := runConcProject(t, `local N: integer = 8
+local MSGS: integer = 120
+local chans: chan<integer>[] = {}
+for i: integer = 1, N do
+  chans[i] = makeChan<integer>(2)
+end
+local wg = WaitGroup.new()
+local total: integer = 0
+local got: integer = 0
+local mu = Mutex.new()
+async function worker(id: integer): void
+  local mine = chans[id]
+  while true do
+    select {
+      case local v, ok = mine:recv() then
+        if not ok then
+          wg:done()
+          return
+        end
+        await mu:lock()
+        total = total + v
+        got = got + 1
+        mu:unlock()
+      case timeout(2.0) then
+        print("worker", id, "TIMEOUT (bad)")
+        wg:done()
+        return
+    }
+  end
+end
+async function main(): void
+  wg:add(N)
+  for i: integer = 1, N do
+    spawn worker(i)
+  end
+  for m: integer = 1, MSGS do
+    local target = (m % N) + 1
+    await chans[target]:send(m)
+  end
+  for i: integer = 1, N do
+    chans[i]:close()
+  end
+  await wg:wait()
+  print("got", got, "total", total)
+end
+await main()
+`)
+	want := "got\t120\ttotal\t7260\n"
+	if out != want {
+		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestConcurrentSpawnAnonymousZeroArg(t *testing.T) {
+	// `spawn function() ... end` without a trailing call spawns with no
+	// arguments; with a call it passes them.
+	out := runConcProject(t, `local wg = WaitGroup.new()
+async function main(): void
+  wg:add(2)
+  spawn function()
+    print("anon no args")
+    wg:done()
+  end
+  spawn function(x: integer)
+    print("anon arg", x)
+    wg:done()
+  end(7)
+  await wg:wait()
+end
+await main()
+`)
+	want := "anon no args\nanon arg\t7\n"
+	if out != want {
+		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestConcurrentNestedSelectAndMethod(t *testing.T) {
+	// Nested selects, a select in a class async method, and a select
+	// inside an anonymous spawn body all compose.
+	out := runConcProject(t, `class S {
+  name: string,
+  constructor(name: string) self.name = name end,
+  async run(a: chan<integer>, b: chan<integer>): integer
+    select {
+      case local v = a:recv() then
+        select {
+          case local w = b:recv() then
+            return v + w
+          case timeout(1.0) then
+            return -1
+        }
+      case timeout(1.0) then
+        return -2
+    }
+    return 0
+  end,
+}
+async function main(): void
+  local a: chan<integer> = makeChan<integer>(1)
+  local b: chan<integer> = makeChan<integer>(1)
+  local s = S.new("nested")
+  spawn function()
+    select {
+      case a:send(20) then print("spawn sent a")
+      default then print("spawn default (bad)")
+    }
+  end
+  local wg = WaitGroup.new()
+  wg:add(1)
+  spawn function()
+    await b:send(22)
+    wg:done()
+  end
+  local r = await s:run(a, b)
+  await wg:wait()
+  print("nested result", r, s.name)
+end
+await main()
+`)
+	want := "spawn sent a\nnested result\t42\tnested\n"
+	if out != want {
+		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestConcurrentIterOnLua51(t *testing.T) {
+	// Non-blocking iter (buffered values + close) works on the 5.1 target.
+	out, err := runConcProjectFilesTarget(t, "5.1", map[string]string{
+		"main.tl": `local ch: chan<string> = makeChan<string>(2)
+async function main(): void
+  await ch:send("a")
+  await ch:send("b")
+  ch:close()
+  for v in ch:iter() do
+    print("iter", v)
+  end
+  print("drained")
+end
+await main()
+`,
+	})
+	if err != nil {
+		t.Fatalf("lua failed: %v\n%s", err, out)
+	}
+	if out != "iter\ta\niter\tb\ndrained\n" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestConcurrentIterBlockingOnLua51FailsClearly(t *testing.T) {
+	// A blocking iter on 5.1 must fail with guidance, not the cryptic
+	// "attempt to yield across C-call boundary".
+	out, err := runConcProjectFilesTarget(t, "5.1", map[string]string{
+		"main.tl": `local ch: chan<string> = makeChan<string>()
+async function main(): void
+  for v in ch:iter() do
+    print(v)
+  end
+end
+await main()
+`,
+	})
+	if err == nil {
+		t.Fatalf("expected a clear runtime error, got %q", out)
+	}
+	if !strings.Contains(out, "ch:iter() cannot wait on Lua 5.1") {
+		t.Fatalf("expected guidance message, got %q", out)
 	}
 }
