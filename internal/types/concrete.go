@@ -37,6 +37,8 @@ func hasTypeParams(t Type, seen map[Type]bool) bool {
 		}
 	case *Array:
 		return hasTypeParams(x.Elem, seen)
+	case *Chan:
+		return hasTypeParams(x.Elem, seen)
 	case *Map:
 		return hasTypeParams(x.Key, seen) || hasTypeParams(x.Value, seen)
 	case *Tuple:

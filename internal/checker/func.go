@@ -115,6 +115,7 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 		c.varargStack = append(c.varargStack, nil) // marker: no vararg
 	}
 	c.retStack = append(c.retStack, ft.Returns)
+	c.asyncStack = append(c.asyncStack, fn.IsAsync)
 	// If unannotated (ft.Returns == nil because no annotation vs void?), distinguish: fn.ReturnType == nil => infer mode (nil sentinel).
 	// Our funcTypeFromLit returns nil slice when no annotation; void annotation returns empty non-nil? Actually returns nil too for void (len 0). Need to distinguish.
 	// Convention: annotated void => empty slice non-nil? Go nil vs empty: both len 0. Use fn.ReturnType to decide.
@@ -136,6 +137,7 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 	c.labelStack = c.labelStack[:len(c.labelStack)-1]
 	c.inferStack = c.inferStack[:len(c.inferStack)-1]
 	c.retStack = c.retStack[:len(c.retStack)-1]
+	c.asyncStack = c.asyncStack[:len(c.asyncStack)-1]
 	c.varargStack = c.varargStack[:len(c.varargStack)-1]
 	c.pop()
 	c.popTParams()

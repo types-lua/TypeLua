@@ -238,6 +238,11 @@ func lookupField(ot types.Type, name string) (types.Field, bool) {
 			return types.Field{Type: &types.Func{Params: x.Constructor.Params, HasVarArg: x.Constructor.HasVarArg, VarArg: x.Constructor.VarArg, Returns: []types.Type{x.Class}, TypeParams: x.Class.TypeParams}, Access: x.CtorAccess, Owner: classDefOf(x)}, true
 		}
 		return types.Field{}, false
+	case *types.Chan:
+		if mt, ok := chanMethodType(x.Elem, name); ok {
+			return types.Field{Type: mt}, true
+		}
+		return types.Field{}, false
 	case *types.Primitive:
 		if x.K == types.KTable {
 			return types.Field{Type: types.Any}, true

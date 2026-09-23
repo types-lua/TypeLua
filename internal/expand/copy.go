@@ -100,6 +100,10 @@ func copyExpr(x ast.Expr) ast.Expr {
 		c := *n
 		c.E = copyExpr(n.E)
 		return &c
+	case *ast.AwaitExpr:
+		c := *n
+		c.X = copyExpr(n.X)
+		return &c
 	default:
 		return x
 	}
@@ -183,6 +187,40 @@ func copyStmt(st ast.Stmt) ast.Stmt {
 	case *ast.DeferStmt:
 		c := *n
 		c.Call = copyExpr(n.Call)
+		return &c
+	case *ast.SpawnStmt:
+		c := *n
+		c.Call = copyExpr(n.Call)
+		return &c
+	case *ast.SelectStmt:
+		c := *n
+		c.Cases = make([]*ast.SelectCase, len(n.Cases))
+		for i, sc := range n.Cases {
+			nsc := *sc
+			if sc.Recv != nil {
+				m := *sc.Recv
+				mm := *sc.Recv.Method
+				m.Method = &mm
+				m.Obj = copyExpr(sc.Recv.Obj)
+				m.Args = copyExprs(sc.Recv.Args)
+				nsc.Recv = &m
+			}
+			if sc.Send != nil {
+				m := *sc.Send
+				mm := *sc.Send.Method
+				m.Method = &mm
+				m.Obj = copyExpr(sc.Send.Obj)
+				m.Args = copyExprs(sc.Send.Args)
+				nsc.Send = &m
+			}
+			if sc.Timeout != nil {
+				nsc.Timeout = copyExpr(sc.Timeout)
+			}
+			nsc.RecvVars = copyIdents(sc.RecvVars)
+			nsc.Block = copyBlock(sc.Block)
+			c.Cases[i] = &nsc
+		}
+		c.Default = copyBlock(n.Default)
 		return &c
 	case *ast.LocalFuncDef:
 		c := *n

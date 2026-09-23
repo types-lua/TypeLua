@@ -151,6 +151,8 @@ func exprHasSuperCall(e ast.Expr) bool {
 		return exprHasSuperCall(n.E)
 	case *ast.NonNullExpr:
 		return exprHasSuperCall(n.E)
+	case *ast.AwaitExpr:
+		return exprHasSuperCall(n.X)
 	case *ast.FuncLit, *ast.Ident, *ast.NumberLit, *ast.StringLit,
 		*ast.BoolLit, *ast.NilLit, *ast.VarArg:
 	}
@@ -322,6 +324,8 @@ func exprUsesSelf(e ast.Expr) bool {
 		return exprUsesSelf(n.E)
 	case *ast.NonNullExpr:
 		return exprUsesSelf(n.E)
+	case *ast.AwaitExpr:
+		return exprUsesSelf(n.X)
 	case *ast.FuncLit, *ast.NumberLit, *ast.StringLit,
 		*ast.BoolLit, *ast.NilLit, *ast.VarArg:
 	}

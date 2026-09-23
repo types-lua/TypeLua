@@ -244,6 +244,10 @@ func inferInto(param, arg types.Type, sub map[string]types.Type) {
 				inferInto(p.Elem, e, sub)
 			}
 		}
+	case *types.Chan:
+		if a, ok := arg.(*types.Chan); ok {
+			inferInto(p.Elem, a.Elem, sub)
+		}
 	case *types.Map:
 		if a, ok := arg.(*types.Map); ok {
 			inferInto(p.Key, a.Key, sub)

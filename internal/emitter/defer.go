@@ -72,6 +72,13 @@ func scanDefers(b *ast.Block) (hasDefer, hasErr bool) {
 			walkBlock(n.Block)
 		case *ast.GenericFor:
 			walkBlock(n.Block)
+		case *ast.SpawnStmt:
+			// Spawned body is a new task (nested function): not this frame.
+		case *ast.SelectStmt:
+			for _, sc := range n.Cases {
+				walkBlock(sc.Block)
+			}
+			walkBlock(n.Default)
 		}
 	}
 	walkBlock = func(b *ast.Block) {

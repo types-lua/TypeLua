@@ -160,6 +160,10 @@ type Checker struct {
 	depthReported map[*typeEntry]bool
 	// Enclosing classes for self/super/visibility.
 	classStack []*classCtx
+	// asyncStack tracks `async` function nesting (FuncLit/ClassMember
+	// IsAsync): `await`/`select` are valid when the stack is empty (the
+	// top-level chunk = main task) or its top is true.
+	asyncStack []bool
 	// >0 while resolving an extends clause (where `infer` may appear).
 	extendsDepth int
 	// Index collects position information for LSP when non-nil.

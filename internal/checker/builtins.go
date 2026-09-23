@@ -51,6 +51,26 @@ func (c *Checker) defineBuiltins(sc *Scope) {
 		sc.vars[m] = &Symbol{Name: m, Kind: symVar, Type: types.Any}
 	}
 	sc.vars["coroutine"] = &Symbol{Name: "coroutine", Kind: symVar, Type: c.coroutineModule()}
+	// ---- cooperative CSP concurrency (Go-style, single-threaded) ----
+	// `makeChan<T>(cap?: integer): chan<T>` (explicit T required: cap
+	// carries no value of T, so inference has nothing to bind).
+	tParam := &types.GenericParam{Name: "T"}
+	sc.vars["makeChan"] = &Symbol{Name: "makeChan", Kind: symFunc, Type: &types.Func{
+		Params:     []types.FuncParam{{Name: "cap", Type: types.Integer, Optional: true}},
+		Returns:    []types.Type{&types.Chan{Elem: tParam}},
+		TypeParams: []*types.GenericParam{tParam},
+	}}
+	// `sleep(sec: number)` suspends the current task (await it).
+	sleepFn := &types.Func{Params: []types.FuncParam{{Name: "sec", Type: types.Number}}}
+	sc.vars["sleep"] = &Symbol{Name: "sleep", Kind: symFunc, Type: sleepFn}
+	sc.vars["timeout"] = &Symbol{Name: "timeout", Kind: symFunc, Type: sleepFn}
+	// `WaitGroup` / `Mutex` coordination primitives.
+	sc.vars["WaitGroup"] = &Symbol{Name: "WaitGroup", Kind: symVar, Type: &types.Object{Name: "WaitGroup", Fields: map[string]types.Field{
+		"new": {Type: &types.Func{Returns: []types.Type{waitGroupType()}}},
+	}}}
+	sc.vars["Mutex"] = &Symbol{Name: "Mutex", Kind: symVar, Type: &types.Object{Name: "Mutex", Fields: map[string]types.Field{
+		"new": {Type: &types.Func{Returns: []types.Type{mutexType()}}},
+	}}}
 	// unpack compat.
 	sc.vars["unpack"] = &Symbol{Name: "unpack", Kind: symFunc, Type: &types.Func{HasVarArg: true, VarArg: anyT, Returns: []types.Type{anyT}}}
 	for _, s := range sc.vars {

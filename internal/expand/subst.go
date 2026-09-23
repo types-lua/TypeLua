@@ -147,6 +147,9 @@ func substExpr(x ast.Expr, s *substCtx) ast.Expr {
 	case *ast.NonNullExpr:
 		n.E = substExpr(n.E, s)
 		return n
+	case *ast.AwaitExpr:
+		n.X = substExpr(n.X, s)
+		return n
 	default:
 		return x
 	}
@@ -167,6 +170,34 @@ func substStmt(st ast.Stmt, s *substCtx) {
 		// Deferred calls substitute like normal calls (evaluated at exit,
 		// but with the call-site argument values, as written).
 		n.Call = substExpr(n.Call, s)
+	case *ast.SpawnStmt:
+		// Spawned calls substitute like normal calls.
+		n.Call = substExpr(n.Call, s)
+	case *ast.SelectStmt:
+		for _, sc := range n.Cases {
+			if sc.Recv != nil {
+				sc.Recv.Obj = substExpr(sc.Recv.Obj, s)
+				sc.Recv.Args = substCallArgs(sc.Recv.Args, s)
+			}
+			if sc.Send != nil {
+				sc.Send.Obj = substExpr(sc.Send.Obj, s)
+				sc.Send.Args = substCallArgs(sc.Send.Args, s)
+			}
+			if sc.Timeout != nil {
+				sc.Timeout = substExpr(sc.Timeout, s)
+			}
+			cp := s.checkpoint()
+			if sc.RecvLocal {
+				for _, v := range sc.RecvVars {
+					s.pushShadow(v.Name)
+				}
+			}
+			substBlock(sc.Block, s)
+			s.unwindTo(cp)
+		}
+		if n.Default != nil {
+			substBlock(n.Default, s)
+		}
 	case *ast.ImportStmt:
 		// The bound name shadows macro parameters from here on.
 		if n.Name != nil {

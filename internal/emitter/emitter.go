@@ -26,8 +26,31 @@ func EmitFile(f *ast.File, opt Options) string {
 // EmitFileWithMap renders Lua source plus source-map entries (statement
 // granularity, rune columns). Entries are always collected; encoding
 // happens only when the caller wants a map (near-zero overhead).
+// Files using cooperative concurrency (spawn/await/select/channels) get the
+// scheduler prelude plus a `__tl_run(function() ... end)` chunk wrapper
+// (reentrant, so required modules inherit the caller's task).
 func EmitFileWithMap(f *ast.File, opt Options) (string, []sourcemap.Mapping) {
 	e := &emitter{opt: opt, line: 1}
+	if f != nil && NeedsConcurrency(f) {
+		e.write(concurrentPrelude)
+		hasRet := f.Block != nil && f.Block.Ret != nil
+		if hasRet {
+			e.write("return __tl_run(function()\n")
+		} else {
+			e.write("__tl_run(function()\n")
+		}
+		e.pushDeferFrame(f.Block)
+		e.emitDeferPrelude(1)
+		e.emitBlock(f.Block, 1)
+		e.emitDeferTrail(f.Block, 1)
+		e.popDeferFrame()
+		e.write("end)")
+		out := e.buf.String()
+		if out == "" || strings.HasSuffix(out, "\n") {
+			return out, e.mappings
+		}
+		return out + "\n", e.mappings
+	}
 	e.pushDeferFrame(f.Block)
 	e.emitDeferPrelude(0)
 	e.emitBlock(f.Block, 0)

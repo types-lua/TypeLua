@@ -60,8 +60,7 @@ type LocalFuncDef struct {
 func (*LocalFuncDef) stmtNode()         {}
 func (n *LocalFuncDef) Span() token.Span { return n.S }
 
-// DeferStmt is `defer <call>` / `errdefer <call>` (soft keywords):
-// cleanup runs LIFO at function exit — deferred calls on every normal
+// DeferStmt is `defer <call>` / `errdefer <call>` (soft keywords):// cleanup runs LIFO at function exit — deferred calls on every normal
 // return, errdeferred calls only when leaving via an explicit `error()`.
 // `defer`/`errdefer` stay plain identifiers everywhere else.
 type DeferStmt struct {
@@ -196,3 +195,60 @@ type LabelStmt struct {
 
 func (*LabelStmt) stmtNode()         {}
 func (n *LabelStmt) Span() token.Span { return n.S }
+
+// SpawnStmt is `spawn <call>` (soft keyword): spawns the call as a
+// concurrent task on the cooperative scheduler. Arguments are captured
+// lazily in a closure (same convention as `defer`: see SPEC §12), i.e.
+// evaluated when the task starts, not at the `spawn` site.
+// `spawn` stays a plain identifier elsewhere (`local spawn = 1`, `spawn(x)`).
+type SpawnStmt struct {
+	Call Expr // CallExpr or MethodCallExpr (may carry explicit type args)
+	S    token.Span
+}
+
+func (*SpawnStmt) stmtNode()         {}
+func (n *SpawnStmt) Span() token.Span { return n.S }
+
+// SelectStmt is Go-style `select { case ... default ... }` over channels:
+// each case is one send / receive / timeout guard plus a body. It suspends
+// the current async task until one guard is ready (or `default` fires
+// immediately). Only valid inside `async` (checker-enforced).
+//
+// Source form (braces, no `end`, mirroring class/enum bodies):
+//
+//	select {
+//	  case v = ch:recv() then
+//	    print(v)
+//	  case ch:send(x) then
+//	    print("sent")
+//	  case timeout(1.0) then
+//	    print("timed out")
+//	  default then
+//	    print("busy")
+//	}
+type SelectStmt struct {
+	Cases   []*SelectCase
+	Default *Block
+	DS      token.Span // span of `default` (zero if absent)
+	S       token.Span
+}
+
+func (*SelectStmt) stmtNode()         {}
+func (n *SelectStmt) Span() token.Span { return n.S }
+
+// SelectCase is one `case <guard> then <block>` in a select.
+type SelectCase struct {
+	// Guard kinds (exactly one non-nil, or Timeout):
+	//   Recv: `v = ch:recv()` / `v, ok = ch:recv()` (RecvVars 1-2 idents)
+	//   Send: `ch:send(v)` (MethodCallExpr, method "send")
+	//   Timeout: `sleep(sec)` / `timeout(sec)` (CallExpr, 1 numeric arg)
+	Recv      *MethodCallExpr // method must be "recv"
+	RecvVars  []*Ident        // 1-2 locals bound in the case body
+	RecvLocal bool            // `case local v = ...`
+	Send      *MethodCallExpr // method must be "send"
+	Timeout   Expr            // seconds expression
+	Block     *Block
+	S         token.Span
+}
+
+func (n *SelectCase) Span() token.Span { return n.S }

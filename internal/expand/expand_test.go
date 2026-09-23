@@ -249,3 +249,21 @@ end
 		t.Fatalf("macro call inside defer not expanded:\n%s", out)
 	}
 }
+
+func TestAwaitInStmtMacro(t *testing.T) {
+	// An awaited call is a valid statement-macro body/expansion.
+	out, codes := expandEmit(t, `
+macro emit_send(ch, v) do
+  await ch:send(v)
+end
+local async function f(): void
+  emit_send(ch, 1)
+end
+`)
+	if len(codes) != 0 {
+		t.Fatalf("diags: %v", codes)
+	}
+	if !strings.Contains(out, "ch:send(1)") {
+		t.Fatalf("awaited send lost in macro expansion:\n%s", out)
+	}
+}

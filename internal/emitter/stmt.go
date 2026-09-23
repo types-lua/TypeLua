@@ -48,6 +48,10 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		}
 		e.write(" }")
 		e.nl()
+	case *ast.SpawnStmt:
+		e.emitSpawn(n)
+	case *ast.SelectStmt:
+		e.emitSelect(n)
 	case *ast.LocalAssign:
 		e.pad()
 		e.write("local ")

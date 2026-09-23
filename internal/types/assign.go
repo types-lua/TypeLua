@@ -260,6 +260,17 @@ func assignable(from, to Type, opt Options, seen map[[2]string]bool) bool {
 		return false
 	}
 
+	// Chan (invariant: element types must match both ways, modulo any).
+	if fc, ok := from.(*Chan); ok {
+		if tc, ok := to.(*Chan); ok {
+			return assignable(fc.Elem, tc.Elem, opt, seen) && assignable(tc.Elem, fc.Elem, opt, seen)
+		}
+		return false
+	}
+	if _, ok := to.(*Chan); ok {
+		return false
+	}
+
 	// Array.
 	if fa, ok := from.(*Array); ok {
 		switch tt := to.(type) {

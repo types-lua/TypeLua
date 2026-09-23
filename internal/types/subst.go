@@ -73,6 +73,8 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		return NewIntersection(ns)
 	case *Array:
 		return &Array{Elem: substitute(x.Elem, sub, ctx)}
+	case *Chan:
+		return &Chan{Elem: substitute(x.Elem, sub, ctx)}
 	case *Map:
 		return &Map{Key: substitute(x.Key, sub, ctx), Value: substitute(x.Value, sub, ctx)}
 	case *Tuple:

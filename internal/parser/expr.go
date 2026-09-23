@@ -40,8 +40,16 @@ func (p *Parser) parseExprStmtOrAssign() ast.Stmt {
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
-	// Must be a call.
-	switch first.(type) {
+	// Must be a call (awaiting a call counts as a call statement).
+	callTarget := first
+	for {
+		aw, ok := callTarget.(*ast.AwaitExpr)
+		if !ok {
+			break
+		}
+		callTarget = aw.X
+	}
+	switch callTarget.(type) {
 	case *ast.CallExpr, *ast.MethodCallExpr:
 		return &ast.ExprStmt{E: first, S: first.Span()}
 	default:
@@ -218,6 +226,9 @@ func (p *Parser) parseExprPrec(minPrec int) ast.Expr {
 }
 
 func (p *Parser) parseUnary() ast.Expr {
+	if p.isAwaitPrefix() {
+		return p.parseAwait()
+	}
 	switch p.cur().Kind {
 	case token.Not, token.Hash, token.Tilde:
 		op := p.next()
@@ -353,6 +364,9 @@ func (p *Parser) parsePrimary() ast.Expr {
 	c := p.cur()
 	p.enterDepth(c.Span)
 	defer p.leaveDepth()
+	if p.isAsyncFuncStart() {
+		return p.parseAsyncFuncLit(false)
+	}
 	if c.Kind == token.Ident || isSoftKw(c.Kind) {
 		p.next()
 		lit := c.Literal

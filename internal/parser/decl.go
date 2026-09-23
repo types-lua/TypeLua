@@ -39,6 +39,10 @@ func (p *Parser) parseExport() ast.Stmt {
 		sp := token.Span{Start: start.Span.Start, End: fn.Span().End, File: p.file}
 		return &ast.FuncDefStmt{Name: name, Func: fn, S: sp}
 	}
+	if p.isAsyncFuncStart() {
+		// export async function foo() ... end (same as global async).
+		return p.parseAsyncGlobal()
+	}
 	if p.at(token.Local) {
 		// export local ... : mark exported where applicable.
 		st := p.parseLocal()
@@ -367,6 +371,18 @@ func (p *Parser) parseClassDecl(exported, declared, isLocal bool) ast.Stmt {
 
 func (p *Parser) parseClassMember(declared bool) *ast.ClassMember {
 	start := p.cur()
+	// Leading `async` modifier for methods (`async greet() ... end`):
+	// only when followed by a member name + `(`/`<` (else it is a field
+	// named `async`, e.g. `async: string`).
+	isAsync := false
+	if p.cur().Kind == token.Ident && p.cur().Literal == "async" &&
+		(p.peek(1).Kind == token.Ident || isSoftKw(p.peek(1).Kind)) &&
+		(p.peek(2).Kind == token.LParen || p.peek(2).Kind == token.Lt) &&
+		p.peek(1).Span.Start.Line == p.cur().Span.Start.Line {
+		isAsync = true
+		p.next() // async
+		start = p.cur()
+	}
 	vis := ast.Public
 	visSeen := false
 	isStatic, isReadonly, isAbstract := false, false, false
@@ -413,11 +429,23 @@ loop:
 			break loop
 		}
 	}
+	// `async` between modifiers and name (`static async fetch()`).
+	if !isAsync && p.cur().Kind == token.Ident && p.cur().Literal == "async" &&
+		(p.peek(1).Kind == token.Ident || isSoftKw(p.peek(1).Kind)) &&
+		(p.peek(2).Kind == token.LParen || p.peek(2).Kind == token.Lt) &&
+		p.peek(1).Span.Start.Line == p.cur().Span.Start.Line {
+		isAsync = true
+		p.next() // async
+	}
 	name := p.parseIdentAllowSoft()
 	if name == nil {
 		return nil
 	}
 	isCtor := name.Name == "constructor"
+	if isAsync && isCtor {
+		p.errorf("TL2032", name.Span(), "constructor must not be 'async'")
+		isAsync = false
+	}
 	// Method or constructor: `name<T>(params)`.
 	if p.at(token.LParen) || p.at(token.Lt) {
 		var generics []*ast.GenericParam
@@ -456,7 +484,7 @@ loop:
 		if isCtor {
 			kind = ast.ClassConstructor
 		}
-		m := &ast.ClassMember{Kind: kind, Name: name, Visibility: vis, IsStatic: isStatic, IsReadonly: isReadonly, IsAbstract: isAbstract, Generics: generics, Params: params, HasVarArg: hasVA, VarArgName: vaName, VarArgType: vaTy, ReturnType: retTy, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+		m := &ast.ClassMember{Kind: kind, Name: name, Visibility: vis, IsStatic: isStatic, IsReadonly: isReadonly, IsAbstract: isAbstract, IsAsync: isAsync, Generics: generics, Params: params, HasVarArg: hasVA, VarArgName: vaName, VarArgType: vaTy, ReturnType: retTy, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 		if declared || isAbstract {
 			m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
 			return m

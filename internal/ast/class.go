@@ -58,6 +58,7 @@ type ClassMember struct {
 	VarArgType TypeNode
 	ReturnType TypeNode // nil for constructors or unannotated
 	Body       *Block   // nil for abstract/declare (no body)
+	IsAsync    bool     // `async` method: may await; erases to plain method
 	S          token.Span
 }
 

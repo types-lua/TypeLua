@@ -72,6 +72,17 @@ func (r *renameCtx) prescanLabelsStmt(st ast.Stmt) {
 		for _, s := range childStmts(st) {
 			r.prescanLabelsStmt(s)
 		}
+	case *ast.SelectStmt:
+		for _, sc := range n.Cases {
+			for _, s := range sc.Block.Stmts {
+				r.prescanLabelsStmt(s)
+			}
+		}
+		if n.Default != nil {
+			for _, s := range n.Default.Stmts {
+				r.prescanLabelsStmt(s)
+			}
+		}
 	case *ast.LocalFuncDef:
 		r.prescanLabelsBlock(n.Func.Body)
 	case *ast.FuncDefStmt:
@@ -202,6 +213,38 @@ func (r *renameCtx) renameStmt(st ast.Stmt) {
 	case *ast.DeferStmt:
 		// The deferred call resolves names like any other call.
 		r.renameExpr(n.Call)
+	case *ast.SpawnStmt:
+		r.renameExpr(n.Call)
+	case *ast.SelectStmt:
+		for _, sc := range n.Cases {
+			if sc.Recv != nil {
+				r.renameExpr(sc.Recv.Obj)
+				for _, a := range sc.Recv.Args {
+					r.renameExpr(a)
+				}
+			}
+			if sc.Send != nil {
+				r.renameExpr(sc.Send.Obj)
+				for _, a := range sc.Send.Args {
+					r.renameExpr(a)
+				}
+			}
+			if sc.Timeout != nil {
+				r.renameExpr(sc.Timeout)
+			}
+			r.scoped(func() {
+				if sc.RecvLocal {
+					for _, v := range sc.RecvVars {
+						r.bindVar(v.Name)
+						v.Name = r.vars[v.Name]
+					}
+				}
+				r.renameBlock(sc.Block)
+			})
+		}
+		if n.Default != nil {
+			r.renameBlock(n.Default)
+		}
 	case *ast.LocalFuncDef:
 		r.bindVar(n.Name.Name)
 		n.Name.Name = r.vars[n.Name.Name]
@@ -336,6 +379,8 @@ func (r *renameCtx) renameExpr(x ast.Expr) {
 		r.renameExpr(n.E)
 	case *ast.NonNullExpr:
 		r.renameExpr(n.E)
+	case *ast.AwaitExpr:
+		r.renameExpr(n.X)
 	}
 }
 
@@ -395,6 +440,8 @@ func collectIdents(out map[string]bool, x ast.Expr) {
 		collectIdents(out, n.E)
 	case *ast.NonNullExpr:
 		collectIdents(out, n.E)
+	case *ast.AwaitExpr:
+		collectIdents(out, n.X)
 	}
 }
 
@@ -490,6 +537,37 @@ func collectStmtIdents(out map[string]bool, st ast.Stmt) {
 			}
 			if m.Init != nil {
 				collectIdents(out, m.Init)
+			}
+		}
+	case *ast.SpawnStmt:
+		collectIdents(out, n.Call)
+	case *ast.SelectStmt:
+		for _, sc := range n.Cases {
+			if sc.Recv != nil {
+				collectIdents(out, sc.Recv.Obj)
+				for _, a := range sc.Recv.Args {
+					collectIdents(out, a)
+				}
+			}
+			if sc.Send != nil {
+				collectIdents(out, sc.Send.Obj)
+				for _, a := range sc.Send.Args {
+					collectIdents(out, a)
+				}
+			}
+			if sc.Timeout != nil {
+				collectIdents(out, sc.Timeout)
+			}
+			for _, v := range sc.RecvVars {
+				out[v.Name] = true
+			}
+			for _, s := range sc.Block.Stmts {
+				collectStmtIdents(out, s)
+			}
+		}
+		if n.Default != nil {
+			for _, s := range n.Default.Stmts {
+				collectStmtIdents(out, s)
 			}
 		}
 	}

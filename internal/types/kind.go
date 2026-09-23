@@ -35,6 +35,7 @@ const (
 	KInferParam
 	KMapped
 	KIndexedAccess
+	KChan
 )
 
 type Type interface {

@@ -97,6 +97,7 @@ type FuncLit struct {
 	Body       *Block
 	IsMethod   bool // true if defined with colon (implicit self)
 	Generics   []*GenericParam
+	IsAsync    bool // `async function`: may await/yield; erases to plain function
 	S          token.Span
 }
 
@@ -188,6 +189,18 @@ type NonNullExpr struct {
 
 func (*NonNullExpr) exprNode()          {}
 func (n *NonNullExpr) Span() token.Span { return n.S }
+
+// AwaitExpr is `await <expr>` (soft keyword): marks a suspension point
+// inside an `async` function (or the top-level chunk). It erases to the
+// inner expression: blocking runtime calls yield by themselves, await is
+// the explicit marker the checker validates.
+type AwaitExpr struct {
+	X Expr
+	S token.Span
+}
+
+func (*AwaitExpr) exprNode()          {}
+func (n *AwaitExpr) Span() token.Span { return n.S }
 
 // IsLValue reports whether e can appear on the left of `=`.
 func IsLValue(e Expr) bool {

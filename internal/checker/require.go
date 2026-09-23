@@ -161,6 +161,28 @@ func (w *requireWalker) stmt(st ast.Stmt) {
 		w.add(n.Path)
 	case *ast.DeferStmt:
 		w.expr(n.Call)
+	case *ast.SpawnStmt:
+		w.expr(n.Call)
+	case *ast.SelectStmt:
+		for _, sc := range n.Cases {
+			if sc.Recv != nil {
+				w.expr(sc.Recv.Obj)
+				for _, a := range sc.Recv.Args {
+					w.expr(a)
+				}
+			}
+			if sc.Send != nil {
+				w.expr(sc.Send.Obj)
+				for _, a := range sc.Send.Args {
+					w.expr(a)
+				}
+			}
+			if sc.Timeout != nil {
+				w.expr(sc.Timeout)
+			}
+			w.block(sc.Block)
+		}
+		w.block(n.Default)
 	}
 }
 
@@ -208,5 +230,7 @@ func (w *requireWalker) expr(x ast.Expr) {
 		w.expr(n.E)
 	case *ast.NonNullExpr:
 		w.expr(n.E)
+	case *ast.AwaitExpr:
+		w.expr(n.X)
 	}
 }

@@ -74,6 +74,24 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 		if id, ok := n.Func.(*ast.Ident); ok && id.Name == "super" && c.cur().lookupVar("super") == nil {
 			return c.checkSuperCall(n)
 		}
+		// `makeChan<T>(...)` requires an explicit T (cap carries no T).
+		if id, ok := n.Func.(*ast.Ident); ok && id.Name == "makeChan" && len(n.TypeArgs) == 0 {
+			if s := c.cur().lookupVar("makeChan"); s != nil && s.IsBuiltin {
+				c.recordUse(id.Span(), s)
+				for _, a := range n.Args {
+					c.checkExpr(a)
+				}
+				if len(n.Args) > 1 {
+					c.errorf("TL3803", n.Span(), "'makeChan' expects at most 1 argument (capacity), got %d", len(n.Args))
+				} else if len(n.Args) == 1 {
+					if at := c.checkExprSingle(n.Args[0]); !isAnyLike(at) && !isIntegerLike(at) && !isNumberLike(at) {
+						c.errorf("TL3803", n.Args[0].Span(), "'makeChan' capacity must be a number, got '%s'", at.String())
+					}
+				}
+				c.errorf("TL3803", n.Span(), "'makeChan' requires an explicit type argument ('makeChan<T>(cap?)')")
+				return []types.Type{&types.Chan{Elem: types.Any}}
+			}
+		}
 		return c.checkCall(n.Func.Span(), c.checkExpr(n.Func), n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 	case *ast.MethodCallExpr:
 		if id, ok := n.Obj.(*ast.Ident); ok && id.Name == "super" && c.cur().lookupVar("super") == nil {
@@ -106,6 +124,8 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 		// `...` expands to multiple values of vt. Represent as single for non-last? For multi, return [vt] (one-or-more modeled as one).
 		// To keep sound, return single vt; callers in multi context treat as one. (Full variadic multi is unbounded; model as one.)
 		return []types.Type{vt}
+	case *ast.AwaitExpr:
+		return c.checkAwaitMulti(n)
 	default:
 		return []types.Type{c.checkExprOne(e)}
 	}
@@ -235,6 +255,8 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 			return stripped
 		}
 		return t
+	case *ast.AwaitExpr:
+		return c.checkAwait(n)
 	}
 	c.errorf("TL3200", e.Span(), "unsupported expression %T", e)
 	return types.Any

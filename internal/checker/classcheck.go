@@ -244,6 +244,8 @@ func (c *Checker) checkClassMethodBody(n *ast.ClassDecl, m *ast.ClassMember, ft 
 	defer func() { c.retStack = c.retStack[:len(c.retStack)-1] }()
 	c.inferStack = append(c.inferStack, nil)
 	defer func() { c.inferStack = c.inferStack[:len(c.inferStack)-1] }()
+	c.asyncStack = append(c.asyncStack, m.IsAsync)
+	defer func() { c.asyncStack = c.asyncStack[:len(c.asyncStack)-1] }()
 
 	c.classStack = append(c.classStack, &classCtx{def: def.inst.Def, name: n.Name.Name, inst: def.inst, base: baseInst, baseVal: baseVal, inStatic: m.IsStatic, inConstructor: isCtor, retDepth: len(c.retStack)})
 	defer func() { c.classStack = c.classStack[:len(c.classStack)-1] }()

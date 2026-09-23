@@ -155,6 +155,13 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 		}
 		return &types.Array{Elem: c.resolveTypeWithSub(t.Args[0], sub)}
 	}
+	if t.Name == "chan" {
+		if len(t.Args) != 1 {
+			c.errorf("TL3102", t.Span(), "'chan' expects 1 type argument, got %d (use 'chan<T>')", len(t.Args))
+			return types.Any
+		}
+		return &types.Chan{Elem: c.resolveTypeWithSub(t.Args[0], sub)}
+	}
 	// User type.
 	e := c.cur().lookupType(t.Name)
 	if e == nil {

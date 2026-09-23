@@ -87,6 +87,15 @@ func (p *Parser) parseStmt() ast.Stmt {
 	if p.isDeferStart() {
 		return p.parseDefer()
 	}
+	if p.isSpawnStart() {
+		return p.parseSpawn()
+	}
+	if p.isSelectStart() {
+		return p.parseSelect()
+	}
+	if p.isAsyncFuncStart() {
+		return p.parseAsyncGlobal()
+	}
 	switch p.cur().Kind {
 	case token.Semi:
 		s := p.next()
@@ -409,6 +418,9 @@ func (p *Parser) parseFuncName() *ast.FuncName {
 
 func (p *Parser) parseLocal() ast.Stmt {
 	start := p.next() // local
+	if p.isAsyncFuncStart() {
+		return p.parseAsyncLocalFunc(start)
+	}
 	if p.at(token.Function) {
 		p.next()
 		name := p.parseIdentAllowSoft()

@@ -12,7 +12,7 @@ go build -o tlua ./cmd/tlua
 ./tlua build --watch   # 或 ./tlua watch：监听改动持续增量编译（对标 tsc --watch）
 ```
 
-示例见 `examples/*/`（25 个文件，`tlua check` 全过），规范见 `SPEC.md`。
+示例见 `examples/*/`（26 个文件，`tlua check` 全过），规范见 `SPEC.md`。
 
 | 示例 | 覆盖 |
 |---|---|
@@ -34,6 +34,7 @@ go build -o tlua ./cmd/tlua
 | `advanced` | 显式泛型实参、映射类型（含 `+?`/`-?`/`+readonly`/`-readonly` 与同态继承）、索引访问（真机运行验证） |
 | `pkgs` | 包管理：直接 + 间接依赖、`replace` 本地替换、vendor（离线可验） |
 | `defer` | `defer`/`errdefer`：LIFO 清理、正常返回与显式 `error()` 分流 |
+| `concurrent` | 并发：`async/await` + `spawn` + `chan<T>` + `select`/`default`/超时 + `WaitGroup`/`Mutex`（单线程协作 CSP，真机运行验证） |
 
 ## tlua.json
 

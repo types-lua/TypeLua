@@ -76,6 +76,8 @@ func typeString(t Type, seen map[Type]bool) string {
 		return x.stringSeen(seen)
 	case *IndexedAccess:
 		return x.stringSeen(seen)
+	case *Chan:
+		return x.stringSeen(seen)
 	default:
 		return t.String()
 	}
@@ -136,4 +138,17 @@ func (t *Tuple) stringSeen(seen map[Type]bool) string {
 		parts[i] = typeString(e, seen)
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// Chan is `chan<T>`: a CSP channel carrying values of Elem.
+// Invariant in T (like Go): chan<A> is assignable to chan<B> only when
+// A and B are mutually assignable (practically: identical, modulo any).
+type Chan struct {
+	Elem Type
+}
+
+func (t *Chan) Kind() Kind { return KChan }
+func (t *Chan) String() string { return t.stringSeen(map[Type]bool{}) }
+func (t *Chan) stringSeen(seen map[Type]bool) string {
+	return fmt.Sprintf("chan<%s>", typeString(t.Elem, seen))
 }

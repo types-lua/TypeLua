@@ -82,6 +82,10 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 		c.checkImport(n)
 	case *ast.DeferStmt:
 		c.checkDefer(n)
+	case *ast.SpawnStmt:
+		c.checkSpawn(n)
+	case *ast.SelectStmt:
+		c.checkSelect(n)
 	default:
 		c.errorf("TL3000", st.Span(), "unsupported statement %T", st)
 	}
@@ -314,6 +318,8 @@ func hasBareVarArg(x ast.Expr) bool {
 		return hasBareVarArg(n.E)
 	case *ast.NonNullExpr:
 		return hasBareVarArg(n.E)
+	case *ast.AwaitExpr:
+		return hasBareVarArg(n.X)
 	}
 	return false
 }

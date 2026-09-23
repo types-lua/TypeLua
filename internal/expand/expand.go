@@ -132,6 +132,32 @@ func (e *expander) expandStmtInto(st ast.Stmt, env *scope) []ast.Stmt {
 	case *ast.DeferStmt:
 		n.Call = e.expandExpr(n.Call, env)
 		return []ast.Stmt{st}
+	case *ast.SpawnStmt:
+		n.Call = e.expandExpr(n.Call, env)
+		return []ast.Stmt{st}
+	case *ast.SelectStmt:
+		for _, sc := range n.Cases {
+			if sc.Recv != nil {
+				sc.Recv.Obj = e.expandExpr(sc.Recv.Obj, env)
+				for i, a := range sc.Recv.Args {
+					sc.Recv.Args[i] = e.expandExpr(a, env)
+				}
+			}
+			if sc.Send != nil {
+				sc.Send.Obj = e.expandExpr(sc.Send.Obj, env)
+				for i, a := range sc.Send.Args {
+					sc.Send.Args[i] = e.expandExpr(a, env)
+				}
+			}
+			if sc.Timeout != nil {
+				sc.Timeout = e.expandExpr(sc.Timeout, env)
+			}
+			e.expandBlock(sc.Block, &scope{parent: env})
+		}
+		if n.Default != nil {
+			e.expandBlock(n.Default, &scope{parent: env})
+		}
+		return []ast.Stmt{st}
 	case *ast.AssignStmt:
 		for i, t := range n.Targets {
 			n.Targets[i] = e.expandExpr(t, env)
@@ -264,6 +290,9 @@ func (e *expander) expandExpr(x ast.Expr, env *scope) ast.Expr {
 		return n
 	case *ast.NonNullExpr:
 		n.E = e.expandExpr(n.E, env)
+		return n
+	case *ast.AwaitExpr:
+		n.X = e.expandExpr(n.X, env)
 		return n
 	default:
 		return x

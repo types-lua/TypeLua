@@ -212,6 +212,9 @@ func (e *emitter) emitExpr(x ast.Expr) {
 		e.emitExpr(n.E)
 	case *ast.NonNullExpr:
 		e.emitExpr(n.E)
+	case *ast.AwaitExpr:
+		// Erased: the inner call yields by itself in the scheduler.
+		e.emitExpr(n.X)
 	default:
 		e.write("nil")
 	}

@@ -127,7 +127,15 @@ func (e *expander) expandStmtMacro(md *macroDef, call *ast.CallExpr, env *scope)
 	var valid []ast.Stmt
 	for _, st := range blk.Stmts {
 		if es, ok := st.(*ast.ExprStmt); ok {
-			switch es.E.(type) {
+			inner := es.E
+			for {
+				aw, ok := inner.(*ast.AwaitExpr)
+				if !ok {
+					break
+				}
+				inner = aw.X
+			}
+			switch inner.(type) {
 			case *ast.CallExpr, *ast.MethodCallExpr:
 			default:
 				e.errorf("TL3705", es.Span(), "macro '%s' expanded to an invalid statement", md.name)
