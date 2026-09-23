@@ -232,7 +232,7 @@ func New(opt Options) *Checker {
 
 func (c *Checker) Diags() []diag.Diagnostic { return c.diags }
 
-func (c *Checker) errorf(code string, sp token.Span, format string, args ...any) {
+func (c *Checker) errorf(code diag.Code, sp token.Span, format string, args ...any) {
 	c.diags = append(c.diags, diag.Errorf(code, sp, format, args...))
 }
 

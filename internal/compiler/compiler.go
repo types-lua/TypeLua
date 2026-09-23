@@ -48,7 +48,7 @@ func (p *Program) Load() error {
 	for _, fp := range list {
 		data, err := os.ReadFile(fp)
 		if err != nil {
-			p.Diags = append(p.Diags, diag.Diagnostic{Code: "TL4001", Message: fmt.Sprintf("cannot read file: %v", err)})
+			p.Diags = append(p.Diags, diag.Diagnostic{Code: diag.CannotReadFile, Message: fmt.Sprintf("cannot read file: %v", err)})
 			continue
 		}
 		rel := fp

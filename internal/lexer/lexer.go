@@ -58,7 +58,7 @@ func (l *Lexer) advance(n int) {
 	}
 }
 
-func (l *Lexer) addDiag(code, format string, args ...any) token.Span {
+func (l *Lexer) addDiag(code diag.Code, format string, args ...any) token.Span {
 	sp := token.Span{Start: l.pos(), End: l.pos(), File: l.file}
 	l.diags = append(l.diags, diag.Errorf(code, sp, format, args...))
 	return sp
@@ -125,7 +125,7 @@ func (l *Lexer) lexComment() {
 				for !l.eof() {
 					l.advance(1)
 				}
-				l.diags = append(l.diags, diag.Errorf("TL1001", sp, "unterminated long comment"))
+				l.diags = append(l.diags, diag.Errorf(diag.LexUnterminatedLongComment, sp, "unterminated long comment"))
 				return
 			}
 			// Advance through content + closer, tracking newlines.
@@ -313,7 +313,7 @@ func (l *Lexer) next() token.Token {
 		bad := l.src[l.off : l.off+size]
 		l.advance(size)
 		sp := token.Span{Start: start, End: l.pos(), File: l.file}
-		l.diags = append(l.diags, diag.Errorf("TL1002", sp, "invalid character %q", bad))
+		l.diags = append(l.diags, diag.Errorf(diag.LexInvalidCharacter, sp, "invalid character %q", bad))
 		// Return next token instead of a bogus one to keep parser stable.
 		return l.next()
 	}
@@ -338,7 +338,7 @@ func (l *Lexer) lexNumber(start token.Pos) token.Token {
 				l.advance(1)
 			}
 			sp := token.Span{Start: start, End: l.pos(), File: l.file}
-			l.diags = append(l.diags, diag.Errorf("TL1003", sp, "malformed hexadecimal number"))
+			l.diags = append(l.diags, diag.Errorf(diag.LexMalformedHexNumber, sp, "malformed hexadecimal number"))
 			return token.Token{Kind: token.Number, Literal: l.src[l.off:i], Span: sp}
 		}
 		// Optional fractional part.
@@ -476,7 +476,7 @@ func (l *Lexer) lexShortString(start token.Pos) token.Token {
 	end := l.pos()
 	sp := token.Span{Start: start, End: end, File: l.file}
 	if !closed {
-		l.diags = append(l.diags, diag.Errorf("TL1004", sp, "unterminated string literal"))
+		l.diags = append(l.diags, diag.Errorf(diag.LexUnterminatedString, sp, "unterminated string literal"))
 	}
 	return token.Token{Kind: token.String, Literal: sb.String(), Span: sp}
 }
@@ -505,7 +505,7 @@ func (l *Lexer) lexLongString(start token.Pos) token.Token {
 		}
 		lit = l.src[start.Offset:l.off]
 		sp := token.Span{Start: start, End: l.pos(), File: l.file}
-		l.diags = append(l.diags, diag.Errorf("TL1005", sp, "unterminated long string"))
+		l.diags = append(l.diags, diag.Errorf(diag.LexUnterminatedLongString, sp, "unterminated long string"))
 		return token.Token{Kind: token.String, Literal: lit, Span: sp}
 	}
 	endOff := contentStart + idx + len(close)

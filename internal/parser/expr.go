@@ -2,6 +2,7 @@ package parser
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 )
 
@@ -30,13 +31,13 @@ func (p *Parser) parseExprStmtOrAssign() ast.Stmt {
 		// Validate lvalues.
 		for _, t := range targets {
 			if !ast.IsLValue(t) {
-				p.errorf("TL2007", t.Span(), "invalid assignment target")
+				p.errorf(diag.ParseInvalidAssignTarget, t.Span(), "invalid assignment target")
 			}
 		}
 		return &ast.AssignStmt{Targets: targets, Values: values, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
 	if len(targets) > 1 {
-		p.errorf("TL2008", p.cur().Span, "expected '=' in assignment")
+		p.errorf(diag.ParseExpectedAssign, p.cur().Span, "expected '=' in assignment")
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
@@ -60,7 +61,7 @@ func (p *Parser) parseExprStmtOrAssign() ast.Stmt {
 				return &ast.ExprStmt{E: first, S: first.Span()}
 			}
 		}
-		p.errorf("TL2009", first.Span(), "expected assignment or function call")
+		p.errorf(diag.ParseExpectedCall, first.Span(), "expected assignment or function call")
 		return &ast.ExprStmt{E: first, S: first.Span()}
 	}
 }
@@ -83,7 +84,7 @@ func (p *Parser) parseExprList() []ast.Expr {
 
 func (p *Parser) parseIdent() *ast.Ident {
 	if p.cur().Kind != token.Ident {
-		p.errorf("TL2010", p.cur().Span, "expected identifier, got %s", p.cur().Kind)
+		p.errorf(diag.ParseExpectedIdentifier, p.cur().Span, "expected identifier, got %s", p.cur().Kind)
 		return nil
 	}
 	t := p.next()
@@ -112,7 +113,7 @@ func (p *Parser) parseIdentAllowSoft() *ast.Ident {
 		}
 		return &ast.Ident{Name: lit, S: t.Span}
 	}
-	p.errorf("TL2010", p.cur().Span, "expected identifier, got %s", p.cur().Kind)
+	p.errorf(diag.ParseExpectedIdentifier, p.cur().Span, "expected identifier, got %s", p.cur().Kind)
 	return nil
 }
 
@@ -217,7 +218,7 @@ func (p *Parser) parseExprPrec(minPrec int) ast.Expr {
 		}
 		rhs := p.parseExprPrec(nextMin)
 		if rhs == nil {
-			p.errorf("TL2011", op.Span, "expected expression after '%s'", op.Kind)
+			p.errorf(diag.ParseExpectedOperand, op.Span, "expected expression after '%s'", op.Kind)
 			return lhs
 		}
 		lhs = &ast.BinOpExpr{Op: op.Kind, L: lhs, R: rhs, S: token.Span{Start: lhs.Span().Start, End: rhs.Span().End, File: p.file}}
@@ -292,7 +293,7 @@ func (p *Parser) parseSuffix() ast.Expr {
 			}
 			args := p.parseCallArgs()
 			if args == nil {
-				p.errorf("TL2012", p.cur().Span, "expected method call arguments after ':method'")
+				p.errorf(diag.ParseExpectedMethodArgs, p.cur().Span, "expected method call arguments after ':method'")
 				return e
 			}
 			e = &ast.MethodCallExpr{Obj: e, Method: m, TypeArgs: targs, Args: args, S: token.Span{Start: e.Span().Start, End: p.prevEnd(), File: p.file}}
@@ -423,7 +424,7 @@ func (p *Parser) parsePrimary() ast.Expr {
 		}
 		return &ast.ParenExpr{E: e, S: token.Span{Start: c.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
-	p.errorf("TL2013", c.Span, "expected expression, got %s", c.Kind)
+	p.errorf(diag.ParseExpectedExpression, c.Span, "expected expression, got %s", c.Kind)
 	return nil
 }
 

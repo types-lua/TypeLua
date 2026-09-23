@@ -29,7 +29,7 @@ func (p *Parser) enterDepth(sp token.Span) bool {
 	p.depth++
 	if p.depth > maxParseDepth {
 		if p.depth == maxParseDepth+1 {
-			p.errorf("TL2015", sp, "nesting too deep (maximum %d)", maxParseDepth)
+			p.errorf(diag.ParseNestingTooDeep, sp, "nesting too deep (maximum %d)", maxParseDepth)
 		}
 		panic(depthBailout{})
 	}

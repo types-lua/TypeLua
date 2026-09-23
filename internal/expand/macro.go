@@ -2,6 +2,7 @@ package expand
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 )
 
@@ -15,11 +16,11 @@ import (
 func (e *expander) checkArity(md *macroDef, call token.Span, nargs int) []int {
 	if md.hasVarArg {
 		if nargs < len(md.params) {
-			e.errorf("TL3702", call, "macro '%s' expects at least %d argument(s), got %d", md.name, len(md.params), nargs)
+			e.errorf(diag.MacroArityMismatch, call, "macro '%s' expects at least %d argument(s), got %d", md.name, len(md.params), nargs)
 			return nil
 		}
 	} else if nargs != len(md.params) {
-		e.errorf("TL3702", call, "macro '%s' expects %d argument(s), got %d", md.name, len(md.params), nargs)
+		e.errorf(diag.MacroArityMismatch, call, "macro '%s' expects %d argument(s), got %d", md.name, len(md.params), nargs)
 		return nil
 	}
 	idx := make([]int, nargs)
@@ -33,12 +34,12 @@ func (e *expander) checkArity(md *macroDef, call token.Span, nargs int) []int {
 func (e *expander) enter(name string, sp token.Span) bool {
 	for _, n := range e.stack {
 		if n == name {
-			e.errorf("TL3703", sp, "recursive macro expansion of '%s'", name)
+			e.errorf(diag.RecursiveMacro, sp, "recursive macro expansion of '%s'", name)
 			return false
 		}
 	}
 	if len(e.stack) >= maxExpandDepth {
-		e.errorf("TL3703", sp, "macro expansion too deep (possible recursion via '%s')", name)
+		e.errorf(diag.RecursiveMacro, sp, "macro expansion too deep (possible recursion via '%s')", name)
 		return false
 	}
 	e.stack = append(e.stack, name)
@@ -62,7 +63,7 @@ func (e *expander) renameScope(args []ast.Expr) *renameCtx {
 // reportStrayDots reports variadic `...` used outside call arguments.
 func (e *expander) reportStrayDots(md *macroDef, sub *substCtx) {
 	for _, sp := range sub.strayDots {
-		e.errorf("TL3706", sp, "variadic '...' of macro '%s' must appear in call arguments", md.name)
+		e.errorf(diag.MacroVarargOutsideCallArgs, sp, "variadic '...' of macro '%s' must appear in call arguments", md.name)
 	}
 }
 
@@ -138,7 +139,7 @@ func (e *expander) expandStmtMacro(md *macroDef, call *ast.CallExpr, env *scope)
 			switch inner.(type) {
 			case *ast.CallExpr, *ast.MethodCallExpr:
 			default:
-				e.errorf("TL3705", es.Span(), "macro '%s' expanded to an invalid statement", md.name)
+				e.errorf(diag.MacroExpandsToInvalidStmt, es.Span(), "macro '%s' expanded to an invalid statement", md.name)
 				continue
 			}
 		}

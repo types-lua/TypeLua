@@ -2,6 +2,7 @@ package checker
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -32,14 +33,14 @@ func (c *Checker) inAsyncTask() bool {
 // themselves, await is the explicit marker).
 func (c *Checker) checkAwait(n *ast.AwaitExpr) types.Type {
 	if !c.inAsyncTask() {
-		c.errorf("TL3801", n.Span(), "'await' is only allowed inside 'async' functions (or the top-level chunk)")
+		c.errorf(diag.AwaitOutsideAsync, n.Span(), "'await' is only allowed inside 'async' functions (or the top-level chunk)")
 	}
 	return c.checkExpr(n.X)
 }
 
 func (c *Checker) checkAwaitMulti(n *ast.AwaitExpr) []types.Type {
 	if !c.inAsyncTask() {
-		c.errorf("TL3801", n.Span(), "'await' is only allowed inside 'async' functions (or the top-level chunk)")
+		c.errorf(diag.AwaitOutsideAsync, n.Span(), "'await' is only allowed inside 'async' functions (or the top-level chunk)")
 	}
 	return c.checkExprMulti(n.X)
 }
@@ -51,7 +52,7 @@ func (c *Checker) checkSpawn(n *ast.SpawnStmt) {
 	c.checkExpr(n.Call)
 	c.spawnDepth--
 	if hasBareVarArg(n.Call) {
-		c.errorf("TL3235", n.Call.Span(), "cannot use '...' in a 'spawn' call (copy it into a local first)")
+		c.errorf(diag.BareVarargInTaskCall, n.Call.Span(), "cannot use '...' in a 'spawn' call (copy it into a local first)")
 	}
 }
 
@@ -70,7 +71,7 @@ func (c *Checker) checkAsyncCall(fnT types.Type, sp token.Span, name string) {
 	if name == "" {
 		name = "async function"
 	}
-	c.errorf("TL3805", sp, "calling async '%s' outside an async task (use 'await' inside 'async', or run it with 'spawn')", name)
+	c.errorf(diag.AsyncCallOutsideAsync, sp, "calling async '%s' outside an async task (use 'await' inside 'async', or run it with 'spawn')", name)
 }
 
 func calleeName(e ast.Expr) string {
@@ -88,10 +89,10 @@ func calleeName(e ast.Expr) string {
 // checkSelect validates guards, binds receive variables, and checks bodies.
 func (c *Checker) checkSelect(n *ast.SelectStmt) {
 	if !c.inAsyncTask() {
-		c.errorf("TL3802", n.Span(), "'select' is only allowed inside 'async' functions (or the top-level chunk)")
+		c.errorf(diag.SelectOutsideAsync, n.Span(), "'select' is only allowed inside 'async' functions (or the top-level chunk)")
 	}
 	if len(n.Cases) == 0 && n.Default == nil {
-		c.errorf("TL3804", n.Span(), "select must have at least one 'case' or 'default'")
+		c.errorf(diag.SelectGuardInvalid, n.Span(), "select must have at least one 'case' or 'default'")
 		return
 	}
 	for _, sc := range n.Cases {
@@ -116,19 +117,19 @@ func (c *Checker) checkSelectCase(sc *ast.SelectCase) {
 		nb++
 	}
 	if nb != 1 {
-		c.errorf("TL3804", sc.Span(), "select case must have exactly one guard ('ch:recv()', 'ch:send(v)' or 'timeout(s)')")
+		c.errorf(diag.SelectGuardInvalid, sc.Span(), "select case must have exactly one guard ('ch:recv()', 'ch:send(v)' or 'timeout(s)')")
 		return
 	}
 	switch {
 	case sc.Recv != nil:
 		if len(sc.Recv.Args) != 0 {
-			c.errorf("TL3804", sc.Recv.Span(), "'ch:recv' expects no arguments, got %d", len(sc.Recv.Args))
+			c.errorf(diag.SelectGuardInvalid, sc.Recv.Span(), "'ch:recv' expects no arguments, got %d", len(sc.Recv.Args))
 		}
 		objT := c.checkExpr(sc.Recv.Obj)
 		elem := c.chanElem(objT, sc.Recv.Span())
 		c.recordMemberUse(sc.Recv.Method.Span(), objT, "recv")
 		if len(sc.RecvVars) > 2 {
-			c.errorf("TL3804", sc.Span(), "select receive binds at most 2 variables (v, ok)")
+			c.errorf(diag.SelectGuardInvalid, sc.Span(), "select receive binds at most 2 variables (v, ok)")
 			return
 		}
 		if sc.RecvLocal {
@@ -147,15 +148,15 @@ func (c *Checker) checkSelectCase(sc *ast.SelectCase) {
 			for i, v := range sc.RecvVars {
 				sym := c.cur().lookupVar(v.Name)
 				if sym == nil {
-					c.errorf("TL3014", v.Span(), "undefined variable '%s' (use 'case local %s = ch:recv()' to declare it)", v.Name, v.Name)
+					c.errorf(diag.UndefinedVariable, v.Span(), "undefined variable '%s' (use 'case local %s = ch:recv()' to declare it)", v.Name, v.Name)
 					continue
 				}
 				c.recordUse(v.Span(), sym)
 				if sym.IsConst {
-					c.errorf("TL3015", v.Span(), "cannot assign to const variable '%s'", v.Name)
+					c.errorf(diag.AssignToConst, v.Span(), "cannot assign to const variable '%s'", v.Name)
 				}
 				if i < len(want) && !types.IsAssignable(want[i], sym.Type, c.opt.toTypes()) {
-					c.errorf("TL3010", v.Span(), "type '%s' is not assignable to type '%s'", want[i].String(), sym.Type.String())
+					c.errorf(diag.TypeNotAssignable, v.Span(), "type '%s' is not assignable to type '%s'", want[i].String(), sym.Type.String())
 				}
 			}
 			c.push()
@@ -169,7 +170,7 @@ func (c *Checker) checkSelectCase(sc *ast.SelectCase) {
 		}
 	case sc.Send != nil:
 		if len(sc.Send.Args) != 1 {
-			c.errorf("TL3804", sc.Send.Span(), "'ch:send' expects exactly 1 argument, got %d", len(sc.Send.Args))
+			c.errorf(diag.SelectGuardInvalid, sc.Send.Span(), "'ch:send' expects exactly 1 argument, got %d", len(sc.Send.Args))
 			c.push()
 			c.checkBlock(sc.Block)
 			c.pop()
@@ -180,7 +181,7 @@ func (c *Checker) checkSelectCase(sc *ast.SelectCase) {
 		c.recordMemberUse(sc.Send.Method.Span(), objT, "send")
 		argT := c.checkExpr(sc.Send.Args[0])
 		if elem != nil && !types.IsAssignable(argT, elem, c.opt.toTypes()) {
-			c.errorf("TL3010", sc.Send.Args[0].Span(), "type '%s' is not assignable to channel element type '%s'", argT.String(), elem.String())
+			c.errorf(diag.TypeNotAssignable, sc.Send.Args[0].Span(), "type '%s' is not assignable to channel element type '%s'", argT.String(), elem.String())
 		}
 		c.push()
 		c.checkBlock(sc.Block)
@@ -188,7 +189,7 @@ func (c *Checker) checkSelectCase(sc *ast.SelectCase) {
 	case sc.Timeout != nil:
 		t := c.checkExpr(sc.Timeout)
 		if !isAnyLike(t) && !isNumberLike(t) {
-			c.errorf("TL3804", sc.Timeout.Span(), "select timeout expects seconds as a number, got '%s'", t.String())
+			c.errorf(diag.SelectGuardInvalid, sc.Timeout.Span(), "select timeout expects seconds as a number, got '%s'", t.String())
 		}
 		c.push()
 		c.checkBlock(sc.Block)
@@ -212,7 +213,7 @@ func (c *Checker) chanElem(t types.Type, sp token.Span) types.Type {
 		}
 		return types.Any
 	}
-	c.errorf("TL3804", sp, "select expects a 'chan<T>' (got '%s'); send/receive need channels", t.String())
+	c.errorf(diag.SelectGuardInvalid, sp, "select expects a 'chan<T>' (got '%s'); send/receive need channels", t.String())
 	return types.Any
 }
 

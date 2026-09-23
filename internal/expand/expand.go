@@ -43,7 +43,7 @@ type expander struct {
 	stack   []string // active macro names for recursion detection
 }
 
-func (e *expander) errorf(code string, sp token.Span, format string, args ...any) {
+func (e *expander) errorf(code diag.Code, sp token.Span, format string, args ...any) {
 	e.diags = append(e.diags, diag.Errorf(code, sp, format, args...))
 }
 
@@ -75,7 +75,7 @@ func (e *expander) expandBlock(b *ast.Block, env *scope) {
 	for _, st := range b.Stmts {
 		if md, ok := st.(*ast.MacroDef); ok {
 			if _, dup := env.defs[md.Name.Name]; dup {
-				e.errorf("TL3701", md.Span(), "duplicate macro '%s'", md.Name.Name)
+				e.errorf(diag.DuplicateMacro, md.Span(), "duplicate macro '%s'", md.Name.Name)
 				continue
 			}
 			if env.defs == nil {
@@ -237,7 +237,7 @@ func (e *expander) expandExpr(x ast.Expr, env *scope) ast.Expr {
 		if id, ok := n.Func.(*ast.Ident); ok {
 			if md := env.lookup(id.Name); md != nil {
 				if !md.isExpr {
-					e.errorf("TL3704", n.Span(), "statement macro '%s' cannot be used as an expression", id.Name)
+					e.errorf(diag.StmtMacroInExprPosition, n.Span(), "statement macro '%s' cannot be used as an expression", id.Name)
 					for i, a := range n.Args {
 						n.Args[i] = e.expandExpr(a, env)
 					}

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/typelua/typelua/internal/diag"
 )
 
 // harness drives a Server over in-memory pipes (race-safe: writes block
@@ -162,9 +164,9 @@ func TestInitializeAndDiagnostics(t *testing.T) {
 	}
 	var dp struct {
 		Diagnostics []struct {
-			Code     string `json:"code"`
-			Severity int    `json:"severity"`
-			Message  string `json:"message"`
+			Code     diag.Code `json:"code"`
+			Severity int       `json:"severity"`
+			Message  string    `json:"message"`
 		} `json:"diagnostics"`
 	}
 	if err := json.Unmarshal(pub.Params, &dp); err != nil {
@@ -172,7 +174,7 @@ func TestInitializeAndDiagnostics(t *testing.T) {
 	}
 	found := false
 	for _, d := range dp.Diagnostics {
-		if d.Code == "TL3010" && d.Severity == 1 {
+		if d.Code == diag.TypeNotAssignable && d.Severity == 1 {
 			found = true
 		}
 	}

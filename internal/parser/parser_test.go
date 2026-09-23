@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 )
 
 func mustParse(t *testing.T, src string) *ast.File {
@@ -252,7 +253,7 @@ func TestDeepNestingGuard(t *testing.T) {
 		_, diags := ParseFile("t.tl", src)
 		found := false
 		for _, d := range diags {
-			if d.Code == "TL2015" {
+			if d.Code == diag.ParseNestingTooDeep {
 				found = true
 			}
 		}

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -82,13 +83,13 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 					c.checkExpr(a)
 				}
 				if len(n.Args) > 1 {
-					c.errorf("TL3803", n.Span(), "'makeChan' expects at most 1 argument (capacity), got %d", len(n.Args))
+					c.errorf(diag.MakeChanInvalid, n.Span(), "'makeChan' expects at most 1 argument (capacity), got %d", len(n.Args))
 				} else if len(n.Args) == 1 {
 					if at := c.checkExprSingle(n.Args[0]); !isAnyLike(at) && !isIntegerLike(at) && !isNumberLike(at) {
-						c.errorf("TL3803", n.Args[0].Span(), "'makeChan' capacity must be a number, got '%s'", at.String())
+						c.errorf(diag.MakeChanInvalid, n.Args[0].Span(), "'makeChan' capacity must be a number, got '%s'", at.String())
 					}
 				}
-				c.errorf("TL3803", n.Span(), "'makeChan' requires an explicit type argument ('makeChan<T>(cap?)')")
+				c.errorf(diag.MakeChanInvalid, n.Span(), "'makeChan' requires an explicit type argument ('makeChan<T>(cap?)')")
 				return []types.Type{&types.Chan{Elem: types.Any}}
 			}
 		}
@@ -121,7 +122,7 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 	case *ast.VarArg:
 		vt := c.currentVarArg()
 		if vt == nil {
-			c.errorf("TL3200", n.Span(), "'...' used outside vararg function")
+			c.errorf(diag.InvalidExpression, n.Span(), "'...' used outside vararg function")
 			return []types.Type{types.Any}
 		}
 		// `...` expands to multiple values of vt. Represent as single for non-last? For multi, return [vt] (one-or-more modeled as one).
@@ -153,14 +154,14 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 			return s.Type
 		}
 		if n.Name == "self" {
-			c.errorf("TL3201", n.Span(), "'self' is only available inside methods")
+			c.errorf(diag.UndefinedVariableExpr, n.Span(), "'self' is only available inside methods")
 			return types.Any
 		}
 		if n.Name == "super" {
-			c.errorf("TL3301", n.Span(), "'super' can only be used inside methods of a derived class")
+			c.errorf(diag.SuperOutsideDerivedMethod, n.Span(), "'super' can only be used inside methods of a derived class")
 			return types.Any
 		}
-		c.errorf("TL3201", n.Span(), "undefined variable '%s'", n.Name)
+		c.errorf(diag.UndefinedVariableExpr, n.Span(), "undefined variable '%s'", n.Name)
 		return types.Any
 	case *ast.NumberLit:
 		base := types.Type(types.Integer)
@@ -178,7 +179,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 	case *ast.VarArg:
 		vt := c.currentVarArg()
 		if vt == nil {
-			c.errorf("TL3200", n.Span(), "'...' used outside vararg function")
+			c.errorf(diag.InvalidExpression, n.Span(), "'...' used outside vararg function")
 			return types.Any
 		}
 		return vt
@@ -201,7 +202,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 		if isAnyLike(ot) {
 			return types.Any
 		}
-		c.errorf("TL3202", n.Span(), "cannot index type '%s'", ot.String())
+		c.errorf(diag.CannotIndex, n.Span(), "cannot index type '%s'", ot.String())
 		return types.Any
 	case *ast.FieldExpr:
 		ot := c.checkExpr(n.Obj)
@@ -226,7 +227,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 			_ = en
 		}
 		// If obj is an enum value object (runtime table), fields were defined.
-		c.errorf("TL3203", n.Span(), "type '%s' has no field '%s'", ot.String(), n.Field.Name)
+		c.errorf(diag.NoField, n.Span(), "type '%s' has no field '%s'", ot.String(), n.Field.Name)
 		return types.Any
 	case *ast.CallExpr:
 		return c.checkExprSingle(n) // unreachable (handled in multi) but keep.
@@ -240,7 +241,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 		srcT := c.checkExpr(n.E)
 		dstT := c.resolveType(n.T)
 		if !types.IsAssignable(srcT, dstT, c.opt.toTypes()) && !types.IsAssignable(dstT, srcT, c.opt.toTypes()) {
-			c.errorf("TL3204", n.Span(), "conversion from '%s' to '%s' may be a mistake", srcT.String(), dstT.String())
+			c.errorf(diag.SuspiciousConversion, n.Span(), "conversion from '%s' to '%s' may be a mistake", srcT.String(), dstT.String())
 		}
 		return dstT
 	case *ast.NonNullExpr:
@@ -252,7 +253,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 		if hadNil {
 			// stripped could be Never if it was just nil: `nil!` => never (likely bug).
 			if stripped.Kind() == types.KNever {
-				c.errorf("TL3205", n.Span(), "non-null assertion on 'nil'")
+				c.errorf(diag.NonNullOnNil, n.Span(), "non-null assertion on 'nil'")
 				return types.Never
 			}
 			return stripped
@@ -261,7 +262,7 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 	case *ast.AwaitExpr:
 		return c.checkAwait(n)
 	}
-	c.errorf("TL3200", e.Span(), "unsupported expression %T", e)
+	c.errorf(diag.InvalidExpression, e.Span(), "unsupported expression %T", e)
 	return types.Any
 }
 
@@ -449,7 +450,7 @@ func (c *Checker) checkBinOp(n *ast.BinOpExpr) types.Type {
 	case token.Plus, token.Minus, token.Star, token.Slash, token.DoubleSlash, token.Percent, token.Caret:
 		if !anyLike {
 			if !isNumberLike(l) || !isNumberLike(r) {
-				c.errorf("TL3210", n.Span(), "arithmetic on non-numbers ('%s', '%s')", l.String(), r.String())
+				c.errorf(diag.ArithmeticOnNonNumber, n.Span(), "arithmetic on non-numbers ('%s', '%s')", l.String(), r.String())
 			}
 		}
 		// Integer preservation: if both integer and op is not / ^, result integer.
@@ -459,19 +460,19 @@ func (c *Checker) checkBinOp(n *ast.BinOpExpr) types.Type {
 		return types.Number
 	case token.Amp, token.Pipe, token.Tilde, token.ShiftL, token.ShiftR:
 		if !anyLike && (!isIntegerLike(l) || !isIntegerLike(r)) {
-			c.errorf("TL3211", n.Span(), "bitwise operation requires integers ('%s', '%s')", l.String(), r.String())
+			c.errorf(diag.BitwiseRequiresInteger, n.Span(), "bitwise operation requires integers ('%s', '%s')", l.String(), r.String())
 		}
 		return types.Integer
 	case token.DotDot:
 		if !anyLike && (!isConcatable(l) || !isConcatable(r)) {
-			c.errorf("TL3212", n.Span(), "concatenation requires strings/numbers ('%s', '%s')", l.String(), r.String())
+			c.errorf(diag.ConcatRequiresString, n.Span(), "concatenation requires strings/numbers ('%s', '%s')", l.String(), r.String())
 		}
 		return types.String
 	case token.Eq, token.Ne:
 		return types.Boolean
 	case token.Lt, token.Le, token.Gt, token.Ge:
 		if !anyLike && !isComparable(l, r) {
-			c.errorf("TL3213", n.Span(), "comparison of incompatible types ('%s', '%s')", l.String(), r.String())
+			c.errorf(diag.IncomparableTypes, n.Span(), "comparison of incompatible types ('%s', '%s')", l.String(), r.String())
 		}
 		return types.Boolean
 	case token.And, token.Or:
@@ -482,7 +483,7 @@ func (c *Checker) checkBinOp(n *ast.BinOpExpr) types.Type {
 		}
 		return types.NewUnion([]types.Type{l, r})
 	}
-	c.errorf("TL3214", n.Span(), "unsupported operator '%s'", n.Op)
+	c.errorf(diag.UnsupportedOperator, n.Span(), "unsupported operator '%s'", n.Op)
 	return types.Any
 }
 
@@ -493,12 +494,12 @@ func (c *Checker) checkUnOp(n *ast.UnOpExpr) types.Type {
 		return types.Boolean
 	case token.Hash:
 		if !isAnyLike(x) && !isLengthable(x) {
-			c.errorf("TL3220", n.Span(), "length operator on '%s'", x.String())
+			c.errorf(diag.LengthOnNonLengthable, n.Span(), "length operator on '%s'", x.String())
 		}
 		return types.Integer
 	case token.Minus:
 		if !isAnyLike(x) && !isNumberLike(x) {
-			c.errorf("TL3221", n.Span(), "unary minus on '%s'", x.String())
+			c.errorf(diag.UnaryMinusOnNonNumber, n.Span(), "unary minus on '%s'", x.String())
 		}
 		if isIntegerLike(x) {
 			return types.Integer
@@ -506,7 +507,7 @@ func (c *Checker) checkUnOp(n *ast.UnOpExpr) types.Type {
 		return types.Number
 	case token.Tilde:
 		if !isAnyLike(x) && !isIntegerLike(x) {
-			c.errorf("TL3222", n.Span(), "bitwise not on '%s'", x.String())
+			c.errorf(diag.BitwiseNotOnNonInteger, n.Span(), "bitwise not on '%s'", x.String())
 		}
 		return types.Integer
 	}

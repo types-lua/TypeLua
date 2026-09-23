@@ -2,6 +2,7 @@ package checker
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -30,7 +31,7 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 				sc.types[n.Name.Name] = e
 				c.recordTypeDef(n.Name.Span(), e)
 			} else {
-				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
+				c.errorf(diag.DuplicateType, n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		case *ast.InterfaceDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
@@ -38,7 +39,7 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 				sc.types[n.Name.Name] = e
 				c.recordTypeDef(n.Name.Span(), e)
 			} else {
-				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
+				c.errorf(diag.DuplicateType, n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		case *ast.EnumDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
@@ -46,7 +47,7 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 				sc.types[n.Name.Name] = e
 				c.recordTypeDef(n.Name.Span(), e)
 			} else {
-				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
+				c.errorf(diag.DuplicateType, n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		case *ast.ClassDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
@@ -54,7 +55,7 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 				sc.types[n.Name.Name] = e
 				c.recordTypeDef(n.Name.Span(), e)
 			} else {
-				c.errorf("TL3001", n.Span(), "duplicate type '%s'", n.Name.Name)
+				c.errorf(diag.DuplicateType, n.Span(), "duplicate type '%s'", n.Name.Name)
 			}
 		}
 	}

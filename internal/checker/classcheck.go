@@ -2,6 +2,7 @@ package checker
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -19,7 +20,7 @@ func (c *Checker) checkClass(n *ast.ClassDecl) {
 		return
 	}
 	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
-		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
+		c.errorf(diag.RedefinitionOfLocal, n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
 	}
 	c.recordDefEntry(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: def.val, Span: n.Span()}), e)
 	for _, m := range n.Members {
@@ -72,7 +73,7 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 			got := c.checkExpr(m.Init)
 			if sig.fieldType != nil {
 				if !types.IsAssignable(got, sig.fieldType, c.opt.toTypes()) {
-					c.errorf("TL3010", m.Init.Span(), "type '%s' is not assignable to type '%s'", got.String(), sig.fieldType.String())
+					c.errorf(diag.TypeNotAssignable, m.Init.Span(), "type '%s' is not assignable to type '%s'", got.String(), sig.fieldType.String())
 				}
 			} else {
 				ft := widenInferred(got)
@@ -97,7 +98,7 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 		}
 		if want != nil {
 			if !types.IsAssignable(got, want, c.opt.toTypes()) {
-				c.errorf("TL3010", m.Init.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
+				c.errorf(diag.TypeNotAssignable, m.Init.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
 			}
 		} else {
 			ft := widenInferred(got)
@@ -141,26 +142,26 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 	}
 	if ctor == nil {
 		for _, name := range required {
-			c.errorf("TL3340", n.Name.Span(), "field '%s' needs an initializer or an explicit constructor", name)
+			c.errorf(diag.FieldNotInitialized, n.Name.Span(), "field '%s' needs an initializer or an explicit constructor", name)
 		}
 	} else {
 		assigned := map[string]bool{}
 		collectSelfAssigns(ctor.Body, assigned)
 		for _, name := range required {
 			if !assigned[name] {
-				c.errorf("TL3340", ctor.Span(), "constructor does not assign required field '%s'", name)
+				c.errorf(diag.FieldNotInitialized, ctor.Span(), "constructor does not assign required field '%s'", name)
 			}
 		}
 		if baseInst != nil && baseNeedsConstruction(e, baseInst, baseVal) {
 			if !blockHasSuperCall(ctor.Body) {
-				c.errorf("TL3342", ctor.Span(), "constructor of derived class '%s' must call 'super(...)'", n.Name.Name)
+				c.errorf(diag.DerivedCtorMustCallSuper, ctor.Span(), "constructor of derived class '%s' must call 'super(...)'", n.Name.Name)
 			} else if idx := topLevelSuperIndex(ctor.Body); idx >= 0 {
 				for i, st := range ctor.Body.Stmts {
 					if i >= idx {
 						break
 					}
 					if stmtUsesSelf(st) {
-						c.errorf("TL3343", st.Span(), "cannot use 'self' before 'super(...)'")
+						c.errorf(diag.SelfBeforeSuper, st.Span(), "cannot use 'self' before 'super(...)'")
 						break
 					}
 				}
@@ -203,7 +204,7 @@ func (c *Checker) checkClassMethodBody(n *ast.ClassDecl, m *ast.ClassMember, ft 
 
 	for _, p := range m.Params {
 		if p.Name.Name == "self" || p.Name.Name == "super" {
-			c.errorf("TL3341", p.Name.Span(), "parameter cannot be named '%s' in a method", p.Name.Name)
+			c.errorf(diag.ReservedParamName, p.Name.Span(), "parameter cannot be named '%s' in a method", p.Name.Name)
 		}
 		var t types.Type = types.Any
 		for _, fp := range ft.Params {
@@ -255,7 +256,7 @@ func (c *Checker) checkClassMethodBody(n *ast.ClassDecl, m *ast.ClassMember, ft 
 	labels := c.labelStack[len(c.labelStack)-1]
 	for _, g := range gotos {
 		if _, ok := labels[g.name]; !ok {
-			c.errorf("TL3050", g.span, "undefined label '%s'", g.name)
+			c.errorf(diag.UndefinedLabel, g.span, "undefined label '%s'", g.name)
 		}
 	}
 }
@@ -267,7 +268,7 @@ func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, s
 		name = "'" + cv.Class.Name + "'"
 	}
 	if cv.Abstract {
-		c.errorf("TL3330", span, "cannot instantiate abstract class %s", name)
+		c.errorf(diag.InstantiateAbstract, span, "cannot instantiate abstract class %s", name)
 		// Don't cascade arity noise on top of the root cause.
 		for _, a := range args {
 			c.checkExpr(a)
@@ -289,7 +290,7 @@ func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, s
 			}
 		}
 		if !allowed {
-			c.errorf("TL3331", span, "constructor of %s is %s", name, cv.CtorAccess)
+			c.errorf(diag.CtorAccessViolation, span, "constructor of %s is %s", name, cv.CtorAccess)
 		}
 	}
 	if cv.Constructor == nil {
@@ -308,25 +309,25 @@ func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, s
 // checkSuperCall checks `super(...)` (base constructor on self).
 func (c *Checker) checkSuperCall(n *ast.CallExpr) []types.Type {
 	if len(n.TypeArgs) > 0 {
-		c.errorf("TL3234", n.Span(), "explicit type arguments are not allowed on 'super(...)'")
+		c.errorf(diag.GenericArgsInvalid, n.Span(), "explicit type arguments are not allowed on 'super(...)'")
 	}
 	ctx := c.currentClass()
 	if ctx == nil || ctx.base == nil || len(c.retStack) != ctx.retDepth {
-		c.errorf("TL3301", n.Span(), "'super' can only be used inside methods of a derived class")
+		c.errorf(diag.SuperOutsideDerivedMethod, n.Span(), "'super' can only be used inside methods of a derived class")
 		for _, a := range n.Args {
 			c.checkExpr(a)
 		}
 		return []types.Type{types.Any}
 	}
 	if ctx.inStatic {
-		c.errorf("TL3302", n.Span(), "'super' cannot be used in a static method (use the base class name)")
+		c.errorf(diag.SuperMisuse, n.Span(), "'super' cannot be used in a static method (use the base class name)")
 		for _, a := range n.Args {
 			c.checkExpr(a)
 		}
 		return []types.Type{types.Any}
 	}
 	if !ctx.inConstructor {
-		c.errorf("TL3302", n.Span(), "'super(...)' can only be called in a constructor (use 'super:method()' in methods)")
+		c.errorf(diag.SuperMisuse, n.Span(), "'super(...)' can only be called in a constructor (use 'super:method()' in methods)")
 		for _, a := range n.Args {
 			c.checkExpr(a)
 		}
@@ -347,14 +348,14 @@ func (c *Checker) checkSuperCall(n *ast.CallExpr) []types.Type {
 func (c *Checker) checkSuperMethod(n *ast.MethodCallExpr) []types.Type {
 	ctx := c.currentClass()
 	if ctx == nil || ctx.base == nil || len(c.retStack) != ctx.retDepth {
-		c.errorf("TL3301", n.Span(), "'super' can only be used inside methods of a derived class")
+		c.errorf(diag.SuperOutsideDerivedMethod, n.Span(), "'super' can only be used inside methods of a derived class")
 		for _, a := range n.Args {
 			c.checkExpr(a)
 		}
 		return []types.Type{types.Any}
 	}
 	if ctx.inStatic {
-		c.errorf("TL3302", n.Span(), "'super' cannot be used in a static method (use the base class name)")
+		c.errorf(diag.SuperMisuse, n.Span(), "'super' cannot be used in a static method (use the base class name)")
 		for _, a := range n.Args {
 			c.checkExpr(a)
 		}
@@ -364,7 +365,7 @@ func (c *Checker) checkSuperMethod(n *ast.MethodCallExpr) []types.Type {
 	for b := ctx.base; b != nil; b = b.Base {
 		if f, ok := b.Fields[n.Method.Name]; ok && f.IsMethod {
 			if f.Access == types.Private {
-				c.errorf("TL3310", n.Span(), "method '%s' is private to class '%s'", n.Method.Name, b.Name)
+				c.errorf(diag.AccessViolation, n.Span(), "method '%s' is private to class '%s'", n.Method.Name, b.Name)
 				return []types.Type{types.Any}
 			}
 			if mt, ok := f.Type.(*types.Func); ok {
@@ -379,14 +380,14 @@ func (c *Checker) checkSuperMethod(n *ast.MethodCallExpr) []types.Type {
 	// Static with the same name? Point the user at it.
 	if ctx.baseVal != nil {
 		if _, ok := ctx.baseVal.Statics[n.Method.Name]; ok {
-			c.errorf("TL3303", n.Span(), "'%s' is static; call it on the base class by name", n.Method.Name)
+			c.errorf(diag.StaticViaInstance, n.Span(), "'%s' is static; call it on the base class by name", n.Method.Name)
 			for _, a := range n.Args {
 				c.checkExpr(a)
 			}
 			return []types.Type{types.Any}
 		}
 	}
-	c.errorf("TL3230", n.Span(), "type '%s' has no method '%s'", ctx.base.String(), n.Method.Name)
+	c.errorf(diag.NoMethod, n.Span(), "type '%s' has no method '%s'", ctx.base.String(), n.Method.Name)
 	for _, a := range n.Args {
 		c.checkExpr(a)
 	}

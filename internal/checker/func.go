@@ -2,6 +2,7 @@ package checker
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -19,7 +20,7 @@ func (c *Checker) funcTypeFromLit(fn *ast.FuncLit, generics []*ast.GenericParam)
 		if p.Type != nil {
 			t = c.resolveType(p.Type)
 		} else if c.opt.NoImplicitAny {
-			c.errorf("TL3040", p.Span(), "parameter '%s' implicitly has 'any' type", p.Name.Name)
+			c.errorf(diag.ImplicitAnyParam, p.Span(), "parameter '%s' implicitly has 'any' type", p.Name.Name)
 		}
 		params = append(params, types.FuncParam{Name: p.Name.Name, Type: t})
 	}
@@ -130,7 +131,7 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 	labels := c.labelStack[len(c.labelStack)-1]
 	for _, g := range gotos {
 		if _, ok := labels[g.name]; !ok {
-			c.errorf("TL3050", g.span, "undefined label '%s'", g.name)
+			c.errorf(diag.UndefinedLabel, g.span, "undefined label '%s'", g.name)
 		}
 	}
 	c.gotoList = c.gotoList[:len(c.gotoList)-1]

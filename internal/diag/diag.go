@@ -22,9 +22,10 @@ func (s Severity) String() string {
 	return "error"
 }
 
-// Diagnostic is a single compiler message with a stable code.
+// Diagnostic is a single compiler message with a stable code (see
+// codes.go for the registry of everything the compiler can emit).
 type Diagnostic struct {
-	Code     string
+	Code     Code
 	Message  string
 	Span     token.Span
 	Severity Severity
@@ -41,13 +42,14 @@ func (d Diagnostic) String() string {
 	return fmt.Sprintf("%s%s[%s]: %s", loc, d.Severity, d.Code, types.Abbrev(d.Message))
 }
 
-// Helpers to construct diagnostics. Codes:
-// TL1xxx lexer, TL2xxx parser, TL3xxx checker, TL4xxx config/emit.
+// Helpers to construct diagnostics. Codes come from the registry in
+// codes.go (TL1xxx lexer, TL2xxx parser, TL37xx macros, TL38xx
+// concurrency, TL3xxx checker, TL4xxx project/emit).
 
-func New(code string, span token.Span, sev Severity, format string, args ...any) Diagnostic {
+func New(code Code, span token.Span, sev Severity, format string, args ...any) Diagnostic {
 	return Diagnostic{Code: code, Span: span, Severity: sev, Message: fmt.Sprintf(format, args...)}
 }
 
-func Errorf(code string, span token.Span, format string, args ...any) Diagnostic {
+func Errorf(code Code, span token.Span, format string, args ...any) Diagnostic {
 	return New(code, span, Error, format, args...)
 }

@@ -2,6 +2,7 @@ package parser
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 )
 
@@ -196,13 +197,13 @@ func (p *Parser) parseImport() ast.Stmt {
 		ty = p.parseType()
 	}
 	if !p.at(token.Ident) || p.cur().Literal != "from" {
-		p.errorf("TL2016", p.cur().Span, "expected 'from' after import name, got %s", p.cur().Kind)
+		p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected 'from' after import name, got %s", p.cur().Kind)
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
 	p.next() // from
 	if !p.at(token.String) {
-		p.errorf("TL2016", p.cur().Span, "expected module path string after 'from', got %s", p.cur().Kind)
+		p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected module path string after 'from', got %s", p.cur().Kind)
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
@@ -235,7 +236,7 @@ func (p *Parser) parseDefer() ast.Stmt {
 	case *ast.CallExpr, *ast.MethodCallExpr:
 		return &ast.DeferStmt{IsErr: isErr, Call: call, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	default:
-		p.errorf("TL2016", p.cur().Span, "expected a function call after '%s'", start.Literal)
+		p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected a function call after '%s'", start.Literal)
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
@@ -496,7 +497,7 @@ func (p *Parser) parseLocal() ast.Stmt {
 		values = p.parseExprList()
 	}
 	if len(names) == 0 {
-		p.errorf("TL2003", p.cur().Span, "expected local variable name")
+		p.errorf(diag.ParseExpectedLocalName, p.cur().Span, "expected local variable name")
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
@@ -521,7 +522,7 @@ func (p *Parser) parseAttr() string {
 	name := p.next()
 	p.next() // >
 	if name.Literal != "const" && name.Literal != "close" {
-		p.errorf("TL2004", name.Span, "unknown attribute <%s>, expected <const> or <close>", name.Literal)
+		p.errorf(diag.ParseUnknownAttribute, name.Span, "unknown attribute <%s>, expected <const> or <close>", name.Literal)
 	}
 	return name.Literal
 }

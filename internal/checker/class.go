@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -40,7 +41,7 @@ func isIdentityClassArgs(e *typeEntry, sargs []types.Type) bool {
 func (c *Checker) classSubFromTypes(e *typeEntry, tys []types.Type, span token.Span) map[string]types.Type {
 	sub := map[string]types.Type{}
 	if len(tys) > len(e.params) {
-		c.errorf("TL3107", span, "type '%s' expects %d argument(s), got %d", e.name, len(e.params), len(tys))
+		c.errorf(diag.TypeArgCount, span, "type '%s' expects %d argument(s), got %d", e.name, len(e.params), len(tys))
 	}
 	for i, p := range e.params {
 		var a types.Type
@@ -54,7 +55,7 @@ func (c *Checker) classSubFromTypes(e *typeEntry, tys []types.Type, span token.S
 		if p.Constraint != nil {
 			con := c.resolveType(p.Constraint)
 			if !types.IsAssignable(a, con, c.opt.toTypes()) {
-				c.errorf("TL3108", span, "type argument '%s' does not satisfy constraint '%s'", a.String(), con.String())
+				c.errorf(diag.TypeArgConstraint, span, "type argument '%s' does not satisfy constraint '%s'", a.String(), con.String())
 			}
 		}
 		sub[p.Name.Name] = a
@@ -85,20 +86,20 @@ func (c *Checker) checkAccess(acc types.Access, owner *types.ClassDef, sp token.
 	}
 	cur := c.currentClass()
 	if cur == nil {
-		c.errorf("TL3310", sp, "%s is %s and cannot be accessed outside the class body", what, acc)
+		c.errorf(diag.AccessViolation, sp, "%s is %s and cannot be accessed outside the class body", what, acc)
 		return false
 	}
 	if acc == types.Private {
 		if cur.def == owner {
 			return true
 		}
-		c.errorf("TL3310", sp, "%s is private to class '%s'", what, owner.Name)
+		c.errorf(diag.AccessViolation, sp, "%s is private to class '%s'", what, owner.Name)
 		return false
 	}
 	if cur.def == owner || isSubclassOf(cur.inst, owner) {
 		return true
 	}
-	c.errorf("TL3310", sp, "%s is protected and cannot be accessed here", what)
+	c.errorf(diag.AccessViolation, sp, "%s is protected and cannot be accessed here", what)
 	return false
 }
 
@@ -146,20 +147,20 @@ func (c *Checker) ensureClassDef(e *typeEntry) *classBuild {
 func (c *Checker) resolveBaseRef(node ast.TypeNode, selfName string) (*types.Class, *types.ClassValue) {
 	nt, ok := node.(*ast.NamedType)
 	if !ok || strings.Contains(nt.Name, ".") {
-		c.errorf("TL3131", node.Span(), "extends must name a class (e.g. `extends Animal`)")
+		c.errorf(diag.ExtendsNotClass, node.Span(), "extends must name a class (e.g. `extends Animal`)")
 		return nil, nil
 	}
 	e := c.cur().lookupType(nt.Name)
 	if e == nil || e.classDecl == nil {
 		bt := c.resolveType(node)
 		if _, ok := bt.(*types.Class); !ok && !isAnyLike(bt) {
-			c.errorf("TL3131", node.Span(), "class can only extend another class, got '%s'", bt.String())
+			c.errorf(diag.ExtendsNotClass, node.Span(), "class can only extend another class, got '%s'", bt.String())
 		}
 		return nil, nil
 	}
 	def := c.ensureClassDef(e)
 	if def == nil {
-		c.errorf("TL3132", node.Span(), "cyclic inheritance involving '%s'", nt.Name)
+		c.errorf(diag.CyclicInheritanceRef, node.Span(), "cyclic inheritance involving '%s'", nt.Name)
 		return nil, nil
 	}
 	sub := c.classSubFromNodes(e, nt.Args, node.Span())
@@ -222,44 +223,44 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 	var ctorMember *ast.ClassMember
 	for _, m := range n.Members {
 		if seen[m.Name.Name] {
-			c.errorf("TL3320", m.Span(), "duplicate class member '%s'", m.Name.Name)
+			c.errorf(diag.DuplicateClassMember, m.Span(), "duplicate class member '%s'", m.Name.Name)
 			continue
 		}
 		seen[m.Name.Name] = true
 		if m.Kind == ast.ClassConstructor {
 			if ctorMember != nil {
-				c.errorf("TL3321", m.Span(), "duplicate constructor")
+				c.errorf(diag.DuplicateConstructor, m.Span(), "duplicate constructor")
 				continue
 			}
 			ctorMember = m
 		}
 		if m.Name.Name == "new" || m.Name.Name == "__index" {
-			c.errorf("TL3322", m.Name.Span(), "'%s' is reserved by the class runtime", m.Name.Name)
+			c.errorf(diag.InvalidMemberName, m.Name.Span(), "'%s' is reserved by the class runtime", m.Name.Name)
 			continue
 		}
 		if m.Kind == ast.ClassField && m.Name.Name == "constructor" {
-			c.errorf("TL3322", m.Name.Span(), "'constructor' must be declared as a method")
+			c.errorf(diag.InvalidMemberName, m.Name.Span(), "'constructor' must be declared as a method")
 			continue
 		}
 		if m.Kind == ast.ClassConstructor && m.IsStatic {
-			c.errorf("TL3323", m.Span(), "constructor cannot be 'static'")
+			c.errorf(diag.ModifierNotAllowed, m.Span(), "constructor cannot be 'static'")
 		}
 		if m.Kind == ast.ClassConstructor && m.IsReadonly {
-			c.errorf("TL3323", m.Span(), "constructor cannot be 'readonly'")
+			c.errorf(diag.ModifierNotAllowed, m.Span(), "constructor cannot be 'readonly'")
 		}
 		if m.Kind == ast.ClassConstructor && m.IsAbstract {
-			c.errorf("TL3323", m.Span(), "constructor cannot be 'abstract'")
+			c.errorf(diag.ModifierNotAllowed, m.Span(), "constructor cannot be 'abstract'")
 		}
 		if m.Kind == ast.ClassMethod && m.IsReadonly {
-			c.errorf("TL3323", m.Span(), "methods cannot be 'readonly'")
+			c.errorf(diag.ModifierNotAllowed, m.Span(), "methods cannot be 'readonly'")
 		}
 		if m.IsAbstract && m.Kind == ast.ClassField {
 			// Parser already reports TL2037; don't cascade.
 		} else if m.IsAbstract && !n.Abstract && !n.Declared {
-			c.errorf("TL3324", m.Span(), "abstract member '%s' requires an 'abstract class'", m.Name.Name)
+			c.errorf(diag.AbstractMemberInvalid, m.Span(), "abstract member '%s' requires an 'abstract class'", m.Name.Name)
 		}
 		if m.IsAbstract && m.Visibility == ast.Private {
-			c.errorf("TL3324", m.Span(), "abstract member '%s' cannot be private", m.Name.Name)
+			c.errorf(diag.AbstractMemberInvalid, m.Span(), "abstract member '%s' cannot be private", m.Name.Name)
 		}
 		processed[m.Name.Name] = true
 	}
@@ -274,13 +275,13 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 		seenChain := map[*types.Class]bool{shell: true}
 		for b := baseInst; b != nil; b = b.Base {
 			if seenChain[b] {
-				c.errorf("TL3130", n.Extends.Span(), "cyclic inheritance involving class '%s'", n.Name.Name)
+				c.errorf(diag.CyclicInheritance, n.Extends.Span(), "cyclic inheritance involving class '%s'", n.Name.Name)
 				baseInst, baseVal = nil, nil
 				break
 			}
 			seenChain[b] = true
 			if b.Def == def {
-				c.errorf("TL3130", n.Extends.Span(), "class '%s' cannot extend itself", n.Name.Name)
+				c.errorf(diag.CyclicInheritance, n.Extends.Span(), "class '%s' cannot extend itself", n.Name.Name)
 				baseInst, baseVal = nil, nil
 				break
 			}
@@ -296,7 +297,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 		}
 	}
 	if baseVal != nil && baseVal.CtorAccess == types.Private {
-		c.errorf("TL3325", n.Extends.Span(), "cannot extend class '%s' with a private constructor", baseInst.Name)
+		c.errorf(diag.ExtendsPrivateCtor, n.Extends.Span(), "cannot extend class '%s' with a private constructor", baseInst.Name)
 	}
 
 	statics := map[string]types.ClassField{}
@@ -322,7 +323,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 			if p.Type != nil {
 				t = c.resolveType(p.Type)
 			} else if c.opt.NoImplicitAny {
-				c.errorf("TL3040", p.Span(), "parameter '%s' implicitly has 'any' type", p.Name.Name)
+				c.errorf(diag.ImplicitAnyParam, p.Span(), "parameter '%s' implicitly has 'any' type", p.Name.Name)
 			}
 			params = append(params, types.FuncParam{Name: p.Name.Name, Type: t})
 		}
@@ -440,7 +441,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 			}
 			sub, ok := ownInstance[name]
 			if !ok || sub.Abstract {
-				c.errorf("TL3351", n.Name.Span(), "class '%s' must implement abstract member '%s'", n.Name.Name, name)
+				c.errorf(diag.UnimplementedAbstract, n.Name.Span(), "class '%s' must implement abstract member '%s'", n.Name.Name, name)
 			}
 		}
 	}
@@ -451,12 +452,12 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 		io, ok := t.(*types.Object)
 		if !ok {
 			if !isAnyLike(t) {
-				c.errorf("TL3352", impl.Span(), "class can only implement an interface or object type, got '%s'", t.String())
+				c.errorf(diag.ImplementsNotSatisfied, impl.Span(), "class can only implement an interface or object type, got '%s'", t.String())
 			}
 			continue
 		}
 		if !types.IsAssignable(shell.ObjectView(), io, c.opt.toTypes()) {
-			c.errorf("TL3352", impl.Span(), "class '%s' does not implement '%s'", n.Name.Name, t.String())
+			c.errorf(diag.ImplementsNotSatisfied, impl.Span(), "class '%s' does not implement '%s'", n.Name.Name, t.String())
 		}
 	}
 
@@ -497,14 +498,14 @@ func checkMemberOverride(c *Checker, sp token.Span, name string, sub, base types
 		kind = "method"
 	}
 	if sub.IsMethod != base.IsMethod {
-		c.errorf("TL3350", sp, "cannot override %s '%s' with a %s", fieldKind(base), name, kind)
+		c.errorf(diag.OverrideMismatch, sp, "cannot override %s '%s' with a %s", fieldKind(base), name, kind)
 		return
 	}
 	if sub.Type != nil && base.Type != nil && !types.IsAssignable(sub.Type, base.Type, c.opt.toTypes()) {
-		c.errorf("TL3350", sp, "%s '%s' is incompatible with the base declaration", kind, name)
+		c.errorf(diag.OverrideMismatch, sp, "%s '%s' is incompatible with the base declaration", kind, name)
 	}
 	if accessRank(sub.Access) < accessRank(base.Access) {
-		c.errorf("TL3350", sp, "%s '%s' cannot reduce visibility to %s", kind, name, sub.Access)
+		c.errorf(diag.OverrideMismatch, sp, "%s '%s' cannot reduce visibility to %s", kind, name, sub.Access)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -21,7 +22,7 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 			return e.enumType
 		}
 		if e.resolving {
-			c.errorf("TL3106", useSpan, "cyclic enum '%s'", e.name)
+			c.errorf(diag.TypeRecursionLimit, useSpan, "cyclic enum '%s'", e.name)
 			return types.Any
 		}
 		e.resolving = true
@@ -39,7 +40,7 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 		}
 		if len(e.params) == 0 {
 			if len(args) > 0 {
-				c.errorf("TL3107", useSpan, "type '%s' takes no type arguments, got %d", e.name, len(args))
+				c.errorf(diag.TypeArgCount, useSpan, "type '%s' takes no type arguments, got %d", e.name, len(args))
 			}
 			return def.inst
 		}
@@ -60,13 +61,13 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 					c.depthReported = map[*typeEntry]bool{}
 				}
 				c.depthReported[e] = true
-				c.errorf("TL3106", useSpan, "type instantiation too deep (possible infinite expansion of '%s')", e.name)
+				c.errorf(diag.TypeRecursionLimit, useSpan, "type instantiation too deep (possible infinite expansion of '%s')", e.name)
 			}
 			return types.Any
 		}
 		defer func() { c.typeDepth-- }()
 		if len(args) > len(e.params) {
-			c.errorf("TL3107", useSpan, "type '%s' expects %d argument(s), got %d", e.name, len(e.params), len(args))
+			c.errorf(diag.TypeArgCount, useSpan, "type '%s' expects %d argument(s), got %d", e.name, len(e.params), len(args))
 		}
 		for i, p := range e.params {
 			var a types.Type
@@ -84,7 +85,7 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 			if p.Constraint != nil {
 				con := c.resolveType(p.Constraint)
 				if !types.IsAssignable(a, con, c.opt.toTypes()) {
-					c.errorf("TL3108", useSpan, "type argument '%s' does not satisfy constraint '%s'", a.String(), con.String())
+					c.errorf(diag.TypeArgConstraint, useSpan, "type argument '%s' does not satisfy constraint '%s'", a.String(), con.String())
 				}
 			}
 			sub[p.Name.Name] = a
@@ -158,12 +159,12 @@ func (c *Checker) fillShell(e *typeEntry, key string, res types.Type, useSpan to
 		return res
 	}
 	if res == types.Type(sh) {
-		c.errorf("TL3106", useSpan, "cyclic type alias '%s'", e.name)
+		c.errorf(diag.TypeRecursionLimit, useSpan, "cyclic type alias '%s'", e.name)
 		return res
 	}
 	robj, ok := res.(*types.Object)
 	if !ok {
-		c.errorf("TL3106", useSpan, "cyclic type alias '%s'", e.name)
+		c.errorf(diag.TypeRecursionLimit, useSpan, "cyclic type alias '%s'", e.name)
 		return res
 	}
 	for k, v := range robj.Fields {
@@ -194,7 +195,7 @@ func (c *Checker) buildInterface(n *ast.InterfaceDecl, sub map[string]types.Type
 		} else if isAnyLike(bt) {
 			continue
 		} else {
-			c.errorf("TL3109", b.Span(), "interface can only extend object types, got '%s'", bt.String())
+			c.errorf(diag.InterfaceExtendsNonObject, b.Span(), "interface can only extend object types, got '%s'", bt.String())
 		}
 	}
 	for _, f := range n.Fields {
@@ -202,7 +203,7 @@ func (c *Checker) buildInterface(n *ast.InterfaceDecl, sub map[string]types.Type
 		// Method shorthand fields store FuncType in Type already.
 		ft = c.resolveTypeWithSub(f.Type, sub)
 		if _, exists := obj.Fields[f.Name.Name]; exists {
-			c.errorf("TL3110", f.Span(), "duplicate field '%s'", f.Name.Name)
+			c.errorf(diag.DuplicateField, f.Span(), "duplicate field '%s'", f.Name.Name)
 		}
 		obj.Fields[f.Name.Name] = types.Field{Type: ft, Optional: f.Optional, Readonly: f.Readonly}
 	}
@@ -219,7 +220,7 @@ func (c *Checker) buildEnum(n *ast.EnumDecl) *types.Enum {
 		var mt types.Type
 		if m.Value == nil {
 			if !autoAllowed {
-				c.errorf("TL3120", m.Span(), "enum member '%s' must have an explicit value (mixed string enum)", m.Name.Name)
+				c.errorf(diag.EnumMemberNeedsValue, m.Span(), "enum member '%s' must have an explicit value (mixed string enum)", m.Name.Name)
 				mt = types.Any
 			} else {
 				mt = &types.Literal{Value: strconv.Itoa(autoNum), Base: types.Integer}
@@ -255,21 +256,21 @@ func (c *Checker) buildEnum(n *ast.EnumDecl) *types.Enum {
 					}
 					mt = &types.Literal{Value: "-" + num.Literal, Base: base}
 				} else {
-					c.errorf("TL3121", m.Span(), "enum member '%s' must be a literal", m.Name.Name)
+					c.errorf(diag.EnumMemberNotLiteral, m.Span(), "enum member '%s' must be a literal", m.Name.Name)
 					mt = types.Any
 				}
 			default:
-				c.errorf("TL3121", m.Span(), "enum member '%s' must be a literal", m.Name.Name)
+				c.errorf(diag.EnumMemberNotLiteral, m.Span(), "enum member '%s' must be a literal", m.Name.Name)
 				mt = types.Any
 			}
 		}
 		if prev, ok := seenVals[mt.String()]; ok {
-			c.errorf("TL3122", m.Span(), "duplicate enum value for '%s' (already used by '%s')", m.Name.Name, prev)
+			c.errorf(diag.DuplicateEnumValue, m.Span(), "duplicate enum value for '%s' (already used by '%s')", m.Name.Name, prev)
 		} else {
 			seenVals[mt.String()] = m.Name.Name
 		}
 		if _, ok := members[m.Name.Name]; ok {
-			c.errorf("TL3123", m.Span(), "duplicate enum member '%s'", m.Name.Name)
+			c.errorf(diag.DuplicateEnumMember, m.Span(), "duplicate enum member '%s'", m.Name.Name)
 		}
 		members[m.Name.Name] = mt
 		if lit, ok := mt.(*types.Literal); ok {

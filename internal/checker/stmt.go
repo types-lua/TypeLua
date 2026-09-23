@@ -2,6 +2,7 @@ package checker
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/types"
 )
 
@@ -62,7 +63,7 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 		if len(c.labelStack) > 0 {
 			top := c.labelStack[len(c.labelStack)-1]
 			if _, ok := top[n.Name.Name]; ok {
-				c.errorf("TL3002", n.Span(), "duplicate label '%s'", n.Name.Name)
+				c.errorf(diag.DuplicateLabel, n.Span(), "duplicate label '%s'", n.Name.Name)
 			} else {
 				top[n.Name.Name] = n.Span()
 			}
@@ -77,7 +78,7 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 		c.checkClass(n)
 	case *ast.MacroDef:
 		// Unreachable via CheckFile (expansion runs first); defensive.
-		c.errorf("TL3700", st.Span(), "internal error: unexpanded macro '%s'", n.Name.Name)
+		c.errorf(diag.UnexpandedMacro, st.Span(), "internal error: unexpanded macro '%s'", n.Name.Name)
 	case *ast.ImportStmt:
 		c.checkImport(n)
 	case *ast.DeferStmt:
@@ -87,7 +88,7 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 	case *ast.SelectStmt:
 		c.checkSelect(n)
 	default:
-		c.errorf("TL3000", st.Span(), "unsupported statement %T", st)
+		c.errorf(diag.CheckerUnsupportedStmt, st.Span(), "unsupported statement %T", st)
 	}
 }
 
@@ -118,7 +119,7 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 		var final types.Type
 		if want != nil && got != nil {
 			if !types.IsAssignable(got, want, c.opt.toTypes()) {
-				c.errorf("TL3010", name.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
+				c.errorf(diag.TypeNotAssignable, name.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
 			}
 			final = want
 		} else if want != nil {
@@ -147,7 +148,7 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 		if existing := c.cur().vars[name.Name]; existing != nil && !existing.IsBuiltin {
 			// Shadowing in same scope: error (Lua allows, but likely bug).
 			// Builtins (print/next/...) may be localized, so exempt them.
-			c.errorf("TL3011", name.Span(), "redefinition of local '%s'", name.Name)
+			c.errorf(diag.RedefinitionOfLocal, name.Span(), "redefinition of local '%s'", name.Name)
 		}
 		if i < len(n.Values) {
 			if tl, ok := n.Values[i].(*ast.TableLit); ok {
@@ -170,7 +171,7 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 	// Check const/close misuse: <close> must have a value? Lua requires? Just warn if no value.
 	for i, a := range n.Attrs {
 		if a == "close" && len(n.Values) == 0 && i < len(n.Names) {
-			c.errorf("TL3012", n.Names[i].Span(), "to-be-closed variable '%s' must be initialized", n.Names[i].Name)
+			c.errorf(diag.CloseVarUninitialized, n.Names[i].Span(), "to-be-closed variable '%s' must be initialized", n.Names[i].Name)
 		}
 	}
 }
@@ -248,14 +249,14 @@ func (c *Checker) checkImport(n *ast.ImportStmt) {
 		want = c.resolveType(n.Type)
 		if got := c.requirePathType(n.Path); !isAnyLike(got) {
 			if !types.IsAssignable(got, want, c.opt.toTypes()) {
-				c.errorf("TL3010", n.Name.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
+				c.errorf(diag.TypeNotAssignable, n.Name.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
 			}
 		}
 	} else {
 		want = c.requirePathType(n.Path)
 	}
 	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
-		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
+		c.errorf(diag.RedefinitionOfLocal, n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
 	}
 	c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: want, Span: n.Name.Span()}))
 }
@@ -266,7 +267,7 @@ func (c *Checker) checkImport(n *ast.ImportStmt) {
 func (c *Checker) checkDefer(n *ast.DeferStmt) {
 	c.checkExpr(n.Call)
 	if hasBareVarArg(n.Call) {
-		c.errorf("TL3235", n.Call.Span(), "cannot use '...' in a deferred call (copy it into a local first)")
+		c.errorf(diag.BareVarargInTaskCall, n.Call.Span(), "cannot use '...' in a deferred call (copy it into a local first)")
 	}
 }
 
@@ -327,7 +328,7 @@ func hasBareVarArg(x ast.Expr) bool {
 func (c *Checker) checkLocalFunc(n *ast.LocalFuncDef) {
 	ft := c.funcTypeFromLit(n.Func, n.Generics)
 	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
-		c.errorf("TL3011", n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
+		c.errorf(diag.RedefinitionOfLocal, n.Name.Span(), "redefinition of local '%s'", n.Name.Name)
 	}
 	sym := c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symFunc, Type: ft, Span: n.Span(), GenericNames: genericNames(n.Generics), FuncDecl: n.Func})
 	c.recordDef(n.Name.Span(), sym)
@@ -363,7 +364,7 @@ func (c *Checker) checkGlobalFunc(n *ast.FuncDefStmt) {
 		base := n.Name.Prefix[0].Name
 		sym := c.cur().lookupVar(base)
 		if sym == nil {
-			c.errorf("TL3013", n.Name.Span(), "undefined table '%s' in function definition", base)
+			c.errorf(diag.UndefinedTableInFuncDef, n.Name.Span(), "undefined table '%s' in function definition", base)
 		} else {
 			// If base is an object, record method field for later lookups.
 			if obj, ok := sym.Type.(*types.Object); ok {
@@ -396,11 +397,11 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 		case *ast.Ident:
 			sym = c.cur().lookupVar(t.Name)
 			if sym == nil {
-				c.errorf("TL3014", t.Span(), "undefined variable '%s'", t.Name)
+				c.errorf(diag.UndefinedVariable, t.Span(), "undefined variable '%s'", t.Name)
 				want = types.Any
 			} else {
 				if sym.IsConst {
-					c.errorf("TL3015", t.Span(), "cannot assign to const variable '%s'", t.Name)
+					c.errorf(diag.AssignToConst, t.Span(), "cannot assign to const variable '%s'", t.Name)
 				}
 				c.recordUse(t.Span(), sym)
 				want = sym.Type
@@ -410,7 +411,7 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 			f, ok := lookupField(ot, t.Field.Name)
 			if !ok {
 				if !isAnyLike(ot) {
-					c.errorf("TL3016", t.Span(), "type '%s' has no field '%s'", ot.String(), t.Field.Name)
+					c.errorf(diag.AssignTargetTypeError, t.Span(), "type '%s' has no field '%s'", ot.String(), t.Field.Name)
 				}
 				want = types.Any
 			} else {
@@ -444,7 +445,7 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 			want = indexResult(ot, kt)
 			if want == nil {
 				if !isAnyLike(ot) {
-					c.errorf("TL3016", t.Span(), "cannot index type '%s'", ot.String())
+					c.errorf(diag.AssignTargetTypeError, t.Span(), "cannot index type '%s'", ot.String())
 				}
 				want = types.Any
 			} else {
@@ -452,11 +453,11 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 				c.recordStructIndex(t.Key, t.Obj)
 			}
 		default:
-			c.errorf("TL3017", tgt.Span(), "invalid assignment target")
+			c.errorf(diag.AssignTargetInvalid, tgt.Span(), "invalid assignment target")
 			want = types.Any
 		}
 		if readonly {
-			c.errorf("TL3018", tgt.Span(), "cannot assign to readonly field")
+			c.errorf(diag.AssignToReadonly, tgt.Span(), "cannot assign to readonly field")
 		}
 		var got types.Type
 		if i < len(valTypes) {
@@ -468,7 +469,7 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 		}
 		if got != nil && want != nil {
 			if !types.IsAssignable(got, want, c.opt.toTypes()) {
-				c.errorf("TL3010", tgt.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
+				c.errorf(diag.TypeNotAssignable, tgt.Span(), "type '%s' is not assignable to type '%s'", got.String(), want.String())
 			}
 		}
 		if i < len(n.Values) {
@@ -563,7 +564,7 @@ func (c *Checker) checkNumericFor(n *ast.NumericFor) {
 	// Bounds should be numbers.
 	for _, t := range []types.Type{s, e} {
 		if !isAnyLike(t) && !types.IsAssignable(t, types.Number, c.opt.toTypes()) {
-			c.errorf("TL3020", n.Span(), "numeric for bounds must be numbers, got '%s'", t.String())
+			c.errorf(diag.NumericForBoundNotNum, n.Span(), "numeric for bounds must be numbers, got '%s'", t.String())
 			break
 		}
 	}
@@ -618,7 +619,7 @@ func (c *Checker) checkReturn(r *ast.ReturnStmt) {
 	if len(want) == 0 && len(vals) > 0 {
 		// Returning values from void function.
 		// Allow `return` bare only.
-		c.errorf("TL3030", r.Span(), "function returns no values, but %d value(s) returned", len(vals))
+		c.errorf(diag.VoidFunctionReturns, r.Span(), "function returns no values, but %d value(s) returned", len(vals))
 		return
 	}
 	for i, w := range want {
@@ -632,7 +633,7 @@ func (c *Checker) checkReturn(r *ast.ReturnStmt) {
 			}
 		}
 		if !types.IsAssignable(g, w, c.opt.toTypes()) {
-			c.errorf("TL3031", r.Span(), "return type '%s' is not assignable to '%s'", g.String(), w.String())
+			c.errorf(diag.ReturnTypeMismatch, r.Span(), "return type '%s' is not assignable to '%s'", g.String(), w.String())
 		}
 	}
 }

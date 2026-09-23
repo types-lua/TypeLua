@@ -2,6 +2,7 @@ package parser
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 )
 
@@ -60,7 +61,7 @@ func (p *Parser) parseAsyncFuncLit(isMethod bool) *ast.FuncLit {
 	// parseFuncBody expects `(` at cur (it is called after `function` is
 	// consumed in parsePrimary). Mirror that: consume `function` then body.
 	if !p.at(token.Function) {
-		p.errorf("TL2016", p.cur().Span, "expected 'function' after 'async'")
+		p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected 'function' after 'async'")
 		return &ast.FuncLit{Body: &ast.Block{}, IsAsync: true, S: start.Span}
 	}
 	p.next() // function
@@ -190,7 +191,7 @@ func (p *Parser) parseAwait() ast.Expr {
 	start := p.next() // await
 	x := p.parseExprPrec(precUnary)
 	if x == nil {
-		p.errorf("TL2013", p.cur().Span, "expected expression after 'await'")
+		p.errorf(diag.ParseExpectedExpression, p.cur().Span, "expected expression after 'await'")
 		return &ast.Ident{Name: "await", S: start.Span}
 	}
 	return &ast.AwaitExpr{X: x, S: token.Span{Start: start.Span.Start, End: x.Span().End, File: p.file}}
@@ -257,7 +258,7 @@ func (p *Parser) parseSpawn() ast.Stmt {
 		}
 		args := p.parseCallArgs()
 		if args == nil {
-			p.errorf("TL2016", p.cur().Span, "expected call arguments after 'spawn function() ... end'")
+			p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected call arguments after 'spawn function() ... end'")
 			p.synchronize()
 			return &ast.EmptyStmt{S: start.Span}
 		}
@@ -269,7 +270,7 @@ func (p *Parser) parseSpawn() ast.Stmt {
 	case *ast.CallExpr, *ast.MethodCallExpr:
 		return &ast.SpawnStmt{Call: call, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	default:
-		p.errorf("TL2016", p.cur().Span, "expected a function call after 'spawn'")
+		p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected a function call after 'spawn'")
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
@@ -301,7 +302,7 @@ func (p *Parser) parseSelect() ast.Stmt {
 		if p.cur().Kind == token.Ident && p.cur().Literal == "default" {
 			dstart := p.next()
 			if seenDefault {
-				p.errorf("TL2016", dstart.Span, "duplicate 'default' in select")
+				p.errorf(diag.ParseUnexpectedSyntax, dstart.Span, "duplicate 'default' in select")
 			}
 			seenDefault = true
 			// `default then` or `default:`? Accept `then`, `:`, or newline block.
@@ -316,7 +317,7 @@ func (p *Parser) parseSelect() ast.Stmt {
 		}
 		if p.cur().Kind == token.Ident && p.cur().Literal == "case" {
 			if seenDefault {
-				p.errorf("TL2016", p.cur().Span, "'case' after 'default' in select (default must be last)")
+				p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "'case' after 'default' in select (default must be last)")
 			}
 			c := p.parseSelectCase()
 			if c != nil {
@@ -324,12 +325,12 @@ func (p *Parser) parseSelect() ast.Stmt {
 			}
 			continue
 		}
-		p.errorf("TL2016", p.cur().Span, "expected 'case' or 'default' in select, got %s", p.cur().Kind)
+		p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected 'case' or 'default' in select, got %s", p.cur().Kind)
 		p.synchronizeSelect()
 	}
 	p.expect(token.RBrace, "'}'")
 	if len(cases) == 0 && defBlock == nil {
-		p.errorf("TL2016", start.Span, "select must have at least one 'case' or 'default'")
+		p.errorf(diag.ParseUnexpectedSyntax, start.Span, "select must have at least one 'case' or 'default'")
 	}
 	return &ast.SelectStmt{Cases: cases, Default: defBlock, DS: defSpan, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
@@ -435,12 +436,12 @@ func (p *Parser) parseSelectCase() *ast.SelectCase {
 			}
 		}
 		if len(vars) > 2 {
-			p.errorf("TL2016", p.cur().Span, "select receive binds at most 2 variables (v, ok)")
+			p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "select receive binds at most 2 variables (v, ok)")
 			p.synchronizeSelect()
 			return nil
 		}
 		if !p.at(token.Assign) {
-			p.errorf("TL2016", p.cur().Span, "expected '=' after select receive variables")
+			p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected '=' after select receive variables")
 			p.synchronizeSelect()
 			return nil
 		}
@@ -448,7 +449,7 @@ func (p *Parser) parseSelectCase() *ast.SelectCase {
 		recv := p.parseSuffix()
 		mc, ok := recv.(*ast.MethodCallExpr)
 		if !ok || mc.Method.Name != "recv" {
-			p.errorf("TL2016", p.cur().Span, "select 'case local v = ...' expects 'ch:recv()'")
+			p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "select 'case local v = ...' expects 'ch:recv()'")
 			p.synchronizeSelect()
 			return nil
 		}
@@ -473,25 +474,25 @@ func (p *Parser) parseSelectCase() *ast.SelectCase {
 				} else if n.Method.Name == "recv" {
 					sc.Recv = n
 				} else {
-					p.errorf("TL2016", g.Span(), "select case expects 'ch:recv()', 'ch:send(v)' or 'timeout(s)', got method ':%s'", n.Method.Name)
+					p.errorf(diag.ParseUnexpectedSyntax, g.Span(), "select case expects 'ch:recv()', 'ch:send(v)' or 'timeout(s)', got method ':%s'", n.Method.Name)
 					p.synchronizeSelect()
 					return nil
 				}
 			case *ast.CallExpr:
 				if id, ok := n.Func.(*ast.Ident); ok && (id.Name == "sleep" || id.Name == "timeout") {
 					if len(n.Args) != 1 {
-						p.errorf("TL2016", g.Span(), "select timeout expects exactly 1 argument (seconds)")
+						p.errorf(diag.ParseUnexpectedSyntax, g.Span(), "select timeout expects exactly 1 argument (seconds)")
 						p.synchronizeSelect()
 						return nil
 					}
 					sc.Timeout = n.Args[0]
 				} else {
-					p.errorf("TL2016", g.Span(), "select case expects 'ch:recv()', 'ch:send(v)' or 'timeout(s)'")
+					p.errorf(diag.ParseUnexpectedSyntax, g.Span(), "select case expects 'ch:recv()', 'ch:send(v)' or 'timeout(s)'")
 					p.synchronizeSelect()
 					return nil
 				}
 			default:
-				p.errorf("TL2016", g.Span(), "select case expects 'ch:recv()', 'ch:send(v)' or 'timeout(s)'")
+				p.errorf(diag.ParseUnexpectedSyntax, g.Span(), "select case expects 'ch:recv()', 'ch:send(v)' or 'timeout(s)'")
 				p.synchronizeSelect()
 				return nil
 			}
@@ -501,16 +502,16 @@ func (p *Parser) parseSelectCase() *ast.SelectCase {
 	if p.cur().Kind == token.Then || p.at(token.Colon) || p.cur().Kind == token.Do {
 		p.next()
 	} else {
-		p.errorf("TL2016", p.cur().Span, "expected 'then' after select case guard")
+		p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected 'then' after select case guard")
 	}
 	sc.Block = p.parseSelectCaseBlock()
 	sc.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
 	// Validate send arity now (cheap): `ch:send(v)` exactly 1 arg.
 	if sc.Send != nil && len(sc.Send.Args) != 1 {
-		p.errorf("TL2016", sc.Send.Span(), "'ch:send' expects exactly 1 argument, got %d", len(sc.Send.Args))
+		p.errorf(diag.ParseUnexpectedSyntax, sc.Send.Span(), "'ch:send' expects exactly 1 argument, got %d", len(sc.Send.Args))
 	}
 	if sc.Recv != nil && len(sc.Recv.Args) != 0 {
-		p.errorf("TL2016", sc.Recv.Span(), "'ch:recv' expects no arguments, got %d", len(sc.Recv.Args))
+		p.errorf(diag.ParseUnexpectedSyntax, sc.Recv.Span(), "'ch:recv' expects no arguments, got %d", len(sc.Recv.Args))
 	}
 	return sc
 }

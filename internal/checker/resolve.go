@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -67,14 +68,14 @@ func (c *Checker) resolveTypeWithSub(n ast.TypeNode, sub map[string]types.Type) 
 		return c.resolveIndexedAccess(t, sub)
 	case *ast.InferType:
 		if c.extendsDepth == 0 {
-			c.errorf("TL3601", t.Span(), "'infer' is only allowed in the extends clause of a conditional type")
+			c.errorf(diag.InferOutsideExtends, t.Span(), "'infer' is only allowed in the extends clause of a conditional type")
 			return types.Any
 		}
 		return &types.InferParam{Name: t.Name.Name}
 	case *ast.ConditionalType:
 		return c.resolveConditional(t, sub)
 	default:
-		c.errorf("TL3100", n.Span(), "unsupported type node %T", n)
+		c.errorf(diag.UnsupportedTypeNode, n.Span(), "unsupported type node %T", n)
 		return types.Any
 	}
 }
@@ -115,13 +116,13 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 	}
 	// Qualified names: not supported in v1 (modules).
 	if strings.Contains(t.Name, ".") && t.Name != "..." {
-		c.errorf("TL3101", t.Span(), "qualified type '%s' is not supported", t.Name)
+		c.errorf(diag.QualifiedTypeUnsupported, t.Span(), "qualified type '%s' is not supported", t.Name)
 		return types.Any
 	}
 	// `...T` rest marker (tuple patterns, vararg positions).
 	if t.Name == "..." {
 		if len(t.Args) != 1 {
-			c.errorf("TL3102", t.Span(), "'...' expects 1 type argument, got %d", len(t.Args))
+			c.errorf(diag.BuiltinTypeArgCount, t.Span(), "'...' expects 1 type argument, got %d", len(t.Args))
 			return types.Any
 		}
 		return &types.Ref{Name: "...", Args: []types.Type{c.resolveTypeWithSub(t.Args[0], sub)}}
@@ -143,21 +144,21 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 			return types.Table
 		}
 		if len(t.Args) != 2 {
-			c.errorf("TL3102", t.Span(), "'%s' expects 2 type arguments, got %d", t.Name, len(t.Args))
+			c.errorf(diag.BuiltinTypeArgCount, t.Span(), "'%s' expects 2 type arguments, got %d", t.Name, len(t.Args))
 			return types.Table
 		}
 		return &types.Map{Key: c.resolveTypeWithSub(t.Args[0], sub), Value: c.resolveTypeWithSub(t.Args[1], sub)}
 	}
 	if t.Name == "Array" || t.Name == "array" {
 		if len(t.Args) != 1 {
-			c.errorf("TL3102", t.Span(), "'Array' expects 1 type argument, got %d", len(t.Args))
+			c.errorf(diag.BuiltinTypeArgCount, t.Span(), "'Array' expects 1 type argument, got %d", len(t.Args))
 			return types.Any
 		}
 		return &types.Array{Elem: c.resolveTypeWithSub(t.Args[0], sub)}
 	}
 	if t.Name == "chan" {
 		if len(t.Args) != 1 {
-			c.errorf("TL3102", t.Span(), "'chan' expects 1 type argument, got %d (use 'chan<T>')", len(t.Args))
+			c.errorf(diag.BuiltinTypeArgCount, t.Span(), "'chan' expects 1 type argument, got %d (use 'chan<T>')", len(t.Args))
 			return types.Any
 		}
 		return &types.Chan{Elem: c.resolveTypeWithSub(t.Args[0], sub)}
@@ -165,7 +166,7 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 	// User type.
 	e := c.cur().lookupType(t.Name)
 	if e == nil {
-		c.errorf("TL3103", t.Span(), "undefined type '%s'", t.Name)
+		c.errorf(diag.UndefinedType, t.Span(), "undefined type '%s'", t.Name)
 		return types.Any
 	}
 	c.recordTypeUse(t.Span(), e)
@@ -357,7 +358,7 @@ func (c *Checker) resolveMapped(n *ast.MappedType, sub map[string]types.Type) ty
 	// unfilled generic parameters (definition check) or dynamic code,
 	// both of which stay deferred.
 	if types.IsConcreteType(constraint) && !isAnyLike(constraint) {
-		c.errorf("TL3602", n.Span(), "cannot map over type '%s'", constraint.String())
+		c.errorf(diag.CannotMapOverType, n.Span(), "cannot map over type '%s'", constraint.String())
 		return types.Any
 	}
 	return m
@@ -369,7 +370,7 @@ func (c *Checker) resolveIndexedAccess(n *ast.IndexedAccessType, sub map[string]
 	index := c.resolveTypeWithSub(n.Index, sub)
 	if r, ok, errStr := types.TryEvalIndexed(obj, index, c.opt.toTypes()); ok {
 		if errStr != "" {
-			c.errorf("TL3603", n.Span(), "%s", errStr)
+			c.errorf(diag.IndexedAccessInvalid, n.Span(), "%s", errStr)
 			return types.Any
 		}
 		return r
@@ -382,7 +383,7 @@ func (c *Checker) resolveTypeof(t *ast.TypeofType) types.Type {
 		if s := c.cur().lookupVar(id.Name); s != nil {
 			return s.Type
 		}
-		c.errorf("TL3104", t.Span(), "typeof: undefined variable '%s'", id.Name)
+		c.errorf(diag.TypeofUndefinedVariable, t.Span(), "typeof: undefined variable '%s'", id.Name)
 		return types.Any
 	}
 	// General expr: check it.
@@ -430,7 +431,7 @@ func (c *Checker) resolveKeyof(e types.Type, sp token.Span) types.Type {
 		if isAnyLike(e) {
 			return types.Any
 		}
-		c.errorf("TL3105", sp, "keyof not supported for '%s'", e.String())
+		c.errorf(diag.KeyofUnsupported, sp, "keyof not supported for '%s'", e.String())
 		return types.Any
 	}
 }

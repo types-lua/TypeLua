@@ -2,6 +2,7 @@ package parser
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 )
 
@@ -194,7 +195,7 @@ func (p *Parser) parsePrimaryType() ast.TypeNode {
 	case token.Ident:
 		return p.parseNamedType()
 	default:
-		p.errorf("TL2014", c.Span, "expected type, got %s", c.Kind)
+		p.errorf(diag.ParseExpectedType, c.Span, "expected type, got %s", c.Kind)
 		// Synthesize any to continue.
 		p.next()
 		return &ast.NamedType{Name: "any", S: c.Span}

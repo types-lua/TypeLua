@@ -4,18 +4,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/emitter"
 	"github.com/typelua/typelua/internal/parser"
 )
 
-func expandEmit(t *testing.T, src string) (string, []string) {
+func expandEmit(t *testing.T, src string) (string, []diag.Code) {
 	t.Helper()
 	f, pdiags := parser.ParseFile("test.tl", src)
 	if len(pdiags) != 0 {
 		t.Fatalf("parse diags: %v", pdiags)
 	}
 	ediags := ExpandFile(f)
-	var codes []string
+	var codes []diag.Code
 	for _, d := range ediags {
 		codes = append(codes, d.Code)
 	}
@@ -86,15 +87,15 @@ withTmp(2)
 
 func TestRecursionAndArity(t *testing.T) {
 	_, codes := expandEmit(t, "macro loop(x) = loop(x)\nlocal b = loop(1)\n")
-	if len(codes) != 1 || codes[0] != "TL3703" {
+	if len(codes) != 1 || codes[0] != diag.RecursiveMacro {
 		t.Fatalf("want TL3703, got %v", codes)
 	}
 	_, codes = expandEmit(t, "macro twice(x) = (x) + (x)\nlocal a = twice(1, 2)\n")
-	if len(codes) != 1 || codes[0] != "TL3702" {
+	if len(codes) != 1 || codes[0] != diag.MacroArityMismatch {
 		t.Fatalf("want TL3702, got %v", codes)
 	}
 	_, codes = expandEmit(t, "macro doIt(x) do print(x) end\nlocal c = doIt(1)\n")
-	if len(codes) != 1 || codes[0] != "TL3704" {
+	if len(codes) != 1 || codes[0] != diag.StmtMacroInExprPosition {
 		t.Fatalf("want TL3704, got %v", codes)
 	}
 }
@@ -174,12 +175,12 @@ each(print, 1, 2)
 	}
 	// Too few arguments still errors.
 	_, codes = expandEmit(t, "macro req(a, b, ...) = a\nlocal r = req(1)\n")
-	if len(codes) != 1 || codes[0] != "TL3702" {
+	if len(codes) != 1 || codes[0] != diag.MacroArityMismatch {
 		t.Fatalf("want TL3702, got %v", codes)
 	}
 	// Bare `...` outside call arguments errors.
 	_, codes = expandEmit(t, "macro bad(...) = ...\nlocal r = bad(1)\n")
-	if len(codes) != 1 || codes[0] != "TL3706" {
+	if len(codes) != 1 || codes[0] != diag.MacroVarargOutsideCallArgs {
 		t.Fatalf("want TL3706, got %v", codes)
 	}
 	// `...` inside a nested function belongs to it, not the macro.

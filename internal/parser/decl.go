@@ -2,6 +2,7 @@ package parser
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 )
 
@@ -53,11 +54,11 @@ func (p *Parser) parseExport() ast.Stmt {
 		return st
 	}
 	if p.at(token.MacroKw) {
-		p.errorf("TL2005", p.cur().Span, "macros cannot be exported (they expand within their file)")
+		p.errorf(diag.ParseInvalidExport, p.cur().Span, "macros cannot be exported (they expand within their file)")
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
-	p.errorf("TL2005", p.cur().Span, "expected declaration after 'export'")
+	p.errorf(diag.ParseInvalidExport, p.cur().Span, "expected declaration after 'export'")
 	p.synchronize()
 	return &ast.EmptyStmt{S: start.Span}
 }
@@ -123,11 +124,11 @@ func (p *Parser) parseDeclare() ast.Stmt {
 		return &ast.FuncDefStmt{Name: name, Generics: generics, Func: fn, S: fn.S}
 	}
 	if p.at(token.MacroKw) {
-		p.errorf("TL2006", p.cur().Span, "macros cannot be declared (they have no runtime value)")
+		p.errorf(diag.ParseInvalidDeclare, p.cur().Span, "macros cannot be declared (they have no runtime value)")
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
-	p.errorf("TL2006", p.cur().Span, "expected declaration after 'declare'")
+	p.errorf(diag.ParseInvalidDeclare, p.cur().Span, "expected declaration after 'declare'")
 	p.synchronize()
 	return &ast.EmptyStmt{S: start.Span}
 }
@@ -156,7 +157,7 @@ func (p *Parser) parseMacroDef() ast.Stmt {
 				dots := p.next()
 				hasVA = true
 				if !p.at(token.RParen) {
-					p.errorf("TL2041", dots.Span, "'...' must be the last macro parameter")
+					p.errorf(diag.ParseMacroVarargLast, dots.Span, "'...' must be the last macro parameter")
 				}
 				break
 			}
@@ -165,7 +166,7 @@ func (p *Parser) parseMacroDef() ast.Stmt {
 				break
 			}
 			if n.Name == "self" || n.Name == "super" {
-				p.errorf("TL2038", n.Span(), "macro parameter cannot be named '%s'", n.Name)
+				p.errorf(diag.ParseMacroParamReserved, n.Span(), "macro parameter cannot be named '%s'", n.Name)
 			}
 			params = append(params, n)
 			if !p.at(token.Comma) {
@@ -179,7 +180,7 @@ func (p *Parser) parseMacroDef() ast.Stmt {
 	seen := map[string]bool{}
 	for _, n := range params {
 		if seen[n.Name] {
-			p.errorf("TL2039", n.Span(), "duplicate macro parameter '%s'", n.Name)
+			p.errorf(diag.ParseMacroParamDuplicate, n.Span(), "duplicate macro parameter '%s'", n.Name)
 		}
 		seen[n.Name] = true
 	}
@@ -199,11 +200,11 @@ func (p *Parser) parseMacroDef() ast.Stmt {
 		p.inMacroBody--
 		p.expect(token.End, "'end'")
 		if body.Ret != nil {
-			p.errorf("TL2040", body.Ret.Span(), "statement macro body cannot return a value")
+			p.errorf(diag.ParseMacroBodyReturn, body.Ret.Span(), "statement macro body cannot return a value")
 		}
 		return &ast.MacroDef{Name: name, Params: params, HasVarArg: hasVA, Block: body, IsExpr: false, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
-	p.errorf("TL2001", p.cur().Span, "expected '=' or 'do' after macro parameters")
+	p.errorf(diag.ParseExpectedToken, p.cur().Span, "expected '=' or 'do' after macro parameters")
 	p.synchronize()
 	return &ast.EmptyStmt{S: start.Span}
 }
@@ -391,37 +392,37 @@ loop:
 		switch {
 		case p.at(token.PublicKw):
 			if visSeen {
-				p.errorf("TL2030", p.cur().Span, "duplicate visibility modifier")
+				p.errorf(diag.ParseDuplicateVisibility, p.cur().Span, "duplicate visibility modifier")
 			}
 			p.next()
 			vis, visSeen = ast.Public, true
 		case p.at(token.PrivateKw):
 			if visSeen {
-				p.errorf("TL2030", p.cur().Span, "duplicate visibility modifier")
+				p.errorf(diag.ParseDuplicateVisibility, p.cur().Span, "duplicate visibility modifier")
 			}
 			p.next()
 			vis, visSeen = ast.Private, true
 		case p.at(token.ProtectedKw):
 			if visSeen {
-				p.errorf("TL2030", p.cur().Span, "duplicate visibility modifier")
+				p.errorf(diag.ParseDuplicateVisibility, p.cur().Span, "duplicate visibility modifier")
 			}
 			p.next()
 			vis, visSeen = ast.Protected, true
 		case p.at(token.StaticKw):
 			if isStatic {
-				p.errorf("TL2031", p.cur().Span, "duplicate 'static' modifier")
+				p.errorf(diag.ParseDuplicateModifier, p.cur().Span, "duplicate 'static' modifier")
 			}
 			p.next()
 			isStatic = true
 		case p.at(token.ReadonlyKw):
 			if isReadonly {
-				p.errorf("TL2031", p.cur().Span, "duplicate 'readonly' modifier")
+				p.errorf(diag.ParseDuplicateModifier, p.cur().Span, "duplicate 'readonly' modifier")
 			}
 			p.next()
 			isReadonly = true
 		case p.at(token.AbstractKw):
 			if isAbstract {
-				p.errorf("TL2031", p.cur().Span, "duplicate 'abstract' modifier")
+				p.errorf(diag.ParseDuplicateModifier, p.cur().Span, "duplicate 'abstract' modifier")
 			}
 			p.next()
 			isAbstract = true
@@ -443,7 +444,7 @@ loop:
 	}
 	isCtor := name.Name == "constructor"
 	if isAsync && isCtor {
-		p.errorf("TL2032", name.Span(), "constructor must not be 'async'")
+		p.errorf(diag.ParseInvalidCtorSignature, name.Span(), "constructor must not be 'async'")
 		isAsync = false
 	}
 	// Method or constructor: `name<T>(params)`.
@@ -476,7 +477,7 @@ loop:
 			}
 		} else if p.at(token.Arrow) || p.at(token.Colon) {
 			sp := p.cur().Span
-			p.errorf("TL2032", sp, "constructor must not declare a return type")
+			p.errorf(diag.ParseInvalidCtorSignature, sp, "constructor must not declare a return type")
 			p.next()
 			_ = p.parseType()
 		}
@@ -490,7 +491,7 @@ loop:
 			return m
 		}
 		if p.at(token.Comma) || p.at(token.Semi) || p.at(token.RBrace) {
-			p.errorf("TL2033", p.cur().Span, "method '%s' must have a body ending with 'end'", name.Name)
+			p.errorf(diag.ParseMethodBodyMissing, p.cur().Span, "method '%s' must have a body ending with 'end'", name.Name)
 			m.Body = &ast.Block{S: token.Span{Start: p.prevEnd(), End: p.prevEnd(), File: p.file}}
 			m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
 			return m
@@ -502,7 +503,7 @@ loop:
 	}
 	// Field: `name[: T] [= init]`.
 	if isCtor {
-		p.errorf("TL2034", name.Span(), "'constructor' must be declared as a method")
+		p.errorf(diag.ParseCtorNotMethod, name.Span(), "'constructor' must be declared as a method")
 		return nil
 	}
 	var fty ast.TypeNode
@@ -513,17 +514,17 @@ loop:
 	var init ast.Expr
 	if p.at(token.Assign) {
 		if declared {
-			p.errorf("TL2035", p.cur().Span, "field '%s' must not have an initializer in a 'declare' class", name.Name)
+			p.errorf(diag.ParseDeclareFieldInit, p.cur().Span, "field '%s' must not have an initializer in a 'declare' class", name.Name)
 		}
 		p.next()
 		init = p.parseExpr()
 	}
 	if fty == nil && init == nil {
-		p.errorf("TL2036", name.Span(), "field '%s' needs a type annotation or an initializer", name.Name)
+		p.errorf(diag.ParseFieldNeedsTypeOrInit, name.Span(), "field '%s' needs a type annotation or an initializer", name.Name)
 		fty = &ast.NamedType{Name: "any", S: name.Span()}
 	}
 	if isAbstract {
-		p.errorf("TL2037", start.Span, "only methods can be 'abstract'")
+		p.errorf(diag.ParseOnlyMethodsAbstract, start.Span, "only methods can be 'abstract'")
 	}
 	return &ast.ClassMember{Kind: ast.ClassField, Name: name, Visibility: vis, IsStatic: isStatic, IsReadonly: isReadonly, FieldType: fty, Init: init, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }

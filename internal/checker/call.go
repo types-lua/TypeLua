@@ -2,6 +2,7 @@ package checker
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/token"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -17,7 +18,7 @@ func (c *Checker) lookupMethod(ot types.Type, name string, sp token.Span) types.
 	if isAnyLike(ot) {
 		return types.Any
 	}
-	c.errorf("TL3230", sp, "type '%s' has no method '%s'", ot.String(), name)
+	c.errorf(diag.NoMethod, sp, "type '%s' has no method '%s'", ot.String(), name)
 	return types.Any
 }
 
@@ -29,7 +30,7 @@ func (c *Checker) lookupMethodField(ot types.Type, name string, sp token.Span) t
 	if isAnyLike(ot) {
 		return types.Field{Type: types.Any}
 	}
-	c.errorf("TL3230", sp, "type '%s' has no method '%s'", ot.String(), name)
+	c.errorf(diag.NoMethod, sp, "type '%s' has no method '%s'", ot.String(), name)
 	return types.Field{Type: types.Any}
 }
 
@@ -53,11 +54,11 @@ func (c *Checker) bindExplicitArgs(fn *types.Func, explicit []types.Type, callSp
 		return fn
 	}
 	if len(fn.TypeParams) == 0 {
-		c.errorf("TL3234", callSpan, "explicit type arguments given to non-generic function")
+		c.errorf(diag.GenericArgsInvalid, callSpan, "explicit type arguments given to non-generic function")
 		return fn
 	}
 	if len(explicit) > len(fn.TypeParams) {
-		c.errorf("TL3234", callSpan, "expected %d type argument(s), got %d", len(fn.TypeParams), len(explicit))
+		c.errorf(diag.GenericArgsInvalid, callSpan, "expected %d type argument(s), got %d", len(fn.TypeParams), len(explicit))
 		explicit = explicit[:len(fn.TypeParams)]
 	}
 	exSub := map[string]types.Type{}
@@ -67,7 +68,7 @@ func (c *Checker) bindExplicitArgs(fn *types.Func, explicit []types.Type, callSp
 		}
 		a := explicit[i]
 		if gp.Constraint != nil && !types.IsAssignable(a, gp.Constraint, c.opt.toTypes()) {
-			c.errorf("TL3234", callSpan, "type argument '%s' does not satisfy constraint '%s'", a.String(), gp.Constraint.String())
+			c.errorf(diag.GenericArgsInvalid, callSpan, "type argument '%s' does not satisfy constraint '%s'", a.String(), gp.Constraint.String())
 		}
 		exSub[gp.Name] = a
 		sub[gp.Name] = a
@@ -104,7 +105,7 @@ func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, 
 		for _, a := range args {
 			c.checkExpr(a)
 		}
-		c.errorf("TL3231", callSpan, "cannot call type '%s'", fnT.String())
+		c.errorf(diag.NotCallable, callSpan, "cannot call type '%s'", fnT.String())
 		return []types.Type{types.Any}
 	}
 	// Generic inference: collect type params from fn? Our Func doesn't store generic names after substitution? For generic functions, funcTypeFromLit resolved params with tparams as GenericParam placeholders.
@@ -140,7 +141,7 @@ func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, 
 			}
 		}
 		if !missingOK {
-			c.errorf("TL3232", callSpan, "expected %d argument(s), got %d", req, len(argTypes))
+			c.errorf(diag.ArgCountMismatch, callSpan, "expected %d argument(s), got %d", req, len(argTypes))
 		}
 	}
 	// Check each arg.
@@ -180,7 +181,7 @@ func (c *Checker) checkCall(opSpan token.Span, fnT types.Type, args []ast.Expr, 
 			continue
 		}
 		if !types.IsAssignable(at, pt, c.opt.toTypes()) {
-			c.errorf("TL3233", args[i].Span(), "argument %d: type '%s' is not assignable to '%s'", i+1, at.String(), pt.String())
+			c.errorf(diag.ArgTypeMismatch, args[i].Span(), "argument %d: type '%s' is not assignable to '%s'", i+1, at.String(), pt.String())
 			break // one error per call to avoid cascades.
 		}
 	}

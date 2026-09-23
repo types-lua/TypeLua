@@ -62,11 +62,11 @@ func (p *Parser) expect(k token.Kind, what string) (token.Token, bool) {
 	if p.at(k) {
 		return p.next(), true
 	}
-	p.errorf("TL2001", p.cur().Span, "expected %s, got %s", what, p.cur().Kind)
+	p.errorf(diag.ParseExpectedToken, p.cur().Span, "expected %s, got %s", what, p.cur().Kind)
 	return p.cur(), false
 }
 
-func (p *Parser) errorf(code string, sp token.Span, format string, args ...any) {
+func (p *Parser) errorf(code diag.Code, sp token.Span, format string, args ...any) {
 	p.diags = append(p.diags, diag.Errorf(code, sp, format, args...))
 }
 
@@ -112,7 +112,7 @@ func (p *Parser) consumeGt() bool {
 		p.toks[p.pos], p.toks[p.pos+1] = p.toks[p.pos+1], p.toks[p.pos]
 		return true
 	}
-	p.errorf("TL2002", c.Span, "expected '>', got %s", c.Kind)
+	p.errorf(diag.ParseExpectedGt, c.Span, "expected '>', got %s", c.Kind)
 	return false
 }
 
