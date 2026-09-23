@@ -14,6 +14,15 @@ import (
 // interpreter, returning stdout. Skips when no interpreter is on PATH.
 func runConcProject(t *testing.T, main string) string {
 	t.Helper()
+	out, _ := runConcProjectFiles(t, map[string]string{"main.tl": main})
+	return out
+}
+
+// runConcProjectFiles is runConcProject for multi-file programs. It
+// returns stdout plus the Lua exit error (nil on success), so tests can
+// assert on programs that fail at runtime (e.g. send on closed channel).
+func runConcProjectFiles(t *testing.T, files map[string]string) (string, error) {
+	t.Helper()
 	lua := findLua()
 	if lua == "" {
 		t.Skip("no lua interpreter on PATH")
@@ -30,7 +39,9 @@ func runConcProject(t *testing.T, main string) string {
 	}
 	write("tlua.json", `{"compilerOptions": {"target": "5.4", "strict": true, "rootDir": ".", "outDir": "dist"},
 "include": ["**/*.tl"], "exclude": ["dist"]}`)
-	write("main.tl", main)
+	for name, content := range files {
+		write(name, content)
+	}
 	cfg, err := config.Load(filepath.Join(dir, "tlua.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -49,10 +60,7 @@ func runConcProject(t *testing.T, main string) string {
 	cmd := exec.Command(lua, "dist/main.lua")
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("lua failed: %v\n%s", err, out)
-	}
-	return string(out)
+	return string(out), err
 }
 
 func TestConcurrentPingPong(t *testing.T) {
@@ -209,5 +217,66 @@ print("after")
 	want := "got\t11\ncleanup\t11\nafter\n"
 	if out != want {
 		t.Fatalf("got %q want %q", out, want)
+	}
+}
+
+func TestConcurrentModuleReturn(t *testing.T) {
+	// A required module with top-level concurrency (scheduler wrapper +
+	// `return M`) threads its table through __tl_run (reentrant require).
+	out, err := runConcProjectFiles(t, map[string]string{
+		"worker.tl": `local M = {}
+async function M.double(x: integer): integer
+  await sleep(0.01)
+  return x * 2
+end
+spawn M.double(0)
+return M
+`,
+		"main.tl": `import W from "worker"
+async function main(): void
+  local v: integer = await W.double(21)
+  print("answer", v)
+end
+await main()
+`,
+	})
+	if err != nil {
+		t.Fatalf("lua failed: %v\n%s", err, out)
+	}
+	if out != "answer\t42\n" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestConcurrentSelectSendVsClose(t *testing.T) {
+	// A parked select-sender whose channel is closed must fail in the
+	// SELECTOR task; the closer itself must succeed.
+	out, err := runConcProjectFiles(t, map[string]string{
+		"main.tl": `local ch: chan<integer> = makeChan<integer>()
+async function sender(): void
+  select {
+    case ch:send(1) then
+      print("sent (bad)")
+    case timeout(5.0) then
+      print("timeout (bad)")
+  }
+end
+async function main(): void
+  spawn sender()
+  await sleep(0.05)
+  ch:close()
+  print("closer ok")
+end
+await main()
+`,
+	})
+	if err == nil {
+		t.Fatalf("expected the selector to fail, got %q", out)
+	}
+	if !strings.Contains(out, "closer ok") {
+		t.Fatalf("closer must succeed, got %q", out)
+	}
+	if !strings.Contains(out, "send on closed channel") {
+		t.Fatalf("selector must report send-on-closed, got %q", out)
 	}
 }

@@ -18,6 +18,11 @@ type Func struct {
 	// TypeParams records a generic declaration (constraints/defaults
 	// intact) so explicit type arguments can bind positionally.
 	TypeParams []*GenericParam
+	// IsAsync marks `async` functions and async builtins (sleep, channel
+	// send/recv, WaitGroup wait, Mutex lock): calling one outside an
+	// async task errors at runtime (yield with no scheduler), so the
+	// checker reports TL3805. Marker only: ignored by assignability.
+	IsAsync bool
 }
 
 func (t *Func) Kind() Kind { return KFunc }

@@ -164,6 +164,10 @@ type Checker struct {
 	// IsAsync): `await`/`select` are valid when the stack is empty (the
 	// top-level chunk = main task) or its top is true.
 	asyncStack []bool
+	// spawnDepth counts enclosing `spawn` calls: spawning an async
+	// function from sync code is fine (the body becomes a new task), so
+	// the TL3805 async-call check is suspended inside.
+	spawnDepth int
 	// >0 while resolving an extends clause (where `infer` may appear).
 	extendsDepth int
 	// Index collects position information for LSP when non-nil.

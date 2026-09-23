@@ -79,13 +79,13 @@ const concurrentPrelude = `if not __tl_run then
     t.resume_args = {...}
     __tl_ready[#__tl_ready + 1] = t
   end
-  local function __tl_wake_select(sw, idx, v, ok)
+  local function __tl_wake_select(sw, idx, v, ok, errmsg)
     if sw.done then
       return
     end
     sw.done = true
     __tl_unpark_select(sw)
-    __tl_wake_task(sw.task, idx, v, ok)
+    __tl_wake_task(sw.task, idx, v, ok, errmsg)
   end
   local function __tl_peek_recv(ch)
     if ch.head <= ch.tail then
@@ -216,7 +216,10 @@ const concurrentPrelude = `if not __tl_run then
               __tl_wake_select(sw, ci, nil, nil)
               break
             elseif st == "closed" then
-              error("send on closed channel")
+              -- Attribute the failure to the selector itself (raising
+              -- here would blame whatever task happened to pump).
+              __tl_wake_select(sw, ci, nil, nil, "send on closed channel")
+              break
             end
           elseif g.kind == "sleep" then
             if __tl_now() >= sw.deadline then
@@ -348,6 +351,9 @@ const concurrentPrelude = `if not __tl_run then
     coroutine.yield()
     local a = self.resume_args or {}
     self.resume_args = nil
+    if a[4] ~= nil then
+      error(a[4])
+    end
     return a[1], a[2], a[3]
   end
   function __tl_sleep(sec)

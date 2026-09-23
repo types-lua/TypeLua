@@ -274,12 +274,13 @@ await main()
 - 语义是协作式 CSP（§13 协程上的调度器），写法取 Go（`spawn`/`chan`/`select`/`WaitGroup`/`Mutex`）配 `async/await` 显式挂起点：**无真并行**，所有任务跑在同一 Lua State；CPU 密集任务仍会互相阻塞。
 - `async function f() ... end`（`local async function`、`async function` 字面量、类 `async` 方法亦可）：可含 `await` 的函数，擦除为普通函数。`await <expr>` 擦除为内层表达式（阻塞调用自己让出，`await` 只是显式标记）。
 - `await`/`select` 仅可在 `async` 函数与顶层 chunk（主任务）出现，否则 `TL3801`/`TL3802`；同步函数内误用直接报错。
+- 同步上下文（含同步函数、同步方法）不可**调用** `async` 函数与阻塞原语（`sleep`/`timeout`、`ch:send`/`ch:recv`/`ch:iter`、`wg:wait`、`mu:lock`），否则 `TL3805`（运行时会无调度器让出）；`spawn` 豁免（新任务自带调度上下文）；`any` 动态调用不检查。
 - `spawn f(x)` / `spawn obj:m()` / `spawn function() ... end()`（软关键字）：把调用包成闭包派发为新任务；**实参惰性求值**（任务启动时求值，与 `defer` 同惯例，见 §12；Go 的立即求值不适用）。`spawn 42` 等非调用报 `TL2016`。
 - `chan<T>`（`chan` 须带 1 个实参）：`makeChan<T>(cap?: integer)` 构造（`T` 须显式给出，无推断源，缺省报 `TL3803`）；方法 `send(v: T)`、`recv(): (T, boolean)`（`ok=false` 表 close 且排空）、`close()`、`len()`、`cap()`、`closed()`、`iter()`（`for v in ch:iter() do` 收完即止）。channel 按 `T` 不变（双向可赋才兼容）。
 - `select { case ... default ... }`（大括号、无 `end`，同 class/enum 体风格）：case 守卫三选一——`[local] v[, ok] = ch:recv()`、`ch:send(v)`、`timeout(s)`/`sleep(s)`（秒数）；`case local ...` 对应 Go `:=`（新声明），`case v = ...` 要求预声明；`default` 可选、须末位、无守卫时永不挂起。守卫的操作数表达式只求值一次；多 case 就绪取**源码序第一**（Go 是随机，此点不同）。
 - `sleep(s)`/`timeout(s)`（`await` 之）、`WaitGroup`（`new/add/done/wait`，`wait` 须 `await`）、`Mutex`（`new/lock/unlock/tryLock`，`lock` 须 `await`，FIFO 非重入）。
 - 运行时按需注入：用到 `spawn`/`await`/`select`/`makeChan`/`sleep`/`timeout`/`WaitGroup`/`Mutex` 的文件才带调度器 prelude（`if not __tl_run` 幂等多文件安全）并包进 `__tl_run(function() ... end)`（可重入，`require` 的 wrapped 模块继承调用方任务；模块 `return M` 穿透返回）；不用并发的文件字节一致（零开销、零污染）。
 - 错误：`send` 已关、`close` 已关、`unlock` 未锁、`WaitGroup` 计数为负报运行时错；无就绪任务、无定时器、仍有未完成任务时报 `deadlock: all tasks blocked`（主函数返回后仍排空就绪任务才退出——类事件循环，此点比 Go 更宽容）。
-- 限制：`select` 守卫不支持除收/发/超时外的任意 `await` 表达式；`spawn`/`select` 内定义的局部量遵循 Lua 闭包规则；调度器空闲等待用 `os.clock` 自旋（无 I/O 多路复用，长超时会烧 CPU，属 MVP 取舍）；`coroutine.yield` 裸调被当作让步重排（容忍，不推荐）。
-- 诊断码：`TL38xx` 并发（`TL3801` await 越界、`TL3802` select 越界、`TL3803` makeChan 缺实参/容量、`TL3804` select 守卫）。
+- 限制：`select` 守卫不支持除收/发/超时外的任意 `await` 表达式；`spawn`/`select` 内定义的局部量遵循 Lua 闭包规则；调度器空闲等待用 `os.clock` 自旋（无 I/O 多路复用，长超时会烧 CPU，属 MVP 取舍）；`coroutine.yield` 裸调被当作让步重排（容忍，不推荐）；`pcall`/`xpcall` 包裹阻塞调用在 5.1 下会失败（yield 不能穿过 pcall，让挂起点远离 pcall）。
+- 诊断码：`TL38xx` 并发（`TL3801` await 越界、`TL3802` select 越界、`TL3803` makeChan 缺实参/容量、`TL3804` select 守卫、`TL3805` 同步上下文调 async）。
 - `async`/`await`/`spawn`/`select`/`case`/`default` 均为软关键字：`local await = 1`、`await(x)`、`spawn(x)`、`select("#", ...)`、`local spawn = 1` 保持原 Lua 语义（`go` 则无任何特殊含义，一直是普通标识符）；`await` 操作数不起首于 `(`（`await (x)` 恒为调用，括号表达式请先取名）。

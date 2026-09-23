@@ -100,7 +100,7 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		for i, gp := range x.TypeParams {
 			tps[i] = substituteGenericParam(gp, sub, ctx)
 		}
-		return &Func{Params: ps, HasVarArg: x.HasVarArg, VarArg: va, Returns: rs, TypeParams: tps}
+		return &Func{Params: ps, HasVarArg: x.HasVarArg, VarArg: va, Returns: rs, TypeParams: tps, IsAsync: x.IsAsync}
 	case *Object:
 		// Shared (possibly cyclic) objects substitute once; the copy is
 		// filled in place so recursive references terminate.

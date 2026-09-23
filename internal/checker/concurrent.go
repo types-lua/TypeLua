@@ -47,10 +47,42 @@ func (c *Checker) checkAwaitMulti(n *ast.AwaitExpr) []types.Type {
 // checkSpawn checks a spawned call like a normal call. Spawning is allowed
 // anywhere (it never suspends the spawner); the callee runs as a new task.
 func (c *Checker) checkSpawn(n *ast.SpawnStmt) {
+	c.spawnDepth++
 	c.checkExpr(n.Call)
+	c.spawnDepth--
 	if hasBareVarArg(n.Call) {
 		c.errorf("TL3235", n.Call.Span(), "cannot use '...' in a 'spawn' call (copy it into a local first)")
 	}
+}
+
+// checkAsyncCall reports TL3805 when an async function (or async builtin
+// like sleep/channel recv) is invoked outside an async task: it would
+// yield with no scheduler running. The check is best-effort (dynamic
+// calls through `any` are unchecked) and never fires inside `spawn`.
+func (c *Checker) checkAsyncCall(fnT types.Type, sp token.Span, name string) {
+	fn, ok := fnT.(*types.Func)
+	if !ok || !fn.IsAsync {
+		return
+	}
+	if c.spawnDepth > 0 || c.inAsyncTask() {
+		return
+	}
+	if name == "" {
+		name = "async function"
+	}
+	c.errorf("TL3805", sp, "calling async '%s' outside an async task (use 'await' inside 'async', or run it with 'spawn')", name)
+}
+
+func calleeName(e ast.Expr) string {
+	switch n := e.(type) {
+	case *ast.Ident:
+		return n.Name
+	case *ast.FieldExpr:
+		if n.Field != nil {
+			return n.Field.Name
+		}
+	}
+	return ""
 }
 
 // checkSelect validates guards, binds receive variables, and checks bodies.
@@ -185,12 +217,14 @@ func (c *Checker) chanElem(t types.Type, sp token.Span) types.Type {
 }
 
 // chanMethodType resolves `send/recv/close/len/cap/closed/iter` on chan<T>.
+// Blocking methods (send/recv/iter) are async-marked so the checker can
+// reject them outside async tasks (TL3805).
 func chanMethodType(elem types.Type, name string) (types.Type, bool) {
 	switch name {
 	case "send":
-		return &types.Func{Params: []types.FuncParam{{Name: "value", Type: elem}}}, true
+		return &types.Func{Params: []types.FuncParam{{Name: "value", Type: elem}}, IsAsync: true}, true
 	case "recv":
-		return &types.Func{Returns: []types.Type{elem, types.Boolean}}, true
+		return &types.Func{Returns: []types.Type{elem, types.Boolean}, IsAsync: true}, true
 	case "close":
 		return &types.Func{}, true
 	case "len", "cap":
@@ -199,7 +233,7 @@ func chanMethodType(elem types.Type, name string) (types.Type, bool) {
 		return &types.Func{Returns: []types.Type{types.Boolean}}, true
 	case "iter":
 		// `for v in ch:iter() do`: iterator function yielding elements.
-		return &types.Func{Returns: []types.Type{&types.Func{Returns: []types.Type{elem}}}}, true
+		return &types.Func{Returns: []types.Type{&types.Func{Returns: []types.Type{elem}, IsAsync: true}}, IsAsync: true}, true
 	}
 	return nil, false
 }
@@ -209,14 +243,14 @@ func waitGroupType() types.Type {
 	return &types.Object{Name: "WaitGroup", Fields: map[string]types.Field{
 		"add":  {Type: &types.Func{Params: []types.FuncParam{{Name: "n", Type: types.Integer}}}},
 		"done": {Type: &types.Func{}},
-		"wait": {Type: &types.Func{}},
+		"wait": {Type: &types.Func{IsAsync: true}},
 	}}
 }
 
 // mutexType is the instance object for Mutex.new().
 func mutexType() types.Type {
 	return &types.Object{Name: "Mutex", Fields: map[string]types.Field{
-		"lock":    {Type: &types.Func{}},
+		"lock":    {Type: &types.Func{IsAsync: true}},
 		"unlock":  {Type: &types.Func{}},
 		"tryLock": {Type: &types.Func{Returns: []types.Type{types.Boolean}}},
 	}}

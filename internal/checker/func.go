@@ -60,7 +60,7 @@ func (c *Checker) funcTypeFromLit(fn *ast.FuncLit, generics []*ast.GenericParam)
 		tps[i] = tp
 	}
 	c.popTParams()
-	return &types.Func{Params: params, HasVarArg: fn.HasVarArg, VarArg: va, Returns: rets, TypeParams: tps}
+	return &types.Func{Params: params, HasVarArg: fn.HasVarArg, VarArg: va, Returns: rets, TypeParams: tps, IsAsync: fn.IsAsync}
 }
 
 func flattenReturns(t types.Type) []types.Type {

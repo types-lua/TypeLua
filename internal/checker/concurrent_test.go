@@ -145,3 +145,83 @@ async function f(): void
 end
 `)
 }
+
+func TestAsyncCallContext(t *testing.T) {
+	// Async callees from async bodies (or the chunk) are fine, including
+	// direct calls without await and all blocking builtins.
+	expectOK(t, `
+local ch: chan<integer> = makeChan<integer>(1)
+local wg = WaitGroup.new()
+local mu = Mutex.new()
+async function p(): void await ch:send(1) end
+async function f(): void
+  p()
+  sleep(1)
+  local v = ch:recv()
+  wg:wait()
+  mu:lock()
+end
+`)
+	// Spawning from sync code is fine (the body becomes a new task).
+	expectOK(t, `
+async function p(): void print(1) end
+local function g(): void
+  spawn p()
+end
+`)
+	// Async class methods behave the same.
+	expectOK(t, `
+class W {
+  async run(): void print(1) end,
+}
+local w = W.new()
+async function f(): void
+  w:run()
+end
+`)
+	// Sync bodies calling async functions or blocking builtins: TL3805.
+	expectErr(t, `
+async function p(): void print(1) end
+local function g(): void
+  p()
+end
+`)
+	expectErr(t, `
+local function g(): void
+  sleep(1)
+end
+`)
+	expectErr(t, `
+local ch: chan<integer> = makeChan<integer>(1)
+local function g(): void
+  local v = ch:recv()
+end
+`)
+	expectErr(t, `
+local wg = WaitGroup.new()
+local mu = Mutex.new()
+local function g(): void
+  wg:wait()
+  mu:lock()
+end
+`)
+	expectErr(t, `
+class W {
+  async run(): void print(1) end,
+}
+local w = W.new()
+local function g(): void
+  w:run()
+end
+`)
+	// Non-blocking channel/mutex/sync helpers stay callable anywhere.
+	expectOK(t, `
+local ch: chan<integer> = makeChan<integer>(1)
+local mu = Mutex.new()
+local function g(): void
+  print(ch:len(), ch:cap(), ch:closed())
+  mu:unlock()
+  mu:tryLock()
+end
+`)
+}

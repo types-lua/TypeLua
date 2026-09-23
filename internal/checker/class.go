@@ -357,7 +357,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 			}
 			tps[i] = tp
 		}
-		return &types.Func{Params: params, HasVarArg: m.HasVarArg, VarArg: va, Returns: rets, TypeParams: tps}
+		return &types.Func{Params: params, HasVarArg: m.HasVarArg, VarArg: va, Returns: rets, TypeParams: tps, IsAsync: m.IsAsync}
 	}
 
 	for _, m := range n.Members {

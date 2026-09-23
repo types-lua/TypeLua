@@ -92,7 +92,9 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 				return []types.Type{&types.Chan{Elem: types.Any}}
 			}
 		}
-		return c.checkCall(n.Func.Span(), c.checkExpr(n.Func), n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
+		fnT := c.checkExpr(n.Func)
+		c.checkAsyncCall(fnT, n.Span(), calleeName(n.Func))
+		return c.checkCall(n.Func.Span(), fnT, n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 	case *ast.MethodCallExpr:
 		if id, ok := n.Obj.(*ast.Ident); ok && id.Name == "super" && c.cur().lookupVar("super") == nil {
 			return c.checkSuperMethod(n)
@@ -114,6 +116,7 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 		if _, ok := lookupField(ot, n.Method.Name); ok {
 			c.recordMemberUse(n.Method.Span(), ot, n.Method.Name)
 		}
+		c.checkAsyncCall(mf.Type, n.Span(), n.Method.Name)
 		return c.checkCall(n.Span(), mf.Type, n.Args, n.Span(), c.resolveTypeArgs(n.TypeArgs))
 	case *ast.VarArg:
 		vt := c.currentVarArg()

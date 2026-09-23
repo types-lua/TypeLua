@@ -61,7 +61,7 @@ func (c *Checker) defineBuiltins(sc *Scope) {
 		TypeParams: []*types.GenericParam{tParam},
 	}}
 	// `sleep(sec: number)` suspends the current task (await it).
-	sleepFn := &types.Func{Params: []types.FuncParam{{Name: "sec", Type: types.Number}}}
+	sleepFn := &types.Func{Params: []types.FuncParam{{Name: "sec", Type: types.Number}}, IsAsync: true}
 	sc.vars["sleep"] = &Symbol{Name: "sleep", Kind: symFunc, Type: sleepFn}
 	sc.vars["timeout"] = &Symbol{Name: "timeout", Kind: symFunc, Type: sleepFn}
 	// `WaitGroup` / `Mutex` coordination primitives.
