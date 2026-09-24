@@ -67,7 +67,7 @@ Usage:
   tlua check [files...] [--watch] [-w] [--pollInterval ms] [--debounce ms]
   tlua build [files...] [--outDir dist] [--target 5.4] [--watch] [-w]
   tlua watch [files...] [--outDir dist] [--target 5.4]
-  tlua bindgen --header foo.h --out types/foo.d.tl [--lib CLib]
+  tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so]
   tlua lsp                          language server over stdio
   tlua version                        print version`)
 }

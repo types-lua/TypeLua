@@ -11,19 +11,22 @@ import (
 	"github.com/typelua/typelua/internal/parser"
 )
 
-// cmdBindgen generates a .d.tl type contract from a C header subset:
-// `tlua bindgen --header foo.h --out types/foo.d.tl [--lib CLib] [--check]`.
+// cmdBindgen generates a .d.tl type contract (and optionally the typed .tl
+// shim) from a C header subset:
+// `tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so] [--check]`.
 func cmdBindgen(args []string) error {
 	fs := flag.NewFlagSet("bindgen", flag.ContinueOnError)
 	header := fs.String("header", "", "input C header file (required)")
 	out := fs.String("out", "", "output .d.tl file (default: stdout)")
+	shim := fs.String("shim", "", "output .tl loader shim (typed require target, e.g. mylib.tl)")
+	so := fs.String("so", "", "sibling shared library loaded by the shim (default: lib<base>.so)")
 	lib := fs.String("lib", "CLib", "interface name for functions/defines")
 	check := fs.Bool("check", false, "verify generated output parses without errors")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if strings.TrimSpace(*header) == "" {
-		return fmt.Errorf("tlua bindgen: --header is required (e.g. --header mylib.h --out types/mylib.d.tl)")
+		return fmt.Errorf("tlua bindgen: --header is required (e.g. --header mylib.h --out types/mylib.d.tl --shim mylib.tl)")
 	}
 	raw, err := os.ReadFile(*header)
 	if err != nil {
@@ -48,14 +51,37 @@ func cmdBindgen(args []string) error {
 	}
 	if *out == "" {
 		fmt.Print(got)
+	} else {
+		if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(*out, []byte(got), 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("generated %s (lib %s)\n", *out, *lib)
+	}
+	if strings.TrimSpace(*shim) == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+	soName := strings.TrimSpace(*so)
+	if soName == "" {
+		soName = bindgen.DefaultSoName(*header)
+	}
+	shimGot := bindgen.GenerateShim(string(raw), filepath.Base(*header), *lib, soName)
+	if _, pdiags := parser.ParseFile(*shim, shimGot); len(pdiags) > 0 {
+		var sb strings.Builder
+		for _, d := range pdiags {
+			sb.WriteString(d.String())
+			sb.WriteString("\n")
+		}
+		return fmt.Errorf("tlua bindgen: generated shim has parse errors:\n%s", sb.String())
+	}
+	if err := os.MkdirAll(filepath.Dir(*shim), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(*out, []byte(got), 0o644); err != nil {
+	if err := os.WriteFile(*shim, []byte(shimGot), 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("generated %s (lib %s)\n", *out, *lib)
+	fmt.Printf("generated %s (loads %s as %s)\n", *shim, soName, *lib)
 	return nil
 }

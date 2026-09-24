@@ -303,7 +303,7 @@ local ct: ctype = ffi.typeof("int")
 - 基元 `cdata`/`ctype` 与 `userdata` 互不兼容（混用报 `TL3010`，可疑转换报 `TL3204`，与现有转换检查同例）。
 - `require("ffi")`/`import F from "ffi"` 特判为精确模块：`cdef(string): void`、`load(name, global?): any`（调用方 `as` 自家 `CLib`）、`new/cast/gc/string/copy/fill/istype/sizeof/alignof/offsetof/metatype/errno` 精确首参、`C/os/arch/abi` 宽松。被局部 `require` 遮蔽时整体回退 `any`（旧代码零误报）。
 - 类型恒可用（`--target 5.4` 下亦可检查），运行时需 LuaJIT（`--target 5.1`）；`cdef` 字符串永不解析（C 侧由作者保证），类型边界一律手写 `as`（与 `modules`/`stdlib` 同惯例）。
-- `tlua bindgen --header foo.h --out types/foo.d.tl [--lib CLib]` 从 C 头子集生成契约：`struct`→`type`、`enum`→`enum`、原型→`interface <Lib>` 方法、`#define` 整数/字符串→接口字段、指针/数组→`cdata`（`char*`→`string`）、未知值类型→`any`（零误报）；未知构造记 `-- skipped`，输出恒可解析（`--check` 强制校验；`unsigned` 等词法边界已回归）。
+- `tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so]` 从 C 头子集生成契约（`--shim` 同步生成 typed shim：`require ffi` + 去卫士 `cdef` + 脚本目录 `ffi.load` + 唯一 `as` + `return`，调用方 `import` 零 cast；`--so` 缺省为 `lib<基名>.so`）：`struct`→`type`、`enum`→`enum`、原型→`interface <Lib>` 方法、`#define` 整数/字符串→接口字段、指针/数组→`cdata`（`char*`→`string`）、未知值类型→`any`（零误报）；未知构造记 `-- skipped`，两产物恒可解析（`--check`/shim 内建校验；`unsigned` 等词法边界已回归；`examples/c` 由同步测试锁死，改 `.h` 不重跑即红）。
 
 ## 16. 跨语言库（C ABI 为最大公约数，require + .d.tl 为统一口）
 

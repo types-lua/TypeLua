@@ -49,7 +49,7 @@ go build -o tlua ./cmd/tlua
 }
 ```
 
-`target`: `5.4`（默认）或 `5.1`（剥离 `<const>`/`<close>`，LuaJIT 用 5.1）。`types`/`typeRoots` 对标 `tsconfig`：全局 `.d.tl`（只检查不发射）；`tlua bindgen --header foo.h --out types/foo.d.tl` 由 C 头生成契约。
+`target`: `5.4`（默认）或 `5.1`（剥离 `<const>`/`<close>`，LuaJIT 用 5.1）。`types`/`typeRoots` 对标 `tsconfig`：全局 `.d.tl`（只检查不发射）；`tlua bindgen --header foo.h --out types/foo.d.tl --shim foo.tl` 由 C 头一次生成契约与 typed shim（头文件为唯一源）。
 
 ## 语言速览
 
