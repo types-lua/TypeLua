@@ -120,7 +120,7 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 
 ## 7. 编译器
 
-- `tlua.json` 对标 `tsconfig.json`：`compilerOptions.{target,strict,strictNilChecks,noImplicitAny,outDir,rootDir,sourceMap,types,typeRoots}` + `include/exclude/files`。
+- `tlua.json` 对标 `tsconfig.json`：`compilerOptions.{target,strict,strictNilChecks,noImplicitAny,outDir,rootDir,sourceMap,treeShake,types,typeRoots}` + `include/exclude/files`。
   `types` 为 ambient `.d.tl`  allowlist（空 = 全量，类 `tsconfig.types`）；`typeRoots` 默认为 `["types","tlua_modules/@types"]`（缺目录忽略），其下 `*.d.tl` 即使在 `include` 外也参检（从不发射）。
 - 管线：lex → parse（错误恢复）→ check（含宏展开）→ emit，与 `tsc` 同构。
 - 监听：`tlua check/build --watch`（`-w`，另有 `watch` 子命令，`--pollInterval/--debounce` 可调）对标 `tsc --watch`：
@@ -133,6 +133,7 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 - 恢复兜底：残缺 AST 绝不击垮后级——checker/emitter 对空节点宽容（报错已由 parser 记录）。
 - 诊断中超深类型截断显示（8 层括号/`...`，浅消息逐字节不变）。
 - `.d.tl` 只检查不发射；全部参检的 `.d.tl`（`types` 过滤后）一次建成共享父作用域（内置 + 全局），程序文件以子作用域参检：局部遮蔽 ambient 不报 `TL3001`，改名不连带（与内建一致）；`.d.tl` 自身互见（有序共享），`require` 边仍回退 `any`（`.d.tl` 无运行时值）。LSP 单文件模式暂无 ambient（`ffi` 为内建不受影响）。
+- `treeShake`（默认关；`tlua build/watch --treeShake` 或配置）：删除零引用的纯本地函数（`local function f` / 单 `local x = function`，含传递闭包）。永不删除：全局/方法/表赋值、`require`/`import`（副作用）、`return` 可达、多值或带属性（`<const>`/`<close>`）的 locals、类/枚举/宏/类型声明；赋值目标与 `select` 非 `local` 绑定按引用计（宁可漏删）；标签/字段/方法名/类型注解属他命名空间，不计数；未知 AST 节点直接停摇（fail-safe，新语法默认回退到不删）。摇后重算并发 prelude（仅剩死代码 `await` 的文件不带调度器）。陈旧默认 `dist/` 不计入 native 资产（换 `outDir` 不把旧产物吸回新构建；自定义 outDir 请同步加入 `exclude`）。见 `examples/treeshake`（死代码/传递链/递归被删，表方法与回调保留，双构建运行输出一致）。
 
 ## 8. 宏（卫生 AST 宏）
 

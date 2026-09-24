@@ -12,7 +12,7 @@ go build -o tlua ./cmd/tlua
 ./tlua build --watch   # 或 ./tlua watch：监听改动持续增量编译（对标 tsc --watch）
 ```
 
-示例见 `examples/*/`（32 个文件，`tlua check` 全过），规范见 `SPEC.md`（v0.8：§15 FFI/§16 跨语言）。
+示例见 `examples/*/`（33 个文件，`tlua check` 全过），规范见 `SPEC.md`（v0.8：§15 FFI/§16 跨语言）。
 
 | 示例 | 覆盖 |
 |---|---|
@@ -38,6 +38,7 @@ go build -o tlua ./cmd/tlua
 | `ffi` | FFI：`require("ffi")` + `cdata/ctype` + `cdef/load as CLib`（`bindgen` 由 `mylib.h` 生成契约） |
 | `native` | 跨语言：`init.lua` shim 藏差异 + 全局 `.d.tl` 定边界（任意语言经 C ABI 接入） |
 | `c` | C 端到端：`.h/.c` + `build.sh`（gcc）+ `bindgen` 契约 + 一次封装的 typed shim，调用方 `import` 零 cast |
+| `treeshake` | 树摇：死纯函数 `--treeShake` 掉（560→229 字节），输出与默认构建逐字节同行为 |
 
 ## tlua.json
 
@@ -49,7 +50,7 @@ go build -o tlua ./cmd/tlua
 }
 ```
 
-`target`: `5.4`（默认）或 `5.1`（剥离 `<const>`/`<close>`，LuaJIT 用 5.1）。`types`/`typeRoots` 对标 `tsconfig`：全局 `.d.tl`（只检查不发射）；`tlua bindgen --header foo.h --out types/foo.d.tl --shim foo.tl` 由 C 头一次生成契约与 typed shim（头文件为唯一源）。
+`target`: `5.4`（默认）或 `5.1`（剥离 `<const>`/`<close>`，LuaJIT 用 5.1）。`types`/`typeRoots` 对标 `tsconfig`：全局 `.d.tl`（只检查不发射）；`tlua bindgen --header foo.h --out types/foo.d.tl --shim foo.tl` 由 C 头一次生成契约与 typed shim（头文件为唯一源）。`treeShake`（默认关，`build --treeShake`）：删零引用纯本地函数，有副作用的一律保留。
 
 ## 语言速览
 

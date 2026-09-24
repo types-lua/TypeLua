@@ -16,6 +16,7 @@ type CompilerOptions struct {
 	OutDir          string   `json:"outDir"`
 	RootDir         string   `json:"rootDir"`
 	SourceMap       bool     `json:"sourceMap"`
+	TreeShake       bool     `json:"treeShake,omitempty"`
 	Types           []string `json:"types,omitempty"`     // ambient .d.tl allowlist (nil/empty = all)
 	TypeRoots       []string `json:"typeRoots,omitempty"` // extra .d.tl roots (default: types + tlua_modules/@types)
 }
@@ -251,6 +252,11 @@ func (c *Config) ListNativeAssets() ([]string, error) {
 			if info.IsDir() {
 				clean := filepath.Clean(p)
 				if clean == outAbs || strings.HasPrefix(clean+string(os.PathSeparator), outAbs+string(os.PathSeparator)) {
+					return filepath.SkipDir
+				}
+				// Mirror ListFiles: a stale default `dist/` from an older
+				// outDir must never be vacuumed back in as source assets.
+				if rel, err := filepath.Rel(c.Dir, p); err == nil && rel == "dist" {
 					return filepath.SkipDir
 				}
 				if info.Name() == ".git" || info.Name() == "node_modules" {

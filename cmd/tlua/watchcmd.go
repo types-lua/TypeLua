@@ -26,13 +26,15 @@ const (
 
 // cliOverrides are flag values that win over tlua.json on every reload.
 type cliOverrides struct {
-	paths     []string
-	outDir    string
-	target    string
-	sourceMap bool
-	hasOutDir bool
-	hasTarget bool
-	hasSrcMap bool
+	paths        []string
+	outDir       string
+	target       string
+	sourceMap    bool
+	treeShake    bool
+	hasOutDir    bool
+	hasTarget    bool
+	hasSrcMap    bool
+	hasTreeShake bool
 }
 
 func applyOverrides(cfg *config.Config, ov cliOverrides) {
@@ -47,6 +49,9 @@ func applyOverrides(cfg *config.Config, ov cliOverrides) {
 	}
 	if ov.hasSrcMap {
 		cfg.CompilerOptions.SourceMap = ov.sourceMap
+	}
+	if ov.hasTreeShake {
+		cfg.CompilerOptions.TreeShake = ov.treeShake
 	}
 }
 
@@ -356,24 +361,27 @@ func cmdWatch(args []string) error {
 	outDir := fs.String("outDir", "", "output directory")
 	target := fs.String("target", "", "lua target: 5.4 or 5.1")
 	sourceMap := fs.Bool("sourceMap", false, "emit .lua.map source maps")
+	treeShake := fs.Bool("treeShake", false, "drop zero-reference pure local functions")
 	var wf watchFlags
 	bindWatchFlags(fs, &wf)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	resolveWatchFlags(&wf)
-	cfg, cfgPath, err := loadCfgFor(fs.Args(), *outDir, *target, *sourceMap)
+	cfg, cfgPath, err := loadCfgFor(fs.Args(), *outDir, *target, *sourceMap, *treeShake)
 	if err != nil {
 		return err
 	}
 	ov := cliOverrides{
-		paths:     fs.Args(),
-		outDir:    *outDir,
-		target:    *target,
-		sourceMap: *sourceMap,
-		hasOutDir: *outDir != "",
-		hasTarget: *target != "",
-		hasSrcMap: *sourceMap,
+		paths:        fs.Args(),
+		outDir:       *outDir,
+		target:       *target,
+		sourceMap:    *sourceMap,
+		treeShake:    *treeShake,
+		hasOutDir:    *outDir != "",
+		hasTarget:    *target != "",
+		hasSrcMap:    *sourceMap,
+		hasTreeShake: *treeShake,
 	}
 	return runWatch(modeBuild, cfg, cfgPath, ov, wf)
 }

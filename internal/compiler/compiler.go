@@ -108,7 +108,7 @@ func (p *Program) HasErrors() bool {
 func (p *Program) Emit() ([]string, error) {
 	var emitted []string
 	withPrelude := NeedsModPath(p)
-	opt := emitter.Options{Target: p.Cfg.Target()}
+	opt := emitter.Options{Target: p.Cfg.Target(), TreeShake: p.Cfg.CompilerOptions.TreeShake}
 	emittedSet := map[string]bool{}
 	for _, sf := range p.Files {
 		if sf.IsDecl {
@@ -160,7 +160,7 @@ func (p *Program) Emit() ([]string, error) {
 
 // EmitToString is for tests.
 func (p *Program) EmitToString() map[string]string {
-	opt := emitter.Options{Target: p.Cfg.Target()}
+	opt := emitter.Options{Target: p.Cfg.Target(), TreeShake: p.Cfg.CompilerOptions.TreeShake}
 	out := map[string]string{}
 	for _, sf := range p.Files {
 		if sf.IsDecl {

@@ -65,8 +65,8 @@ Usage:
   tlua mod list [--indirect]           list locked modules (direct by default)
   tlua mod graph                       print the locked dependency graph
   tlua check [files...] [--watch] [-w] [--pollInterval ms] [--debounce ms]
-  tlua build [files...] [--outDir dist] [--target 5.4] [--watch] [-w]
-  tlua watch [files...] [--outDir dist] [--target 5.4]
+  tlua build [files...] [--outDir dist] [--target 5.4] [--treeShake] [--watch] [-w]
+  tlua watch [files...] [--outDir dist] [--target 5.4] [--treeShake]
   tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so]
   tlua lsp                          language server over stdio
   tlua version                        print version`)
@@ -121,7 +121,7 @@ print(dist(p, { x = 4, y = 6 }))
 	return nil
 }
 
-func loadCfgFor(paths []string, outDir, target string, sourceMap bool) (*config.Config, string, error) {
+func loadCfgFor(paths []string, outDir, target string, sourceMap, treeShake bool) (*config.Config, string, error) {
 	cwd, _ := os.Getwd()
 	cfgPath := config.FindUp(cwd)
 	var cfg *config.Config
@@ -149,6 +149,9 @@ func loadCfgFor(paths []string, outDir, target string, sourceMap bool) (*config.
 	if sourceMap {
 		cfg.CompilerOptions.SourceMap = true
 	}
+	if treeShake {
+		cfg.CompilerOptions.TreeShake = true
+	}
 	return cfg, cfgPath, nil
 }
 
@@ -160,7 +163,7 @@ func cmdCheck(args []string) error {
 		return err
 	}
 	resolveWatchFlags(&wf)
-	cfg, cfgPath, err := loadCfgFor(fs.Args(), "", "", false)
+	cfg, cfgPath, err := loadCfgFor(fs.Args(), "", "", false, false)
 	if err != nil {
 		return err
 	}
@@ -187,25 +190,28 @@ func cmdBuild(args []string) error {
 	outDir := fs.String("outDir", "", "output directory")
 	target := fs.String("target", "", "lua target: 5.4 or 5.1")
 	sourceMap := fs.Bool("sourceMap", false, "emit .lua.map source maps")
+	treeShake := fs.Bool("treeShake", false, "drop zero-reference pure local functions")
 	var wf watchFlags
 	bindWatchFlags(fs, &wf)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	resolveWatchFlags(&wf)
-	cfg, cfgPath, err := loadCfgFor(fs.Args(), *outDir, *target, *sourceMap)
+	cfg, cfgPath, err := loadCfgFor(fs.Args(), *outDir, *target, *sourceMap, *treeShake)
 	if err != nil {
 		return err
 	}
 	if wf.enabled {
 		return runWatch(modeBuild, cfg, cfgPath, cliOverrides{
-			paths:     fs.Args(),
-			outDir:    *outDir,
-			target:    *target,
-			sourceMap: *sourceMap,
-			hasOutDir: *outDir != "",
-			hasTarget: *target != "",
-			hasSrcMap: *sourceMap,
+			paths:        fs.Args(),
+			outDir:       *outDir,
+			target:       *target,
+			sourceMap:    *sourceMap,
+			treeShake:    *treeShake,
+			hasOutDir:    *outDir != "",
+			hasTarget:    *target != "",
+			hasSrcMap:    *sourceMap,
+			hasTreeShake: *treeShake,
 		}, wf)
 	}
 	p := compiler.NewProgram(cfg)

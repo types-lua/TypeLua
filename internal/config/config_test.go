@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -85,5 +86,31 @@ func TestListNativeAssets(t *testing.T) {
 	}
 	if len(assets) != 2 {
 		t.Fatalf("want init.lua + lib.so, got %v", assets)
+	}
+}
+
+func TestListNativeAssetsSkipsStaleDist(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string) {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("main.tl")
+	write("dist/main.lua") // stale product of an older outDir
+	c := Default(dir)
+	c.CompilerOptions.OutDir = "dist0"
+	assets, err := c.ListNativeAssets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range assets {
+		if strings.Contains(filepath.ToSlash(a), "dist/main.lua") {
+			t.Fatalf("stale default dist/ must not vacuum back in: %v", assets)
+		}
 	}
 }

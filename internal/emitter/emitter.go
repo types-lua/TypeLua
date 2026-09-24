@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/typelua/typelua/internal/ast"
+	"github.com/typelua/typelua/internal/shake"
 	"github.com/typelua/typelua/internal/sourcemap"
 )
 
@@ -13,6 +14,11 @@ import (
 type Options struct {
 	// Target is "5.4" (default) or "5.1". Under 5.1, `<const>`/`<close>` are stripped.
 	Target string
+	// TreeShake drops zero-reference pure local functions
+	// (`local function f`, single `local x = function`). Default false:
+	// shaking runs before concurrency detection, so files whose only
+	// `await` lived in removed code emit no scheduler prelude.
+	TreeShake bool
 }
 
 func DefaultOptions() Options { return Options{Target: "5.4"} }
@@ -30,6 +36,9 @@ func EmitFile(f *ast.File, opt Options) string {
 // scheduler prelude plus a `__tl_run(function() ... end)` chunk wrapper
 // (reentrant, so required modules inherit the caller's task).
 func EmitFileWithMap(f *ast.File, opt Options) (string, []sourcemap.Mapping) {
+	if opt.TreeShake && f != nil {
+		shake.ShakeFile(f)
+	}
 	e := &emitter{opt: opt, line: 1}
 	if f != nil && NeedsConcurrency(f) {
 		e.write(concurrentPrelude)
