@@ -21,6 +21,12 @@ type Options struct {
 	// RequireTypes maps dotted require paths ("a.b.c") to module types
 	// resolved by the driver (nil = every require is any, classic mode).
 	RequireTypes map[string]types.Type
+	// Ambient is an optional parent scope holding builtins + global .d.tl
+	// declarations (like tsconfig types/typeRoots). When nil, the checker
+	// defines builtins in a fresh top scope (classic single-file mode).
+	// When set, the file is checked in a child scope so locals shadow
+	// ambient without DuplicateType errors and rename stays detached.
+	Ambient *Scope
 }
 
 func DefaultOptions() Options {
@@ -275,8 +281,12 @@ func checkFileModule(f *ast.File, opt Options) ([]diag.Diagnostic, *SymIndex, ty
 	c.file = f.Name
 	// Macros expand before checking (definitions erase; idempotent).
 	c.diags = append(c.diags, expand.ExpandFile(f)...)
-	c.scopes = []*Scope{newScope(nil)}
-	c.defineBuiltins(c.cur())
+	if opt.Ambient != nil {
+		c.scopes = []*Scope{newScope(opt.Ambient)}
+	} else {
+		c.scopes = []*Scope{newScope(nil)}
+		c.defineBuiltins(c.cur())
+	}
 	c.Index = &SymIndex{}
 	if f.Block != nil {
 		c.recordScope(c.cur(), f.Block.Span())

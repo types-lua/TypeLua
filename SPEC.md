@@ -1,6 +1,6 @@
-# TypeLua 语言规范 v0.7
+# TypeLua 语言规范 v0.8
 
-TypeLua 是 Lua 的类型超集（对标 TypeScript 之于 JavaScript）：类型注解可擦除，编译产物为地道 Lua（默认 5.4，兼容 5.1/LuaJIT）。`class` 是唯一的例外：它生成小体积元表样板（5.1 兼容）。
+TypeLua 是 Lua 的类型超集（对标 TypeScript 之于 JavaScript）：类型注解可擦除，编译产物为地道 Lua（默认 5.4，兼容 5.1/LuaJIT）。`class` 是唯一的例外：它生成小体积元表样板（5.1 兼容）。v0.8 新增 FFI/跨语言（`cdata/ctype` + `require("ffi")` 精确类型 + 全局 `.d.tl` + `bindgen` + native 资产透传）。
 
 ## 1. 设计原则（参考 TypeScript）
 
@@ -13,7 +13,7 @@ TypeLua 是 Lua 的类型超集（对标 TypeScript 之于 JavaScript）：类�
 
 ```
 T ::= any | unknown | never | void | nil
-    | boolean | number | integer | float | string | table | function | thread | userdata
+    | boolean | number | integer | float | string | table | function | thread | userdata | cdata | ctype
     | "lit" | 42 | true | false        -- 字面量类型
     | Ident<T,...>                     -- 具名/泛型实例（含 map<K,V>, Array<T>）
     | T[]                              -- 数组
@@ -120,7 +120,8 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 
 ## 7. 编译器
 
-- `tlua.json` 对标 `tsconfig.json`：`compilerOptions.{target,strict,strictNilChecks,noImplicitAny,outDir,rootDir,sourceMap}` + `include/exclude/files`。
+- `tlua.json` 对标 `tsconfig.json`：`compilerOptions.{target,strict,strictNilChecks,noImplicitAny,outDir,rootDir,sourceMap,types,typeRoots}` + `include/exclude/files`。
+  `types` 为 ambient `.d.tl`  allowlist（空 = 全量，类 `tsconfig.types`）；`typeRoots` 默认为 `["types","tlua_modules/@types"]`（缺目录忽略），其下 `*.d.tl` 即使在 `include` 外也参检（从不发射）。
 - 管线：lex → parse（错误恢复）→ check（含宏展开）→ emit，与 `tsc` 同构。
 - 监听：`tlua check/build --watch`（`-w`，另有 `watch` 子命令，`--pollInterval/--debounce` 可调）对标 `tsc --watch`：
   监听集 = `ListFiles` 结果 + `tlua.json`/`tlua.toml`/`tlua.lock`，`outDir` 下恒不监听（发射永不自触发）；
@@ -131,7 +132,7 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 - 嵌套上限 256 层（表达式/类型/块分别计数），超限报 `TL2015` 并截断恢复；`?` 与条件分支的歧义由推测性前瞻消解（`? True :` 归条件，否则归可选）。
 - 恢复兜底：残缺 AST 绝不击垮后级——checker/emitter 对空节点宽容（报错已由 parser 记录）。
 - 诊断中超深类型截断显示（8 层括号/`...`，浅消息逐字节不变）。
-- `.d.tl` 只检查不发射。
+- `.d.tl` 只检查不发射；全部参检的 `.d.tl`（`types` 过滤后）一次建成共享父作用域（内置 + 全局），程序文件以子作用域参检：局部遮蔽 ambient 不报 `TL3001`，改名不连带（与内建一致）；`.d.tl` 自身互见（有序共享），`require` 边仍回退 `any`（`.d.tl` 无运行时值）。LSP 单文件模式暂无 ambient（`ffi` 为内建不受影响）。
 
 ## 8. 宏（卫生 AST 宏）
 
@@ -286,3 +287,35 @@ await main()
 - 限制：`select` 守卫不支持除收/发/超时外的任意 `await` 表达式；`spawn`/`select` 内定义的局部量遵循 Lua 闭包规则；`for v in ch:iter() do` 在 `--target 5.1`（含 LuaJIT）下不能等待（yield 不能穿过 for 迭代器；空且未 close 时报清晰运行时错，已缓冲/已 close 的排空照常），`T` 含 `nil` 时会在 nil 元素处提前停止（改用 `recv` + `ok`）；调度器空闲等待用 `os.clock` 自旋（无 I/O 多路复用，长超时会烧 CPU，属 MVP 取舍；无 `os.clock` 时退化为调用计数以免死循环）；`coroutine.yield` 裸调被当作让步重排（容忍，不推荐）；`pcall`/`xpcall` 包裹阻塞调用在 5.1 下会失败（yield 不能穿过 pcall，让挂起点远离 pcall）。
 - 诊断码：`TL38xx` 并发（`TL3801` await 越界、`TL3802` select 越界、`TL3803` makeChan 缺实参/容量、`TL3804` select 守卫、`TL3805` 同步上下文调 async）。
 - `async`/`await`/`spawn`/`select`/`case`/`default` 均为软关键字：`local await = 1`、`await(x)`、`spawn(x)`、`select("#", ...)`、`local spawn = 1` 保持原 Lua 语义（`go` 则无任何特殊含义，一直是普通标识符）；`await` 操作数不起首于 `(`（`await (x)` 恒为调用，括号表达式请先取名）。
+
+## 15. FFI（LuaJIT C ABI，任意语言经 C 接入）
+
+```lua
+local ffi = require("ffi")              -- 精确类型，无需 as（被遮蔽时回退 any）
+ffi.cdef[[ int add(int a, int b); ]]     -- C 声明不透明，发射透传
+type CLib = { add(a: integer, b: integer): integer }
+local C = ffi.load("mylib") as CLib
+local n: number = C.add(1, 2)
+local buf: cdata = ffi.new("char[?]", 64)
+local ct: ctype = ffi.typeof("int")
+```
+
+- 基元 `cdata`/`ctype` 与 `userdata` 互不兼容（混用报 `TL3010`，可疑转换报 `TL3204`，与现有转换检查同例）。
+- `require("ffi")`/`import F from "ffi"` 特判为精确模块：`cdef(string): void`、`load(name, global?): any`（调用方 `as` 自家 `CLib`）、`new/cast/gc/string/copy/fill/istype/sizeof/alignof/offsetof/metatype/errno` 精确首参、`C/os/arch/abi` 宽松。被局部 `require` 遮蔽时整体回退 `any`（旧代码零误报）。
+- 类型恒可用（`--target 5.4` 下亦可检查），运行时需 LuaJIT（`--target 5.1`）；`cdef` 字符串永不解析（C 侧由作者保证），类型边界一律手写 `as`（与 `modules`/`stdlib` 同惯例）。
+- `tlua bindgen --header foo.h --out types/foo.d.tl [--lib CLib]` 从 C 头子集生成契约：`struct`→`type`、`enum`→`enum`、原型→`interface <Lib>` 方法、`#define` 整数/字符串→接口字段、指针/数组→`cdata`（`char*`→`string`）、未知值类型→`any`（零误报）；未知构造记 `-- skipped`，输出恒可解析（`--check` 强制校验；`unsigned` 等词法边界已回归）。
+
+## 16. 跨语言库（C ABI 为最大公约数，require + .d.tl 为统一口）
+
+```lua
+-- 作者交两样：init.lua（HOW）+ .d.tl（WHAT），调用方只认 require + as。
+local M = require("native_shim") as NativeLib
+print(M.native_add(20, 22))
+```
+
+- 三形态坍缩为一口：`A.Lua C Module(luaopen_*)`、`B.FFI直调(ffi.load/cdef)`、`C.Shim进程(IPC/wasm)` 皆由 shim 藏起差异（`examples/native/native_shim.lua` 为 B 式最小样板）。
+- 优雅形态（推荐，见 `examples/c`）：`.h` 为唯一源、`bindgen` 生成 `.d.tl`、一次封装的 **TypeLua shim**（`mylib.tl` 内做 `cdef` + `ffi.load` + 唯一 `as`，末尾 `return M`），调用方 `import C from "mylib"` 零 cast——模块类型由 `return M` 推断直达（`require` 按引用文件同目录优先消解）。`.so` 与 shim 同目录（源码与 `dist` 同布局），shim 内以 `debug.getinfo` 定脚本目录拼绝对路径 `ffi.load`（`ffi.load` 不走 `package.cpath`）。
+- 包即普通 git 包：`*.tl（含.d.tl)` + `*.lua` shim + `*.so/*.dylib/*.dll` 同进 `tlua_modules/<path>/`（`mod vendor` 已透传三类，头文件/文档留缓存）；`tlua.lock` 的 commit 即 pin（大二进制进 git 为 MVP 取舍，未来加 artifact hash）。
+- 构建集成：`build` 按布局拷贝静态资产到 `dist`（`.tl` 发射优先，同名 `.lua` 跳过；删源的 native 残留需 `clean`，`watch`  stale 清理仅管 `.tl` 产物）；运行时 prelude 置 `package.path` 与 `package.cpath`（脚本目录优先，用户项保留）+ 点式 vendor searcher（仅 `.lua`，点式 `.so` 无 shim 不支持——按约必须配 `init.lua`）。
+- 监听集 = `ListFiles`（含 `typeRoots` 的 `.d.tl`）+ `ListNativeAssets`（`.lua/.so` 改动亦重编）+ `tlua.json/toml/lock`；`outDir` 恒不监听。
+- 限制：LSP 暂无 ambient（多文件工程以 `tlua check` 为准）；`.d.tl` 的 `require` 边恒 `any`（声明文件无运行时值）；`select/pcall` 穿 `yield` 等 §14 限制对 FFI 回调同样适用。

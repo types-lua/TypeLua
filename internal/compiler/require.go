@@ -2,9 +2,12 @@ package compiler
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/typelua/typelua/internal/ast"
 	"github.com/typelua/typelua/internal/checker"
+	"github.com/typelua/typelua/internal/config"
 	"github.com/typelua/typelua/internal/mod"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -111,14 +114,27 @@ func (p *Program) resolveRequire(from *SourceFile, dotted string) *SourceFile {
 // checkAll checks every file in dependency order, feeding each file the
 // module types of its requirements. Files check exactly once; cycles and
 // missing targets degrade to `any` for the affected edge only.
+//
+// Ambient .d.tl files (filtered by `types` allowlist) are checked once up
+// front into a shared parent scope (builtins + globals, like tsconfig
+// types); program files then check as children so shadowing stays detached.
 func (p *Program) checkAll(opt checker.Options) {
 	const (
 		unvisited = 0
 		busy      = 1
 		done      = 2
 	)
+	ambient := p.buildAmbient(opt)
 	state := map[*SourceFile]int{}
 	modTy := map[*SourceFile]types.Type{}
+	// Decl files contribute only ambient (checked once above); they never
+	// carry a runtime module type, preserving the classic any-fallback.
+	for _, sf := range p.Files {
+		if sf.IsDecl {
+			state[sf] = done
+			modTy[sf] = types.Any
+		}
+	}
 	var checkOne func(sf *SourceFile)
 	checkOne = func(sf *SourceFile) {
 		if state[sf] == done {
@@ -140,6 +156,7 @@ func (p *Program) checkAll(opt checker.Options) {
 		}
 		fileOpt := opt
 		fileOpt.RequireTypes = env
+		fileOpt.Ambient = ambient
 		ds, _, mt := checker.CheckFileModule(sf.File, fileOpt)
 		p.Diags = append(p.Diags, ds...)
 		modTy[sf] = mt
@@ -148,4 +165,27 @@ func (p *Program) checkAll(opt checker.Options) {
 	for _, sf := range p.Files {
 		checkOne(sf)
 	}
+}
+
+// buildAmbient checks global .d.tl files once into a shared parent scope.
+// Returns nil when no ambient decls participate (classic isolated mode).
+func (p *Program) buildAmbient(opt checker.Options) *checker.Scope {
+	var decls []*ast.File
+	allow := p.Cfg.AmbientTypes()
+	for _, sf := range p.Files {
+		if !sf.IsDecl || sf.File == nil {
+			continue
+		}
+		if !config.IsAmbientIncluded(sf.Path, allow) {
+			continue
+		}
+		decls = append(decls, sf.File)
+	}
+	if len(decls) == 0 {
+		return nil
+	}
+	sort.Slice(decls, func(i, j int) bool { return decls[i].Name < decls[j].Name })
+	base, diags := checker.BuildAmbient(decls, opt)
+	p.Diags = append(p.Diags, diags...)
+	return base
 }

@@ -9,13 +9,15 @@ import (
 
 // CompilerOptions mirrors tsconfig.compilerOptions (subset).
 type CompilerOptions struct {
-	Target          string `json:"target"` // "5.4" | "5.1"
-	Strict          *bool  `json:"strict"`
-	StrictNilChecks *bool  `json:"strictNilChecks"`
-	NoImplicitAny   *bool  `json:"noImplicitAny"`
-	OutDir          string `json:"outDir"`
-	RootDir         string `json:"rootDir"`
-	SourceMap       bool   `json:"sourceMap"`
+	Target          string   `json:"target"` // "5.4" | "5.1"
+	Strict          *bool    `json:"strict"`
+	StrictNilChecks *bool    `json:"strictNilChecks"`
+	NoImplicitAny   *bool    `json:"noImplicitAny"`
+	OutDir          string   `json:"outDir"`
+	RootDir         string   `json:"rootDir"`
+	SourceMap       bool     `json:"sourceMap"`
+	Types           []string `json:"types,omitempty"`     // ambient .d.tl allowlist (nil/empty = all)
+	TypeRoots       []string `json:"typeRoots,omitempty"` // extra .d.tl roots (default: types + tlua_modules/@types)
 }
 
 // Config is tlua.json.
@@ -76,6 +78,63 @@ func (c *Config) RootDir() string {
 	return c.CompilerOptions.RootDir
 }
 
+// TypeRoots lists extra ambient type roots (like tsconfig typeRoots).
+// Relative entries resolve against the config directory; missing
+// directories are ignored by ListFiles. Default covers the two
+// conventional locations.
+func (c *Config) TypeRoots() []string {
+	if len(c.CompilerOptions.TypeRoots) > 0 {
+		out := make([]string, 0, len(c.CompilerOptions.TypeRoots))
+		for _, r := range c.CompilerOptions.TypeRoots {
+			if !filepath.IsAbs(r) {
+				r = filepath.Join(c.Dir, r)
+			}
+			out = append(out, r)
+		}
+		return out
+	}
+	return []string{
+		filepath.Join(c.Dir, "types"),
+		filepath.Join(c.Dir, "tlua_modules", "@types"),
+	}
+}
+
+// AmbientTypes returns the `types` allowlist (nil/empty = include all
+// ambient .d.tl files, mirroring tsconfig behavior).
+func (c *Config) AmbientTypes() []string {
+	return c.CompilerOptions.Types
+}
+
+// IsAmbientIncluded reports whether a .d.tl path participates as ambient
+// under the given allowlist. Empty allowlist includes everything.
+func IsAmbientIncluded(path string, allow []string) bool {
+	if len(allow) == 0 {
+		return true
+	}
+	slash := filepath.ToSlash(path)
+	base := filepath.Base(slash) // e.g. foo.d.tl
+	name := strings.TrimSuffix(base, ".d.tl")
+	name = strings.TrimSuffix(name, ".tl")
+	dirBase := filepath.Base(filepath.Dir(slash))
+	for _, t := range allow {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if name == t || dirBase == t {
+			return true
+		}
+		// Conventional layouts: .../@types/<t>/..., .../types/<t>...
+		if strings.Contains(slash, "/@types/"+t+"/") || strings.Contains(slash, "/types/"+t+"/") {
+			return true
+		}
+		if strings.HasSuffix(slash, "/@types/"+t+".d.tl") || strings.HasSuffix(slash, "/types/"+t+".d.tl") {
+			return true
+		}
+	}
+	return false
+}
+
 // Load reads tlua.json at path.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -111,6 +170,8 @@ func FindUp(dir string) string {
 }
 
 // ListFiles resolves files per include/exclude/files.
+// Type roots contribute ambient *.d.tl files even when outside include
+// (like tsconfig typeRoots); missing roots are ignored. Callers dedupe.
 func (c *Config) ListFiles() ([]string, error) {
 	root := filepath.Join(c.Dir, c.RootDir())
 	if len(c.Files) > 0 {
@@ -122,7 +183,7 @@ func (c *Config) ListFiles() ([]string, error) {
 			}
 			out = append(out, p)
 		}
-		return out, nil
+		return append(out, c.listTypeRootDecls(out)...), nil
 	}
 	// Walk root for .tl files.
 	var all []string
@@ -165,9 +226,103 @@ func (c *Config) ListFiles() ([]string, error) {
 				out = append(out, f)
 			}
 		}
-		return out, nil
+		return append(out, c.listTypeRootDecls(out)...), nil
 	}
-	return all, nil
+	return append(all, c.listTypeRootDecls(all)...), nil
+}
+
+// ListNativeAssets lists static cross-language assets (*.lua shims,
+// *.so/*.dylib/*.dll) under RootDir and tlua_modules, excluding outDir.
+// Headers/docs never list; missing dirs are ignored. Used by build Trois
+// passthrough and watch triggering alike so both agree on the input set.
+func (c *Config) ListNativeAssets() ([]string, error) {
+	outAbs := c.OutDir()
+	if !filepath.IsAbs(outAbs) {
+		outAbs = filepath.Join(c.Dir, outAbs)
+	}
+	outAbs = filepath.Clean(outAbs)
+	var out []string
+	seen := map[string]bool{}
+	addWalk := func(root string) {
+		_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				clean := filepath.Clean(p)
+				if clean == outAbs || strings.HasPrefix(clean+string(os.PathSeparator), outAbs+string(os.PathSeparator)) {
+					return filepath.SkipDir
+				}
+				if info.Name() == ".git" || info.Name() == "node_modules" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasPrefix(info.Name(), ".") || !isNativeAssetName(info.Name()) {
+				return nil
+			}
+			clean := filepath.Clean(p)
+			if seen[clean] {
+				return nil
+			}
+			seen[clean] = true
+			out = append(out, p)
+			return nil
+		})
+	}
+	addWalk(filepath.Join(c.Dir, c.RootDir()))
+	vendor := filepath.Join(c.Dir, "tlua_modules")
+	// Vendor outside RootDir needs its own walk (inside is already covered).
+	if filepath.Clean(vendor) != filepath.Clean(filepath.Join(c.Dir, c.RootDir())) {
+		addWalk(vendor)
+	}
+	return out, nil
+}
+
+func isNativeAssetName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".lua") ||
+		strings.HasSuffix(lower, ".so") ||
+		strings.HasSuffix(lower, ".dylib") ||
+		strings.HasSuffix(lower, ".dll")
+}
+
+// listTypeRootDecls finds ambient *.d.tl under typeRoots not already listed.
+// Only declaration files are included (never emitted); excludes apply.
+func (c *Config) listTypeRootDecls(have []string) []string {
+	seen := map[string]bool{}
+	for _, p := range have {
+		seen[filepath.Clean(p)] = true
+	}
+	var out []string
+	for _, root := range c.TypeRoots() {
+		_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				if info.Name() == ".git" || info.Name() == "node_modules" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(p, ".d.tl") {
+				return nil
+			}
+			if seen[filepath.Clean(p)] {
+				return nil
+			}
+			if rel, err := filepath.Rel(c.Dir, p); err == nil {
+				if matchAny(c.Exclude, filepath.ToSlash(rel)) {
+					return nil
+				}
+			}
+			seen[filepath.Clean(p)] = true
+			out = append(out, p)
+			return nil
+		})
+	}
+	return out
 }
 
 func matchAny(patterns []string, rel string) bool {

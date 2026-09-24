@@ -12,7 +12,7 @@ go build -o tlua ./cmd/tlua
 ./tlua build --watch   # 或 ./tlua watch：监听改动持续增量编译（对标 tsc --watch）
 ```
 
-示例见 `examples/*/`（26 个文件，`tlua check` 全过），规范见 `SPEC.md`。
+示例见 `examples/*/`（32 个文件，`tlua check` 全过），规范见 `SPEC.md`（v0.8：§15 FFI/§16 跨语言）。
 
 | 示例 | 覆盖 |
 |---|---|
@@ -35,18 +35,21 @@ go build -o tlua ./cmd/tlua
 | `pkgs` | 包管理：直接 + 间接依赖、`replace` 本地替换、vendor（离线可验） |
 | `defer` | `defer`/`errdefer`：LIFO 清理、正常返回与显式 `error()` 分流 |
 | `concurrent` | 并发：`async/await` + `spawn` + `chan<T>` + `select`/`default`/超时 + `WaitGroup`/`Mutex`（单线程协作 CSP，真机运行验证） |
+| `ffi` | FFI：`require("ffi")` + `cdata/ctype` + `cdef/load as CLib`（`bindgen` 由 `mylib.h` 生成契约） |
+| `native` | 跨语言：`init.lua` shim 藏差异 + 全局 `.d.tl` 定边界（任意语言经 C ABI 接入） |
+| `c` | C 端到端：`.h/.c` + `build.sh`（gcc）+ `bindgen` 契约 + 一次封装的 typed shim，调用方 `import` 零 cast |
 
 ## tlua.json
 
 ```json
 {
-  "compilerOptions": { "target": "5.4", "strict": true, "outDir": "dist", "rootDir": "." },
+  "compilerOptions": { "target": "5.4", "strict": true, "outDir": "dist", "rootDir": ".", "types": [], "typeRoots": ["types", "tlua_modules/@types"] },
   "include": ["**/*.tl"],
   "exclude": ["dist"]
 }
 ```
 
-`target`: `5.4`（默认）或 `5.1`（剥离 `<const>`/`<close>`）。
+`target`: `5.4`（默认）或 `5.1`（剥离 `<const>`/`<close>`，LuaJIT 用 5.1）。`types`/`typeRoots` 对标 `tsconfig`：全局 `.d.tl`（只检查不发射）；`tlua bindgen --header foo.h --out types/foo.d.tl` 由 C 头生成契约。
 
 ## 语言速览
 

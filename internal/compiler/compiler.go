@@ -103,10 +103,13 @@ func (p *Program) HasErrors() bool {
 // Emit writes .lua outputs to outDir. Returns emitted paths. Skips .d.tl and `declare` bodies.
 // Type-only decls are erased by the emitter; `declare function` empty bodies are skipped at file level?
 // For safety, we emit every non-decl file (even empty) to preserve build shape.
+// Native assets (*.lua shims, *.so/*.dylib/*.dll) are then copied preserving
+// layout so vendored cross-language bindings run without manual steps.
 func (p *Program) Emit() ([]string, error) {
 	var emitted []string
 	withPrelude := NeedsModPath(p)
 	opt := emitter.Options{Target: p.Cfg.Target()}
+	emittedSet := map[string]bool{}
 	for _, sf := range p.Files {
 		if sf.IsDecl {
 			continue
@@ -146,8 +149,13 @@ func (p *Program) Emit() ([]string, error) {
 			return emitted, err
 		}
 		emitted = append(emitted, dst)
+		emittedSet[filepath.Clean(dst)] = true
 	}
-	return emitted, nil
+	assets, err := p.emitNativeAssets(emittedSet)
+	if err != nil {
+		return emitted, err
+	}
+	return append(emitted, assets...), nil
 }
 
 // EmitToString is for tests.

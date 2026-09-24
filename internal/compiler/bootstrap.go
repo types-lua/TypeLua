@@ -11,12 +11,17 @@ import (
 )
 
 // Runtime module bootstrap: compiled programs that require modules must
-// run without manual LUA_PATH setup. Every emitted file of such a program
-// gets this prelude (once per process, guarded). It does two things:
+// run without manual LUA_PATH/LUA_CPATH setup. Every emitted file of such
+// a program gets this prelude (once per process, guarded). It does three
+// things:
 //
 //  1. Prepend <script-dir>/?.lua and <script-dir>/?/init.lua to
 //     package.path, so requires resolving to sibling outputs just work.
-//  2. Append a package.searchers (5.2+) / package.loaders (5.1) entry that
+//  2. Prepend <script-dir> native templates to package.cpath so Lua C
+//     modules (luaopen_*, any language via C ABI) load without manual
+//     setup. FFI plain .so files need no cpath: the vendored init.lua shim
+//     loads them via ffi.load with an explicit script-dir-relative path.
+//  3. Append a package.searchers (5.2+) / package.loaders (5.1) entry that
 //     serves dotted vendor layouts (<script-dir>/tlua_modules/<dotted
 //     path>.lua and .../init.lua), which plain path templates cannot reach
 //     (Lua converts dots to slashes before template substitution).
@@ -25,11 +30,13 @@ import (
 // them (all-slashes first, then progressively dot-preserving), and the
 // searcher runs after the standard loaders, so in-project files keep
 // precedence over vendored ones — exactly like check-time resolution.
+// Native packages must ship an init.lua shim (the cross-language contract);
+// dotted .so layouts without a shim stay unsupported by design.
 //
 // The prelude is Lua 5.1-safe (no goto, no //, no bitwise ops, no <const>)
 // and defensive: missing debug/package libraries degrade instead of
-// erroring. User LUA_PATH entries keep working: we prepend/append, never
-// replace. The `__tl_` prefix is reserved (see SPEC §12); never use it.
+// erroring. User LUA_PATH/LUA_CPATH entries keep working: we prepend/append,
+// never replace. The `__tl_` prefix is reserved (see SPEC §12); never use it.
 const modPathPrelude = `if not __tl_modpath_done then
   __tl_modpath_done = true
   local __tl_src = ""
@@ -47,6 +54,9 @@ const modPathPrelude = `if not __tl_modpath_done then
   local __tl_dir = __tl_src:match("^(.*[/\\])") or "./"
   if package then
     package.path = __tl_dir .. "?.lua;" .. __tl_dir .. "?/init.lua;" .. (package.path or "")
+    if package.cpath then
+      package.cpath = __tl_dir .. "?.so;" .. __tl_dir .. "?/?.so;" .. __tl_dir .. "?.dll;" .. __tl_dir .. "?.dylib;" .. (package.cpath or "")
+    end
     local __tl_searchers = package.searchers or package.loaders
     if __tl_searchers then
       table.insert(__tl_searchers, function(__tl_name)

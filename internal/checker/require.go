@@ -37,12 +37,17 @@ func unquoteModulePath(sl *ast.StringLit) (string, bool) {
 }
 
 // requirePathType resolves a require path literal through RequireTypes
-// (Any when unresolved or shadowed).
+// (Any when unresolved or shadowed). `require("ffi")` is special-cased to
+// the precise LuaJIT FFI module so cross-language C-ABI bindings typecheck
+// without a cast on the require itself (callers still `as` their CLib).
 func (c *Checker) requirePathType(lit *ast.StringLit) types.Type {
+	name, ok := unquoteModulePath(lit)
+	if ok && name == "ffi" && !isShadowedRequire(c) {
+		return c.ffiModule()
+	}
 	if isShadowedRequire(c) || len(c.opt.RequireTypes) == 0 {
 		return types.Any
 	}
-	name, ok := unquoteModulePath(lit)
 	if !ok {
 		return types.Any
 	}

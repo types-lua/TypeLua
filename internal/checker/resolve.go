@@ -108,10 +108,14 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 			return types.Table
 		case "thread":
 			return types.Thread
-		case "userdata":
-			return types.Userdata
-		case "function":
-			return types.Function
+    case "userdata":
+      return types.Userdata
+    case "cdata":
+      return types.Cdata
+    case "ctype":
+      return types.Ctype
+    case "function":
+      return types.Function
 		}
 	}
 	// Qualified names: not supported in v1 (modules).

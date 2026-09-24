@@ -17,9 +17,11 @@ var (
 	Float    = &Primitive{KFloat, "float"}
 	String   = &Primitive{KString, "string"}
 	Table    = &Primitive{KTable, "table"}
-	Thread   = &Primitive{KThread, "thread"}
-	Userdata = &Primitive{KUserdata, "userdata"}
-	Function = &Primitive{KFunction, "function"}
+  Thread   = &Primitive{KThread, "thread"}
+  Userdata = &Primitive{KUserdata, "userdata"}
+  Cdata    = &Primitive{KCdata, "cdata"}
+  Ctype    = &Primitive{KCtype, "ctype"}
+  Function = &Primitive{KFunction, "function"}
 )
 
 // Literal is a string/number/boolean literal type.

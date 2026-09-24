@@ -14,10 +14,12 @@ const (
 	KInteger
 	KFloat
 	KString
-	KTable
-	KThread
-	KUserdata
-	KFunction
+  KTable
+  KThread
+  KUserdata
+  KCdata
+  KCtype
+  KFunction
 	KLiteral
 	KUnion
 	KIntersection

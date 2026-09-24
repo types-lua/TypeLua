@@ -42,6 +42,8 @@ func run(args []string) error {
 		return cmdBuild(args[1:])
 	case "watch":
 		return cmdWatch(args[1:])
+	case "bindgen":
+		return cmdBindgen(args[1:])
 	case "lsp":
 		os.Exit(lsp.Run(os.Stdin, os.Stdout, Version))
 		return nil
@@ -65,6 +67,7 @@ Usage:
   tlua check [files...] [--watch] [-w] [--pollInterval ms] [--debounce ms]
   tlua build [files...] [--outDir dist] [--target 5.4] [--watch] [-w]
   tlua watch [files...] [--outDir dist] [--target 5.4]
+  tlua bindgen --header foo.h --out types/foo.d.tl [--lib CLib]
   tlua lsp                          language server over stdio
   tlua version                        print version`)
 }
