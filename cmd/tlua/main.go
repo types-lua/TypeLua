@@ -40,6 +40,8 @@ func run(args []string) error {
 		return cmdCheck(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
+	case "run":
+		return cmdRun(args[1:])
 	case "watch":
 		return cmdWatch(args[1:])
 	case "bindgen":
@@ -65,7 +67,8 @@ Usage:
   tlua mod list [--indirect]           list locked modules (direct by default)
   tlua mod graph                       print the locked dependency graph
   tlua check [files...] [--watch] [-w] [--pollInterval ms] [--debounce ms]
-  tlua build [files...] [--outDir dist] [--target 5.4] [--treeShake] [--watch] [-w]
+   tlua build [files...] [--outDir dist] [--target 5.4] [--treeShake] [--watch] [-w]
+   tlua run <entry.tl> [-- args...] [--check] [--lua BIN] [--target 5.4]
   tlua watch [files...] [--outDir dist] [--target 5.4] [--treeShake]
   tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so]
   tlua lsp                          language server over stdio

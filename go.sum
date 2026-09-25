@@ -1,0 +1,4 @@
+github.com/arnodel/golua v0.3.0 h1:4I8NslwaS9qyOQAH78i9BsiqTYMlCt0PHEkfZGrcogw=
+github.com/arnodel/golua v0.3.0/go.mod h1:eGGXpsuFME3WM1f/9DUQx54oEzQrC/BwgyST+lj2q0I=
+github.com/arnodel/strftime v0.1.6 h1:0hc0pUvk8KhEMXE+htyaOUV42zNcf/csIbjzEFCJqsw=
+github.com/arnodel/strftime v0.1.6/go.mod h1:5NbK5XqYK8QpRZpqKNt4OlxLtIB8cotkLk4KTKzJfWs=

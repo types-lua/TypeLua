@@ -10,6 +10,7 @@ go build -o tlua ./cmd/tlua
 ./tlua check
 ./tlua build   # -> dist/*.lua
 ./tlua build --watch   # 或 ./tlua watch：监听改动持续增量编译（对标 tsc --watch）
+./tlua run main.tl [args...]  # 直接运行：默认只解析不卡类型，内嵌 golua，无需安装 lua
 ```
 
 示例见 `examples/*/`（33 个文件，`tlua check` 全过），规范见 `SPEC.md`（v0.8：§15 FFI/§16 跨语言）。
@@ -52,6 +53,18 @@ go build -o tlua ./cmd/tlua
 
 `target`: `5.4`（默认）或 `5.1`（剥离 `<const>`/`<close>`，LuaJIT 用 5.1）。`types`/`typeRoots` 对标 `tsconfig`：全局 `.d.tl`（只检查不发射）；`tlua bindgen --header foo.h --out types/foo.d.tl --shim foo.tl` 由 C 头一次生成契约与 typed shim（头文件为唯一源）。`treeShake`（默认关，`build --treeShake`）：删零引用纯本地函数，有副作用的一律保留。
 
+## tlua run（直接运行，不留编译产物）
+
+```bash
+./tlua run main.tl -- arg1 arg2   # 内嵌 golua 运行，脚本参数经 arg[1..] 透传（arg[0] 为脚本名）
+./tlua run --check main.tl        # 先完整类型检查，报错即停（默认只拦语法错误，类型错误照跑）
+./tlua run --lua lua5.4 main.tl   # 用外部解释器（lua5.4/luajit…），等价于 lua dist/main.lua
+./tlua run --target 5.1 main.tl   # 目标版本默认和 build 一致（tlua.json，无则 5.4）
+```
+
+- 默认内嵌 `golua`（纯 Go 实现，零外部依赖）：转译结果写入临时目录后在进程内执行，退出自动清理；多文件 `require`、包自举（`package.path` 前缀 + 点式 vendor searcher）、`concurrent` 调度器照常工作；工程外的单文件自动退化为单文件程序。
+- 限制：内嵌模式跑不了 `require("ffi")` 与 `.so/.dll` C 模块（golua 无 C 模块加载器）——这类工程用 `--lua luajit`（配 `--target 5.1`）。
+
 ## 语言速览
 
 ```lua
@@ -79,7 +92,7 @@ local d = Dog.new("rex")
 - `internal/types,checker`：结构子类型/泛型推断/窄化
 - `internal/emitter,config,compiler`：擦除发射 + `tlua.json` + 管线
 - `internal/toml,mod`：TOML 子集 + 去中心化包管理（manifest/lock/MVS/git 拉取/缓存/vendor）
-- `cmd/tlua`：`init/check/build/version/lsp`（stdio 语言服务器：诊断/悬停/定义/补全/引用/重命名，增量同步）；
+- `cmd/tlua`：`init/check/build/run/version/lsp`（stdio 语言服务器：诊断/悬停/定义/补全/引用/重命名，增量同步）；
   `check/build --watch`（及 `watch` 子命令）：轮询 + 去抖的持续编译，改动（含新增/删除/`tlua.json`）自动重编，删源自动清陈旧产物，坏配置/单轮崩溃不退出
 
 ## 质量
