@@ -1,12 +1,13 @@
---- LevelDB end-to-end: typed wrapper over FFI (LuaJIT runtime).
---- Build the libs: sh build.sh (needs /home/tang/leveldb, cmake+gcc).
---- Check: tlua check. Run (LuaJIT): luajit dist/examples/leveldb/main.lua.
+--- LevelDB on stock Lua 5.4: same demo as leveldb-ffi/main.tl, but
+--- through the C module (lvl54.c -> leveldb54.so, luaopen_leveldb54).
+--- Build: sh build.sh (needs lua5.4 headers + /home/tang/leveldb).
+--- Check: tlua check. Run: lua5.4 dist/examples/leveldb-54/main.lua.
 
-import DB from "leveldb"
+import DB: LevelDB54 from "leveldb54"
 
 local function main(): void
   print("leveldb major version:", DB.version())
-  local path = "leveldb_demo.db"
+  local path = "leveldb_demo54.db"
   -- Fresh start on every run (ignore "does not exist" on first run).
   DB.destroy(path)
   local db, openErr = DB.open(path)

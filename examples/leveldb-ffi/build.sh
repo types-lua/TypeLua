@@ -1,10 +1,11 @@
 #!/bin/sh
-# Build the leveldb example libraries (needs gcc/cmake; runtime needs LuaJIT).
-# LevelDB itself lives at /home/tang/leveldb (clone, v1.23); override with:
-#   LEVELDB_SRC=/path/to/leveldb sh build.sh
-# Copies the shared library (ffi.load at runtime) and the static archive
-# (.a passthrough artifact) next to the example. Regenerate the contract
-# after editing leveldb.h:
+# Build the LevelDB FFI example libraries (needs gcc/cmake; runtime needs
+# LuaJIT). LevelDB itself lives at /home/tang/leveldb (clone, v1.23);
+# override with: LEVELDB_SRC=/path/to/leveldb sh build.sh
+# Products (all stay local, never committed):
+#   libleveldb.so — loaded by the FFI shim (leveldb_raw.tl) via ffi.load.
+#   libleveldb.a  — static passthrough artifact (native .a support).
+# Regenerate the contract after editing leveldb.h:
 #   tlua bindgen --header leveldb.h --out leveldb_raw.d.tl --shim leveldb_raw.tl --lib LevelDBRaw
 set -e
 cd "$(dirname "$0")"

@@ -13,7 +13,7 @@ go build -o tlua ./cmd/tlua
 ./tlua run main.tl [args...]  # 直接运行：默认只解析不卡类型，内嵌 golua，无需安装 lua
 ```
 
-示例见 `examples/*/`（37 个文件，`tlua check` 全过），规范见 `SPEC.md`（v0.8：§15 FFI/§16 跨语言）。
+示例见 `examples/*/`（39 个文件，`tlua check` 全过），规范见 `SPEC.md`（v0.8：§15 FFI/§16 跨语言）。
 
 | 示例 | 覆盖 |
 |---|---|
@@ -39,7 +39,8 @@ go build -o tlua ./cmd/tlua
 | `ffi` | FFI：`require("ffi")` + `cdata/ctype` + `cdef/load as CLib`（`bindgen` 由 `mylib.h` 生成契约） |
 | `native` | 跨语言：`init.lua` shim 藏差异 + 全局 `.d.tl` 定边界（任意语言经 C ABI 接入） |
 | `c` | C 端到端：`.h/.c` + `build.sh`（gcc）+ `bindgen` 契约 + 一次封装的 typed shim，调用方 `import` 零 cast |
-| `leveldb` | 真实 C 库端到端：`leveldb.h` 精简子集 + `bindgen` 契约/raw shim + 手写安全 wrapper（errptr/所有权/迭代器全收敛）+ `build.sh`（cmake，由 `/home/tang/leveldb` 产出 `.so` 直接跑 + `.a` 透传；真机运行验证，含 NUL 二进制探针） |
+| `leveldb-ffi` | 真实 C 库端到端（LuaJIT）：`leveldb.h` 精简子集 + `bindgen` 契约/raw shim + 手写安全 wrapper（errptr/所有权/迭代器全收敛）+ `build.sh`（cmake，由 `/home/tang/leveldb` 产出 `.so` 直接跑 + `.a` 透传；真机运行验证，含 NUL 二进制探针） |
+| `leveldb-54` | 同一演示的原生 5.4 形态：`lvl54.c` → `leveldb54.so`（`luaopen_leveldb54`，静态嵌入，自包含）+ 手写契约 + `main.tl`（`lua5.4 dist/examples/leveldb-54/main.lua`，输出与 LuaJIT 一致） |
 | `treeshake` | 树摇：死纯函数 `--treeShake` 掉（560→229 字节），输出与默认构建逐字节同行为 |
 
 ## tlua.json
