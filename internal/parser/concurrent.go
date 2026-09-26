@@ -47,13 +47,13 @@ func (p *Parser) parseAsyncFuncLit(isMethod bool) *ast.FuncLit {
 	// Optional generics on anonymous async functions.
 	var fgen []*ast.GenericParam
 	if p.at(token.Lt) {
-		save := p.pos
+		save := p.saveCursor()
 		nd := len(p.diags)
 		g := p.parseGenericParams()
 		if g != nil && p.at(token.LParen) {
 			fgen = g
 		} else {
-			p.pos = save
+			p.restoreCursor(save)
 			p.diags = p.diags[:nd]
 		}
 	}
@@ -67,13 +67,13 @@ func (p *Parser) parseAsyncFuncLit(isMethod bool) *ast.FuncLit {
 	p.next() // function
 	var fgen2 []*ast.GenericParam
 	if p.at(token.Lt) {
-		save := p.pos
+		save := p.saveCursor()
 		nd := len(p.diags)
 		g := p.parseGenericParams()
 		if g != nil && p.at(token.LParen) {
 			fgen2 = g
 		} else {
-			p.pos = save
+			p.restoreCursor(save)
 			p.diags = p.diags[:nd]
 		}
 	}
@@ -99,13 +99,13 @@ func (p *Parser) parseAsyncGlobal() ast.Stmt {
 	}
 	var generics []*ast.GenericParam
 	if p.at(token.Lt) {
-		save := p.pos
+		save := p.saveCursor()
 		nd := len(p.diags)
 		g := p.parseGenericParams()
 		if g != nil && p.at(token.LParen) {
 			generics = g
 		} else {
-			p.pos = save
+			p.restoreCursor(save)
 			p.diags = p.diags[:nd]
 		}
 	}
@@ -128,13 +128,13 @@ func (p *Parser) parseAsyncLocalFunc(start token.Token) ast.Stmt {
 	}
 	var generics []*ast.GenericParam
 	if p.at(token.Lt) {
-		save := p.pos
+		save := p.saveCursor()
 		nd := len(p.diags)
 		g := p.parseGenericParams()
 		if g != nil && p.at(token.LParen) {
 			generics = g
 		} else {
-			p.pos = save
+			p.restoreCursor(save)
 			p.diags = p.diags[:nd]
 		}
 	}
@@ -243,13 +243,13 @@ func (p *Parser) parseSpawn() ast.Stmt {
 			p.next() // function
 			var fgen []*ast.GenericParam
 			if p.at(token.Lt) {
-				save := p.pos
+				save := p.saveCursor()
 				nd := len(p.diags)
 				g := p.parseGenericParams()
 				if g != nil && p.at(token.LParen) {
 					fgen = g
 				} else {
-					p.pos = save
+					p.restoreCursor(save)
 					p.diags = p.diags[:nd]
 				}
 			}
@@ -521,7 +521,7 @@ func (p *Parser) parseSelectCase() *ast.SelectCase {
 // tryParseSelectRecvAssign tries `v = ch:recv()` / `v, ok = ch:recv()`
 // (up to 2 idents). Returns true and fills sc on success; rewinds otherwise.
 func (p *Parser) tryParseSelectRecvAssign(sc *ast.SelectCase) bool {
-	save := p.pos
+	save := p.saveCursor()
 	nd := len(p.diags)
 	var vars []*ast.Ident
 	if p.cur().Kind != token.Ident && !isSoftKw(p.cur().Kind) {
@@ -534,7 +534,7 @@ func (p *Parser) tryParseSelectRecvAssign(sc *ast.SelectCase) bool {
 	}
 	// `case`/`default`/`then` can never start a recv-assign guard.
 	if lit == "case" || lit == "default" || lit == "then" || lit == "do" || lit == "local" {
-		p.pos = save
+		p.restoreCursor(save)
 		p.diags = p.diags[:nd]
 		return false
 	}
@@ -544,7 +544,7 @@ func (p *Parser) tryParseSelectRecvAssign(sc *ast.SelectCase) bool {
 		// guard exprs starting `ident ,` are rare; rewind to expr parse).
 		p.next()
 		if p.cur().Kind != token.Ident && !isSoftKw(p.cur().Kind) {
-			p.pos = save
+			p.restoreCursor(save)
 			p.diags = p.diags[:nd]
 			return false
 		}
@@ -556,12 +556,12 @@ func (p *Parser) tryParseSelectRecvAssign(sc *ast.SelectCase) bool {
 		vars = append(vars, &ast.Ident{Name: lit2, S: second.Span})
 	}
 	if !p.at(token.Assign) {
-		p.pos = save
+		p.restoreCursor(save)
 		p.diags = p.diags[:nd]
 		return false
 	}
 	if len(vars) > 2 {
-		p.pos = save
+		p.restoreCursor(save)
 		p.diags = p.diags[:nd]
 		return false
 	}
@@ -569,7 +569,7 @@ func (p *Parser) tryParseSelectRecvAssign(sc *ast.SelectCase) bool {
 	recv := p.parseSuffix()
 	mc, ok := recv.(*ast.MethodCallExpr)
 	if !ok || mc.Method.Name != "recv" {
-		p.pos = save
+		p.restoreCursor(save)
 		p.diags = p.diags[:nd]
 		return false
 	}

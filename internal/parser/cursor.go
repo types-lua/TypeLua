@@ -7,11 +7,26 @@ import (
 
 // ---------- cursor helpers ----------
 
+// savedCursor captures the full token-stream position for speculative
+// parses: the index plus any pending split remainders from consumeGt.
+// The pending queue is copied so later splits cannot alias the snapshot.
+type savedCursor struct {
+	pos     int
+	pending []token.Token
+}
+
+func (p *Parser) saveCursor() savedCursor {
+	return savedCursor{pos: p.pos, pending: append([]token.Token(nil), p.pending...)}
+}
+
+func (p *Parser) restoreCursor(s savedCursor) {
+	p.pos = s.pos
+	p.pending = s.pending
+}
+
 func (p *Parser) cur() token.Token {
-	if p.pendingGt > 0 {
-		t := p.toks[p.pos]
-		// Synthesize a > token at current position.
-		return token.Token{Kind: token.Gt, Literal: ">", Span: t.Span}
+	if len(p.pending) > 0 {
+		return p.pending[0]
 	}
 	if p.pos < len(p.toks) {
 		return p.toks[p.pos]
@@ -20,11 +35,10 @@ func (p *Parser) cur() token.Token {
 }
 
 func (p *Parser) peek(n int) token.Token {
-	idx := p.pos + n
-	if p.pendingGt > 0 && n == 0 {
-		return p.cur()
+	if n < len(p.pending) {
+		return p.pending[n]
 	}
-	// pendingGt only affects current; peeks beyond shift by 0 (approx, good enough).
+	idx := p.pos + n - len(p.pending)
 	if idx < len(p.toks) {
 		return p.toks[idx]
 	}
@@ -34,22 +48,10 @@ func (p *Parser) peek(n int) token.Token {
 func (p *Parser) at(k token.Kind) bool { return p.cur().Kind == k }
 
 func (p *Parser) next() token.Token {
-	if p.pendingGt > 0 {
-		t := p.toks[p.pos]
-		p.pendingGt--
-		if p.pendingGt == 0 {
-			// Consumed the first '>'; now consume the original >> token,
-			// but leave one pending '>' if it was >> (we already returned one).
-			// Actually >> represents two '>'s: first returned now, second pending?
-			// Our model: when we see >>, we set pendingGt=1 and return one '>' without advancing.
-			// Hmm simplify below in consumeGt.
-		}
-		_ = t
-		// Return synthesized token; only advance underlying pos when pending exhausted?
-		// We handle advancement in consumeGt; for generic next() just fall through.
-		p.pendingGt = 0
-		p.pos++
-		return token.Token{Kind: token.Gt, Literal: ">", Span: t.Span}
+	if len(p.pending) > 0 {
+		t := p.pending[0]
+		p.pending = p.pending[1:]
+		return t
 	}
 	t := p.cur()
 	if p.pos < len(p.toks) {
@@ -84,32 +86,43 @@ func (p *Parser) spanBetween(start token.Token, end token.Token) token.Span {
 }
 
 // consumeGt consumes a single '>', splitting >> / >= if needed.
+//
+// The token slice is never mutated: the remainder of a split is queued in
+// p.pending (at most two tokens: `>` then `=` for `>=`), so speculative
+// parses restore exactly via saveCursor/restoreCursor. Synthesized tokens
+// reuse the original token's span, matching the old slice-splicing behavior.
 func (p *Parser) consumeGt() bool {
-	c := p.cur()
+	if len(p.pending) > 0 {
+		if p.pending[0].Kind == token.Gt {
+			p.pending = p.pending[1:]
+			return true
+		}
+		c := p.pending[0]
+		p.errorf(diag.ParseExpectedGt, c.Span, "expected '>', got %s", c.Kind)
+		return false
+	}
+	if p.pos >= len(p.toks) {
+		p.errorf(diag.ParseExpectedGt, p.cur().Span, "expected '>', got %s", p.cur().Kind)
+		return false
+	}
+	c := p.toks[p.pos]
 	switch c.Kind {
 	case token.Gt:
-		p.next()
+		p.pos++
 		return true
 	case token.ShiftR:
-		// >> => consume one '>', leave one pending.
-		t := p.toks[p.pos]
+		// >> => consume one '>', queue the other.
 		p.pos++
-		// Push back a synthesized '>' for next call.
-		p.toks = append(p.toks, token.Token{})
-		copy(p.toks[p.pos+1:], p.toks[p.pos:])
-		p.toks[p.pos] = token.Token{Kind: token.Gt, Literal: ">", Span: t.Span}
+		p.pending = append(p.pending, token.Token{Kind: token.Gt, Literal: ">", Span: c.Span})
 		return true
 	case token.Ge:
-		// >= inside generics: treat as '>' then '='? Only valid if default type follows '='.
-		// Split into '>' and '='.
-		t := p.toks[p.pos]
+		// >= inside generics => '>' then '=' (e.g. `F<A>=v` lexed together).
+		// Like the old slice-splicing code, both parts stay pending: the
+		// caller sees '>' next (outer levels eat it), then '='.
 		p.pos++
-		p.toks = append(p.toks, token.Token{}, token.Token{})
-		copy(p.toks[p.pos+2:], p.toks[p.pos:])
-		p.toks[p.pos] = token.Token{Kind: token.Assign, Literal: "=", Span: t.Span}
-		p.toks[p.pos+1] = token.Token{Kind: token.Gt, Literal: ">", Span: t.Span}
-		// We need '>' first; swap.
-		p.toks[p.pos], p.toks[p.pos+1] = p.toks[p.pos+1], p.toks[p.pos]
+		p.pending = append(p.pending,
+			token.Token{Kind: token.Gt, Literal: ">", Span: c.Span},
+			token.Token{Kind: token.Assign, Literal: "=", Span: c.Span})
 		return true
 	}
 	p.errorf(diag.ParseExpectedGt, c.Span, "expected '>', got %s", c.Kind)
@@ -117,6 +130,12 @@ func (p *Parser) consumeGt() bool {
 }
 
 func (p *Parser) atGt() bool {
-	k := p.cur().Kind
+	if len(p.pending) > 0 {
+		return p.pending[0].Kind == token.Gt
+	}
+	if p.pos >= len(p.toks) {
+		return false
+	}
+	k := p.toks[p.pos].Kind
 	return k == token.Gt || k == token.ShiftR || k == token.Ge
 }

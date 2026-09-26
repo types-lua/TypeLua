@@ -146,6 +146,12 @@ var keywords = map[string]Kind{
 
 // LookupIdent maps an identifier to a keyword kind, or Ident.
 func LookupIdent(s string) Kind {
+	// Fast path: no keyword is shorter than 2 ("as","do","if","in","is","or")
+	// or longer than 10 ("implements"). This skips the map hash for the
+	// common long-identifier and single-char cases with identical results.
+	if len(s) < 2 || len(s) > 10 {
+		return Ident
+	}
 	if k, ok := keywords[s]; ok {
 		return k
 	}

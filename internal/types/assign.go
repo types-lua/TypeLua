@@ -1,23 +1,28 @@
 package types
 
-import (
-	"fmt"
-)
-
 // ---------- subtyping ----------
 
 type Options struct {
 	StrictNilChecks bool
 }
 
-// IsAssignable reports whether `from` can be assigned to `to`.
-func IsAssignable(from, to Type, opt Options) bool {
-	return assignable(from, to, opt, map[[2]string]bool{})
+// visit identifies one coinductive subtyping hypothesis by pointer identity.
+// All Type implementations are pointers, so interface equality is pointer
+// equality. Using identity (instead of the old %p:String rendering) avoids
+// a full recursive String() on every recursion step; distinct pointers with
+// identical structure simply miss the cache and recompute, which is always
+// sound (hypotheses only ever conclude "true" for cycles).
+type visit struct {
+	from Type
+	to   Type
 }
 
-func typeID(t Type) string { return fmt.Sprintf("%p:%s", t, t.String()) }
+// IsAssignable reports whether `from` can be assigned to `to`.
+func IsAssignable(from, to Type, opt Options) bool {
+	return assignable(from, to, opt, map[visit]bool{})
+}
 
-func assignable(from, to Type, opt Options, seen map[[2]string]bool) bool {
+func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 	if from == nil || to == nil {
 		return true
 	}
@@ -40,7 +45,7 @@ func assignable(from, to Type, opt Options, seen map[[2]string]bool) bool {
 	if to.Kind() == KNever {
 		return from.Kind() == KNever
 	}
-	key := [2]string{typeID(from), typeID(to)}
+	key := visit{from, to}
 	if seen[key] {
 		return true
 	}
@@ -132,7 +137,7 @@ func assignable(from, to Type, opt Options, seen map[[2]string]bool) bool {
 	// Unbound `infer` placeholders only survive via misuse (reported as
 	// TL3601 at the source); stay permissive here.
 	if _, ok := from.(*InferParam); ok {
-		return to.Kind() == KAny || to.Kind() == KUnknown || from.String() == to.String()
+		return to.Kind() == KAny || to.Kind() == KUnknown || from == to || from.String() == to.String()
 	}
 	if _, ok := to.(*InferParam); ok {
 		return true
@@ -206,7 +211,7 @@ func assignable(from, to Type, opt Options, seen map[[2]string]bool) bool {
 		if fg.Constraint != nil {
 			return assignable(fg.Constraint, to, opt, seen)
 		}
-		return from.String() == to.String()
+		return from == to || from.String() == to.String()
 	}
 
 	// Enum.
@@ -421,6 +426,9 @@ func assignable(from, to Type, opt Options, seen map[[2]string]bool) bool {
 		return false
 	}
 
+	if from == to {
+		return true
+	}
 	return from.String() == to.String()
 }
 
@@ -433,7 +441,7 @@ func isBaseOf(base, to Type) bool {
 	if base == nil {
 		return false
 	}
-	return assignable(base, to, Options{StrictNilChecks: true}, map[[2]string]bool{})
+	return assignable(base, to, Options{StrictNilChecks: true}, map[visit]bool{})
 }
 
 func primAssignable(from, to *Primitive) bool {
@@ -448,7 +456,7 @@ func primAssignable(from, to *Primitive) bool {
 }
 
 // classArgsAssignable checks generic arguments covariantly.
-func classArgsAssignable(from, to []Type, opt Options, seen map[[2]string]bool) bool {
+func classArgsAssignable(from, to []Type, opt Options, seen map[visit]bool) bool {
 	if len(from) != len(to) {
 		return false
 	}
@@ -462,7 +470,7 @@ func classArgsAssignable(from, to []Type, opt Options, seen map[[2]string]bool) 
 
 // classAssignable walks the inheritance chain: a subclass instance is
 // assignable to its ancestors (with compatible type arguments).
-func classAssignable(from, to *Class, opt Options, seen map[[2]string]bool) bool {
+func classAssignable(from, to *Class, opt Options, seen map[visit]bool) bool {
 	visited := map[*Class]bool{}
 	for c := from; c != nil; c = c.Base {
 		if visited[c] {
@@ -491,7 +499,7 @@ func classObjectView(c *Class) *Object {
 	return o
 }
 
-func classSatisfiesObject(from *Class, to *Object, opt Options, seen map[[2]string]bool) bool {
+func classSatisfiesObject(from *Class, to *Object, opt Options, seen map[visit]bool) bool {
 	return objectAssignable(classObjectView(from), to, opt, seen)
 }
 
@@ -502,7 +510,7 @@ func unionOf(elems []Type) Type {
 	return NewUnion(elems)
 }
 
-func objectAcceptsArray(obj *Object, arr *Array, opt Options, seen map[[2]string]bool) bool {
+func objectAcceptsArray(obj *Object, arr *Array, opt Options, seen map[visit]bool) bool {
 	// Array satisfies object if object has no required named fields and indexer accepts integer->elem.
 	for _, f := range obj.Fields {
 		if !f.Optional {
@@ -523,7 +531,7 @@ func objectAcceptsArray(obj *Object, arr *Array, opt Options, seen map[[2]string
 	return true
 }
 
-func objectAssignable(from, to *Object, opt Options, seen map[[2]string]bool) bool {
+func objectAssignable(from, to *Object, opt Options, seen map[visit]bool) bool {
 	// An empty table literal satisfies anything without required fields.
 	if len(from.Fields) == 0 && len(from.Indexers) == 0 {
 		for _, tf := range to.Fields {
@@ -587,7 +595,7 @@ func objectAssignable(from, to *Object, opt Options, seen map[[2]string]bool) bo
 	return true
 }
 
-func funcAssignable(from, to *Func, opt Options, seen map[[2]string]bool) bool {
+func funcAssignable(from, to *Func, opt Options, seen map[visit]bool) bool {
 	// Arity: source must accept at least as many args as target requires.
 	// Count required target params.
 	reqTo := 0

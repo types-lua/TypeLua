@@ -29,7 +29,7 @@ func TryEvalConditional(c *Conditional, opt Options) (Type, bool) {
 func EvalConditional(check, extends, trueB, falseB Type, distributive bool, opt Options) Type {
 	if distributive {
 		if u, ok := check.(*Union); ok {
-			var rs []Type
+			rs := make([]Type, 0, len(u.Types))
 			for _, m := range u.Types {
 				rs = append(rs, evalOne(m, extends, trueB, falseB, opt))
 			}
@@ -41,7 +41,10 @@ func EvalConditional(check, extends, trueB, falseB Type, distributive bool, opt 
 
 func evalOne(check, extends, trueB, falseB Type, opt Options) Type {
 	bindings := map[string]Type{}
-	if matchInfer(check, extends, bindings, map[[2]string]bool{}, opt) {
+	if matchInfer(check, extends, bindings, map[visit]bool{}, opt) {
+		if len(bindings) == 0 {
+			return trueB
+		}
 		return Substitute(trueB, bindings)
 	}
 	return falseB
@@ -49,13 +52,16 @@ func evalOne(check, extends, trueB, falseB Type, opt Options) Type {
 
 // matchInfer matches a concrete source against a pattern, collecting infer
 // bindings. The seen map makes matching coinductive over recursive types.
-func matchInfer(source, pattern Type, bindings map[string]Type, seen map[[2]string]bool, opt Options) bool {
+func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]bool, opt Options) bool {
 	if source == nil || pattern == nil {
 		return source == nil && pattern == nil
 	}
 	// `infer U` binds the whole source (joining conflicts as unions).
 	if ip, ok := pattern.(*InferParam); ok {
 		if prev, ok := bindings[ip.Name]; ok {
+			if prev == source {
+				return true
+			}
 			if prev.String() != source.String() {
 				bindings[ip.Name] = NewUnion([]Type{prev, source})
 			}
@@ -80,7 +86,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[[2]stri
 	if source.Kind() == KNever {
 		return true
 	}
-	key := [2]string{typeID(source), typeID(pattern)}
+	key := visit{source, pattern}
 	if seen[key] {
 		return true
 	}
@@ -89,6 +95,11 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[[2]stri
 	// Bare type parameters only match themselves here (concrete sources
 	// never satisfy an unbound parameter).
 	if _, ok := pattern.(*GenericParam); ok {
+		// Fast path first (pointer identity), then structural fallback.
+		// GenericParam copies print differently per copy, so compare names.
+		if sg, ok := source.(*GenericParam); ok && sg.Name == pattern.(*GenericParam).Name {
+			return true
+		}
 		return source.String() == pattern.String()
 	}
 	// Nested conditionals in pattern position: evaluate when possible.
@@ -290,10 +301,16 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[[2]stri
 		return false
 	}
 
+	if source == pattern {
+		return true
+	}
 	return source.String() == pattern.String()
 }
 
 func copyBindings(b map[string]Type) map[string]Type {
+	if len(b) == 0 {
+		return map[string]Type{}
+	}
 	out := make(map[string]Type, len(b))
 	for k, v := range b {
 		out[k] = v
@@ -332,7 +349,7 @@ func restTarget(t Type) Type {
 	return t
 }
 
-func matchTupleElems(src, pat []Type, bindings map[string]Type, seen map[[2]string]bool, opt Options) bool {
+func matchTupleElems(src, pat []Type, bindings map[string]Type, seen map[visit]bool, opt Options) bool {
 	i := 0
 	for ; i < len(pat); i++ {
 		if isRestElem(pat[i]) {
@@ -355,7 +372,7 @@ func matchTupleElems(src, pat []Type, bindings map[string]Type, seen map[[2]stri
 
 // matchObjectFields matches a source against required pattern fields.
 // Sources may be objects, class instances (public view), or string-keyed maps.
-func matchObjectFields(source Type, fields map[string]Field, bindings map[string]Type, seen map[[2]string]bool, opt Options) bool {
+func matchObjectFields(source Type, fields map[string]Field, bindings map[string]Type, seen map[visit]bool, opt Options) bool {
 	for name, pf := range fields {
 		var st Type
 		switch s := source.(type) {
@@ -411,7 +428,7 @@ func matchObjectFields(source Type, fields map[string]Field, bindings map[string
 
 // matchClassPattern matches nominally: the source must be the same class or
 // a subclass, with compatible type arguments flowing into infer positions.
-func matchClassPattern(source, pattern *Class, bindings map[string]Type, seen map[[2]string]bool, opt Options) bool {
+func matchClassPattern(source, pattern *Class, bindings map[string]Type, seen map[visit]bool, opt Options) bool {
 	visited := map[*Class]bool{}
 	for c := source; c != nil; c = c.Base {
 		if visited[c] {

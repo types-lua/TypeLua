@@ -58,6 +58,60 @@ func (l *Lexer) advance(n int) {
 	}
 }
 
+// advanceBlock moves forward n bytes with line/column updates identical to
+// n advance(1) calls, but in two linear scans instead of per-byte branches.
+// Used for skipping already-located regions (long strings and comments);
+// token-level scanning still uses advance for single tokens.
+func (l *Lexer) advanceBlock(n int) {
+	if n <= 0 {
+		return
+	}
+	if l.off+n > len(l.src) {
+		n = len(l.src) - l.off
+	}
+	s := l.src[l.off : l.off+n]
+	lastNL := -1
+	lines := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines++
+			lastNL = i
+		}
+	}
+	if lines == 0 {
+		for i := 0; i < len(s); i++ {
+			if c := s[i]; c < 0x80 || c >= 0xC0 {
+				l.col++
+			}
+		}
+	} else {
+		l.line += lines
+		c := 0
+		for i := lastNL + 1; i < len(s); i++ {
+			if cc := s[i]; cc < 0x80 || cc >= 0xC0 {
+				c++
+			}
+		}
+		l.col = c + 1
+	}
+	l.off += n
+}
+
+// longCloseStr returns the closing bracket for a long string/comment level.
+// Levels 0-2 cover virtually all sources; higher levels fall back to Repeat.
+func longCloseStr(lvl int) string {
+	switch lvl {
+	case 0:
+		return "]]"
+	case 1:
+		return "]=]"
+	case 2:
+		return "]==]"
+	default:
+		return "]" + strings.Repeat("=", lvl) + "]"
+	}
+}
+
 func (l *Lexer) addDiag(code diag.Code, format string, args ...any) token.Span {
 	sp := token.Span{Start: l.pos(), End: l.pos(), File: l.file}
 	l.diags = append(l.diags, diag.Errorf(code, sp, format, args...))
@@ -116,29 +170,30 @@ func (l *Lexer) lexComment() {
 	if !l.eof() && l.src[l.off] == '[' {
 		if lvl, ok := l.longBracketOpen(); ok {
 			l.advance(1 + lvl + 1) // '[' + '='*lvl + '['
-			close := "]" + strings.Repeat("=", lvl) + "]"
+			close := longCloseStr(lvl)
 			idx := strings.Index(l.src[l.off:], close)
 			if idx < 0 {
 				// Unterminated long comment: consume rest.
 				sp := token.Span{Start: start, End: l.pos(), File: l.file}
 				// Advance to end for line tracking.
-				for !l.eof() {
-					l.advance(1)
-				}
+				l.advanceBlock(len(l.src) - l.off)
 				l.diags = append(l.diags, diag.Errorf(diag.LexUnterminatedLongComment, sp, "unterminated long comment"))
 				return
 			}
 			// Advance through content + closer, tracking newlines.
-			for i := 0; i < idx+len(close); i++ {
-				l.advance(1)
-			}
+			l.advanceBlock(idx + len(close))
 			return
 		}
 	}
 	// Short comment to end of line.
-	for !l.eof() && l.src[l.off] != '\n' {
-		l.advance(1)
+	eol := len(l.src) - l.off
+	for i := l.off; i < len(l.src); i++ {
+		if l.src[i] == '\n' {
+			eol = i - l.off
+			break
+		}
 	}
+	l.advanceBlock(eol)
 }
 
 // longBracketOpen reports [=*[ level if src[off]=='[' followed by '='* '['.
@@ -318,7 +373,10 @@ func (l *Lexer) next() token.Token {
 		return l.next()
 	}
 	l.advance(1)
-	return token.Token{Kind: kind, Literal: string(c), Span: token.Span{Start: start, End: l.pos(), File: l.file}}
+	// Sub-slice shares the source backing (no allocation); the old
+	// string(c) conversion allocated per token.
+	lit := l.src[l.off-1 : l.off]
+	return token.Token{Kind: kind, Literal: lit, Span: token.Span{Start: start, End: l.pos(), File: l.file}}
 }
 
 func (l *Lexer) lexNumber(start token.Pos) token.Token {
@@ -411,6 +469,13 @@ func (l *Lexer) lexNumber(start token.Pos) token.Token {
 
 func (l *Lexer) lexShortString(start token.Pos) token.Token {
 	quote := l.src[l.off]
+	// Fast path: no escapes or newlines before the closing quote. The
+	// slow path below copies bytes verbatim, so a clean slice is identical.
+	if end, ok := scanCleanString(l.src, l.off+1, quote); ok {
+		lit := l.src[start.Offset:end]
+		l.advanceBlock(end - l.off)
+		return token.Token{Kind: token.String, Literal: lit, Span: token.Span{Start: start, End: l.pos(), File: l.file}}
+	}
 	l.advance(1)
 	var sb strings.Builder
 	sb.WriteByte(quote)
@@ -481,6 +546,23 @@ func (l *Lexer) lexShortString(start token.Pos) token.Token {
 	return token.Token{Kind: token.String, Literal: sb.String(), Span: sp}
 }
 
+// scanCleanString reports the end offset (one past the closing quote) when
+// src[i:] up to the closing quote contains no backslash, newline or CR —
+// i.e. the literal can be sliced verbatim. Otherwise ok=false.
+func scanCleanString(src string, i int, quote byte) (end int, ok bool) {
+	for i < len(src) {
+		c := src[i]
+		if c == quote {
+			return i + 1, true
+		}
+		if c == '\\' || c == '\n' || c == '\r' {
+			return 0, false
+		}
+		i++
+	}
+	return 0, false
+}
+
 func (l *Lexer) lexLongString(start token.Pos) token.Token {
 	lvl, _ := l.longBracketOpen()
 	openLen := 1 + lvl + 1
@@ -495,23 +577,19 @@ func (l *Lexer) lexLongString(start token.Pos) token.Token {
 		}
 	}
 	contentStart := l.off
-	close := "]" + strings.Repeat("=", lvl) + "]"
+	close := longCloseStr(lvl)
 	idx := strings.Index(l.src[contentStart:], close)
 	var lit string
 	if idx < 0 {
 		// Unterminated: consume rest.
-		for !l.eof() {
-			l.advance(1)
-		}
+		l.advanceBlock(len(l.src) - l.off)
 		lit = l.src[start.Offset:l.off]
 		sp := token.Span{Start: start, End: l.pos(), File: l.file}
 		l.diags = append(l.diags, diag.Errorf(diag.LexUnterminatedLongString, sp, "unterminated long string"))
 		return token.Token{Kind: token.String, Literal: lit, Span: sp}
 	}
 	endOff := contentStart + idx + len(close)
-	for l.off < endOff {
-		l.advance(1)
-	}
+	l.advanceBlock(endOff - l.off)
 	lit = l.src[start.Offset:l.off]
 	return token.Token{Kind: token.String, Literal: lit, Span: token.Span{Start: start, End: l.pos(), File: l.file}}
 }

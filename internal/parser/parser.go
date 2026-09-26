@@ -11,9 +11,9 @@ import (
 type Parser struct {
 	toks         []token.Token
 	pos          int
+	pending      []token.Token // split remainders from consumeGt (never mutates toks)
 	file         string
 	diags        []diag.Diagnostic
-	pendingGt    int // split >> into two >
 	extendsDepth int // >0 while parsing an extends clause (for `infer`)
 	inMacroBody  int // >0 while parsing a macro definition body
 	depth        int // current nesting depth (blocks, primaries, primary types)

@@ -51,8 +51,19 @@ func (p *Parser) isConditionalQ() (ok bool) {
 	if !p.at(token.Question) {
 		return false
 	}
-	savePos, saveDiags := p.pos, len(p.diags)
-	saveGt := p.pendingGt
+	// Fast path: `? True :` requires True to start a type. When the token
+	// after `?` cannot open a type (e.g. `|` in `A?|B?`, `,`/`]`/`)`/EOF`),
+	// this is plain Optional — skip the full speculative parse entirely.
+	// This turns the common `A?|B?|C?` chain from O(n^2) into O(n).
+	switch p.peek(1).Kind {
+	case token.Ident, token.LParen, token.LBrack, token.LBrace,
+		token.String, token.Number, token.True, token.False, token.Nil,
+		token.DotDotDot, token.KeyofKw, token.TypeofKw, token.InferKw:
+		// May open a type; fall through to speculation.
+	default:
+		return false
+	}
+	saveCur, saveDiags := p.saveCursor(), len(p.diags)
 	saveDepth := p.depth
 	defer func() {
 		if r := recover(); r != nil {
@@ -61,7 +72,7 @@ func (p *Parser) isConditionalQ() (ok bool) {
 			}
 			ok = false
 		}
-		p.pos, p.pendingGt = savePos, saveGt
+		p.restoreCursor(saveCur)
 		p.diags = p.diags[:saveDiags]
 		p.depth = saveDepth
 	}()
@@ -242,7 +253,7 @@ func (p *Parser) parseParenOrFuncType() ast.TypeNode {
 		return &ast.ParenType{Elem: &ast.NamedType{Name: "void", S: start.Span}, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
 	// Tentatively parse as func params.
-	save := p.pos
+	save := p.saveCursor()
 	ndiags := len(p.diags)
 	params, hasVA, vaTy, ok := p.tryParseFuncTypeParams()
 	if ok && p.at(token.RParen) {
@@ -270,7 +281,7 @@ func (p *Parser) parseParenOrFuncType() ast.TypeNode {
 		}
 	}
 	// Backtrack and parse as plain type list.
-	p.pos = save
+	p.restoreCursor(save)
 	p.diags = p.diags[:ndiags]
 	var elems []ast.TypeNode
 	for {
@@ -518,11 +529,11 @@ func (p *Parser) parseTableTypeField() *ast.TableTypeField {
 		// Optional generics on methods: keep for explicit type arguments.
 		var mgen []*ast.GenericParam
 		if p.at(token.Lt) {
-			save := p.pos
+			save := p.saveCursor()
 			nd := len(p.diags)
 			mgen = p.parseGenericParams()
 			if !p.at(token.LParen) {
-				p.pos = save
+				p.restoreCursor(save)
 				p.diags = p.diags[:nd]
 				mgen = nil
 			}

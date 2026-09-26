@@ -384,7 +384,7 @@ func narrowLitOfType(cur types.Type, rawLit string, toLit bool) (types.Type, boo
 	want := normStrLit(rawLit)
 	match := func(m types.Type) bool {
 		lit, ok := m.(*types.Literal)
-		if !ok || lit.Base.String() != "string" {
+		if !ok || lit.Base == nil || lit.Base.Kind() != types.KString {
 			return false
 		}
 		return normStrLit(lit.Value) == want
@@ -463,11 +463,18 @@ func narrowTypeofOfType(cur types.Type, lit string, toType bool) (types.Type, bo
 	if u, ok := cur.(*types.Union); ok {
 		var rest []types.Type
 		for _, m := range u.Types {
-			if m.String() == prim.String() {
+			// Fast path: same kind as the primitive excludes without
+			// serializing either side (primitive names are unique per
+			// kind). The String fallback preserves any cross-kind
+			// spelling coincidence exactly.
+			if m.Kind() == prim.Kind() {
 				continue
 			}
 			// Literal members of that base? e.g. orig `"a" | "b"`, prim string => all removed => Never. Keep logic: if prim is base and member is literal of base, remove.
-			if litM, ok := m.(*types.Literal); ok && litM.Base.String() == prim.String() {
+			if litM, ok := m.(*types.Literal); ok && (litM.Base.Kind() == prim.Kind() || litM.Base.String() == prim.String()) {
+				continue
+			}
+			if m.String() == prim.String() {
 				continue
 			}
 			rest = append(rest, m)
@@ -476,6 +483,12 @@ func narrowTypeofOfType(cur types.Type, lit string, toType bool) (types.Type, bo
 			return types.NewUnion(rest), true
 		}
 		return nil, false
+	}
+	// Fast path first (same kind on primitives implies identical spelling),
+	// then the exact String comparison for cross-kind coincidences.
+	if cur.Kind() == prim.Kind() {
+		// `type(x) ~= "string"` but x: string => unreachable else? Narrow to Never.
+		return types.Never, true
 	}
 	if cur.String() == prim.String() {
 		// `type(x) ~= "string"` but x: string => unreachable else? Narrow to Never.

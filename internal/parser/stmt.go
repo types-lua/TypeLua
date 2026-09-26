@@ -379,13 +379,13 @@ func (p *Parser) parseGlobalFunc() ast.Stmt {
 	var generics []*ast.GenericParam
 	if p.at(token.Lt) {
 		// Only treat as generics if it parses and is followed by '('.
-		save := p.pos
+		save := p.saveCursor()
 		nd := len(p.diags)
 		g := p.parseGenericParams()
 		if g != nil && p.at(token.LParen) {
 			generics = g
 		} else {
-			p.pos = save
+			p.restoreCursor(save)
 			p.diags = p.diags[:nd]
 		}
 	}
@@ -431,13 +431,13 @@ func (p *Parser) parseLocal() ast.Stmt {
 		}
 		var generics []*ast.GenericParam
 		if p.at(token.Lt) {
-			save := p.pos
+			save := p.saveCursor()
 			nd := len(p.diags)
 			g := p.parseGenericParams()
 			if g != nil && p.at(token.LParen) {
 				generics = g
 			} else {
-				p.pos = save
+				p.restoreCursor(save)
 				p.diags = p.diags[:nd]
 			}
 		}

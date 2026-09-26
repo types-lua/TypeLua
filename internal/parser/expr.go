@@ -282,14 +282,14 @@ func (p *Parser) parseSuffix() ast.Expr {
 			var targs []ast.TypeNode
 			if p.at(token.Lt) {
 				// `obj:m<T>(args)`: tentative type args, must be followed by `(`.
-				save := p.pos
-				nd := len(p.diags)
-				if tas, ok := p.tryParseTypeArgs(); ok && p.at(token.LParen) {
-					targs = tas
-				} else {
-					p.pos = save
-					p.diags = p.diags[:nd]
-				}
+			save := p.saveCursor()
+			nd := len(p.diags)
+			if tas, ok := p.tryParseTypeArgs(); ok && p.at(token.LParen) {
+				targs = tas
+			} else {
+				p.restoreCursor(save)
+				p.diags = p.diags[:nd]
+			}
 			}
 			args := p.parseCallArgs()
 			if args == nil {
@@ -300,14 +300,14 @@ func (p *Parser) parseSuffix() ast.Expr {
 		case p.at(token.Lt):
 			// `f<T>(args)`: explicit generic arguments. Tentative: `<` types `>`
 			// must be followed by `(`; otherwise this is a `<` comparison.
-			save := p.pos
-			nd := len(p.diags)
-			tas, ok := p.tryParseTypeArgs()
-			if !ok || !p.at(token.LParen) {
-				p.pos = save
-				p.diags = p.diags[:nd]
-				return e
-			}
+		save := p.saveCursor()
+		nd := len(p.diags)
+		tas, ok := p.tryParseTypeArgs()
+		if !ok || !p.at(token.LParen) {
+			p.restoreCursor(save)
+			p.diags = p.diags[:nd]
+			return e
+		}
 			args := p.parseCallArgs()
 			e = &ast.CallExpr{Func: e, TypeArgs: tas, Args: args, S: token.Span{Start: e.Span().Start, End: p.prevEnd(), File: p.file}}
 		case p.at(token.LParen), p.at(token.LBrace), p.at(token.String):
@@ -400,13 +400,13 @@ func (p *Parser) parsePrimary() ast.Expr {
 		// Optional generics on anonymous functions.
 		var fgen []*ast.GenericParam
 		if p.at(token.Lt) {
-			save := p.pos
+			save := p.saveCursor()
 			nd := len(p.diags)
 			g := p.parseGenericParams()
 			if g != nil && p.at(token.LParen) {
 				fgen = g
 			} else {
-				p.pos = save
+				p.restoreCursor(save)
 				p.diags = p.diags[:nd]
 			}
 		}

@@ -112,6 +112,9 @@ func isComparable(l, r types.Type) bool {
 		return true
 	}
 	// Literals of same base.
+	if l == r {
+		return true
+	}
 	if l.String() == r.String() {
 		return true
 	}

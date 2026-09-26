@@ -1,39 +1,50 @@
 package types
 
 import (
+	"fmt"
+	"hash/fnv"
 	"sort"
-	"strings"
 )
 
 // Substitute replaces generic params by args.
 func Substitute(t Type, sub map[string]Type) Type {
+	// Fast path: empty substitution is identity (avoids fingerprint + memo
+	// allocation on the very hot no-op path, e.g. evalOne with no infers).
+	if len(sub) == 0 {
+		return t
+	}
 	return substitute(t, sub, &substCtx{memo: map[subKey]Type{}, fp: subFingerprint(sub)})
 }
 
 type subKey struct {
-	ptr any
-	fp  string
+	ptr Type
+	fp  uint64
 }
 
 type substCtx struct {
 	memo map[subKey]Type
-	fp   string
+	fp   uint64
 }
 
-func subFingerprint(sub map[string]Type) string {
+// subFingerprint hashes a substitution by parameter names + argument pointer
+// identity (not structural String rendering). Distinct pointers with identical
+// structure merely miss the memo and recompute, which is always sound; the
+// old String-based fingerprint paid a full recursive serialization per
+// Substitute call.
+func subFingerprint(sub map[string]Type) uint64 {
 	names := make([]string, 0, len(sub))
 	for n := range sub {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	var sb strings.Builder
+	h := fnv.New64a()
 	for _, n := range names {
-		sb.WriteString(n)
-		sb.WriteByte('=')
-		sb.WriteString(sub[n].String())
-		sb.WriteByte(';')
+		h.Write([]byte(n))
+		h.Write([]byte{0})
+		// %p prints pointer identity without touching the type structure.
+		fmt.Fprintf(h, "%p;", sub[n])
 	}
-	return sb.String()
+	return h.Sum64()
 }
 
 // substituteGenericParam substitutes inside a generic declaration
@@ -60,30 +71,70 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		}
 		return x
 	case *Union:
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
 		ns := make([]Type, len(x.Types))
 		for i, m := range x.Types {
 			ns[i] = substitute(m, sub, ctx)
 		}
-		return NewUnion(ns)
+		out := NewUnion(ns)
+		ctx.memo[key] = out
+		return out
 	case *Intersection:
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
 		ns := make([]Type, len(x.Types))
 		for i, m := range x.Types {
 			ns[i] = substitute(m, sub, ctx)
 		}
-		return NewIntersection(ns)
+		out := NewIntersection(ns)
+		ctx.memo[key] = out
+		return out
 	case *Array:
-		return &Array{Elem: substitute(x.Elem, sub, ctx)}
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
+		out := &Array{Elem: substitute(x.Elem, sub, ctx)}
+		ctx.memo[key] = out
+		return out
 	case *Chan:
-		return &Chan{Elem: substitute(x.Elem, sub, ctx)}
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
+		out := &Chan{Elem: substitute(x.Elem, sub, ctx)}
+		ctx.memo[key] = out
+		return out
 	case *Map:
-		return &Map{Key: substitute(x.Key, sub, ctx), Value: substitute(x.Value, sub, ctx)}
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
+		out := &Map{Key: substitute(x.Key, sub, ctx), Value: substitute(x.Value, sub, ctx)}
+		ctx.memo[key] = out
+		return out
 	case *Tuple:
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
 		ns := make([]Type, len(x.Elems))
 		for i, e := range x.Elems {
 			ns[i] = substitute(e, sub, ctx)
 		}
-		return &Tuple{Elems: ns}
+		out := &Tuple{Elems: ns}
+		ctx.memo[key] = out
+		return out
 	case *Func:
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
 		ps := make([]FuncParam, len(x.Params))
 		for i, p := range x.Params {
 			ps[i] = FuncParam{Name: p.Name, Type: substitute(p.Type, sub, ctx), Optional: p.Optional}
@@ -100,7 +151,9 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		for i, gp := range x.TypeParams {
 			tps[i] = substituteGenericParam(gp, sub, ctx)
 		}
-		return &Func{Params: ps, HasVarArg: x.HasVarArg, VarArg: va, Returns: rs, TypeParams: tps, IsAsync: x.IsAsync}
+		out := &Func{Params: ps, HasVarArg: x.HasVarArg, VarArg: va, Returns: rs, TypeParams: tps, IsAsync: x.IsAsync}
+		ctx.memo[key] = out
+		return out
 	case *Object:
 		// Shared (possibly cyclic) objects substitute once; the copy is
 		// filled in place so recursive references terminate.
@@ -168,17 +221,27 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		}
 		return &ClassValue{Class: nc, Constructor: ctor, CtorAccess: x.CtorAccess, Statics: ns, Abstract: x.Abstract}
 	case *Ref:
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
 		na := make([]Type, len(x.Args))
 		for i, a := range x.Args {
 			na[i] = substitute(a, sub, ctx)
 		}
-		return &Ref{Name: x.Name, Args: na}
+		out := &Ref{Name: x.Name, Args: na}
+		ctx.memo[key] = out
+		return out
 	case *InferParam:
 		if s, ok := sub[x.Name]; ok {
 			return s
 		}
 		return x
 	case *Mapped:
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
 		m2 := &Mapped{
 			Param:       x.Param,
 			Constraint:  substitute(x.Constraint, sub, ctx),
@@ -190,26 +253,43 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 			Value:       substitute(x.Value, sub, ctx),
 		}
 		if r, ok := evalMapped(m2, Options{StrictNilChecks: true}); ok {
+			ctx.memo[key] = r
 			return r
 		}
+		ctx.memo[key] = m2
 		return m2
 	case *IndexedAccess:
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
 		obj := substitute(x.Obj, sub, ctx)
 		index := substitute(x.Index, sub, ctx)
 		if r, ok, _ := evalIndexedAccess(obj, index, Options{StrictNilChecks: true}); ok {
+			ctx.memo[key] = r
 			return r
 		}
-		return &IndexedAccess{Obj: obj, Index: index}
+		out := &IndexedAccess{Obj: obj, Index: index}
+		ctx.memo[key] = out
+		return out
 	case *Conditional:
+		key := subKey{ptr: x, fp: ctx.fp}
+		if out, ok := ctx.memo[key]; ok {
+			return out
+		}
 		check := substitute(x.Check, sub, ctx)
 		ext := substitute(x.Extends, sub, ctx)
 		trueB := substitute(x.TrueBranch, sub, ctx)
 		falseB := substitute(x.FalseBranch, sub, ctx)
 		if IsConcreteType(check) {
 			// Strict nil checks match the checker's default; documented.
-			return EvalConditional(check, ext, trueB, falseB, x.Distributive, Options{StrictNilChecks: true})
+			out := EvalConditional(check, ext, trueB, falseB, x.Distributive, Options{StrictNilChecks: true})
+			ctx.memo[key] = out
+			return out
 		}
-		return &Conditional{Check: check, Extends: ext, TrueBranch: trueB, FalseBranch: falseB, Distributive: x.Distributive}
+		out := &Conditional{Check: check, Extends: ext, TrueBranch: trueB, FalseBranch: falseB, Distributive: x.Distributive}
+		ctx.memo[key] = out
+		return out
 	case *Enum:
 		return x
 	case *Literal:

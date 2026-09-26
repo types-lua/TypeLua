@@ -5,6 +5,36 @@ package types
 // IsConcreteType reports whether a type is free of unbound type parameters
 // (and deferred conditionals), i.e. ready for conditional evaluation.
 func IsConcreteType(t Type) bool {
+	if t == nil {
+		return true
+	}
+	// Fast paths without a visited-set allocation: leaves and
+	// always-deferred nodes decide immediately; only potentially cyclic or
+	// composite nodes fall through to the full traversal.
+	switch x := t.(type) {
+	case *GenericParam, *InferParam, *Conditional, *Ref:
+		return false
+	case *Primitive:
+		return true
+	case *Literal:
+		if x.Base == nil {
+			return true
+		}
+		// Literal bases are always primitives in practice; recurse without
+		// a set (no cycle possible through a primitive base).
+		if _, ok := x.Base.(*Primitive); ok {
+			return true
+		}
+		return !hasTypeParams(x.Base, map[Type]bool{})
+	case *Enum:
+		if x.Underlying == nil {
+			return true
+		}
+		if _, ok := x.Underlying.(*Primitive); ok {
+			return true
+		}
+		return !hasTypeParams(x.Underlying, map[Type]bool{})
+	}
 	return !hasTypeParams(t, map[Type]bool{})
 }
 

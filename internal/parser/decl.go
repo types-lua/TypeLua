@@ -96,13 +96,13 @@ func (p *Parser) parseDeclare() ast.Stmt {
 		// Optional generics.
 		var generics []*ast.GenericParam
 		if p.at(token.Lt) {
-			save := p.pos
+			save := p.saveCursor()
 			nd := len(p.diags)
 			g := p.parseGenericParams()
 			if g != nil && p.at(token.LParen) {
 				generics = g
 			} else {
-				p.pos = save
+				p.restoreCursor(save)
 				p.diags = p.diags[:nd]
 			}
 		}
@@ -451,13 +451,13 @@ loop:
 	if p.at(token.LParen) || p.at(token.Lt) {
 		var generics []*ast.GenericParam
 		if p.at(token.Lt) {
-			save := p.pos
+			save := p.saveCursor()
 			nd := len(p.diags)
 			g := p.parseGenericParams()
 			if g != nil && p.at(token.LParen) {
 				generics = g
 			} else {
-				p.pos = save
+				p.restoreCursor(save)
 				p.diags = p.diags[:nd]
 			}
 		}
@@ -568,11 +568,11 @@ func (p *Parser) parseInterfaceField() *ast.InterfaceField {
 		// Generic methods: keep generics for explicit type arguments.
 		var mgen []*ast.GenericParam
 		if p.at(token.Lt) {
-			save := p.pos
+			save := p.saveCursor()
 			nd := len(p.diags)
 			mgen = p.parseGenericParams()
 			if !p.at(token.LParen) {
-				p.pos = save
+				p.restoreCursor(save)
 				p.diags = p.diags[:nd]
 				mgen = nil
 			}
