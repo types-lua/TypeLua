@@ -39,25 +39,44 @@ func NewProgram(cfg *config.Config) *Program {
 }
 
 // Load reads + parses all files. Lex/parse diags are collected.
+// Files parse in parallel (bounded worker pool); results assemble in
+// sorted-path order, so Files/Diags are identical to sequential loading.
 func (p *Program) Load() error {
 	list, err := p.Cfg.ListFiles()
 	if err != nil {
 		return err
 	}
 	sort.Strings(list)
-	for _, fp := range list {
+	type parsed struct {
+		data    []byte
+		readErr error
+		file    *ast.File
+		pdiags  []diag.Diagnostic
+	}
+	results := make([]parsed, len(list))
+	parallelDo(len(list), func(i int) {
+		fp := list[i]
 		data, err := os.ReadFile(fp)
 		if err != nil {
-			p.Diags = append(p.Diags, diag.Diagnostic{Code: diag.CannotReadFile, Message: fmt.Sprintf("cannot read file: %v", err)})
-			continue
+			results[i].readErr = err
+			return
 		}
 		rel := fp
 		if r, err := filepath.Rel(p.Cfg.Dir, fp); err == nil {
 			rel = r
 		}
+		// parser.ParseFile is pure (no package-level mutable state).
 		f, pdiags := parser.ParseFile(rel, string(data))
-		p.Diags = append(p.Diags, pdiags...)
-		p.Files = append(p.Files, &SourceFile{Path: fp, Content: string(data), File: f, IsDecl: strings.HasSuffix(fp, ".d.tl")})
+		results[i] = parsed{data: data, file: f, pdiags: pdiags}
+	})
+	for i, fp := range list {
+		r := results[i]
+		if r.readErr != nil {
+			p.Diags = append(p.Diags, diag.Diagnostic{Code: diag.CannotReadFile, Message: fmt.Sprintf("cannot read file: %v", r.readErr)})
+			continue
+		}
+		p.Diags = append(p.Diags, r.pdiags...)
+		p.Files = append(p.Files, &SourceFile{Path: fp, Content: string(r.data), File: r.file, IsDecl: strings.HasSuffix(fp, ".d.tl")})
 	}
 	return nil
 }
@@ -105,57 +124,138 @@ func (p *Program) HasErrors() bool {
 // For safety, we emit every non-decl file (even empty) to preserve build shape.
 // Native assets (*.lua shims, *.so/*.dylib/*.dll/*.a) are then copied preserving
 // layout so vendored cross-language bindings run without manual steps.
+//
+// Performance: emit compute (AST render + sourcemap encode, the CPU-heavy
+// part) runs in parallel; filesystem writes stay sequential in file order,
+// preserving exact error/partial-output semantics. Writes are content
+// compared first, so unchanged outputs keep their mtime (no downstream
+// rebuild loops); skipped paths still count as emitted.
 func (p *Program) Emit() ([]string, error) {
-	var emitted []string
 	withPrelude := NeedsModPath(p)
 	opt := emitter.Options{Target: p.Cfg.Target(), TreeShake: p.Cfg.CompilerOptions.TreeShake}
+	jobs := collectEmitJobs(p.Cfg, p.Files)
+	computeEmitJobs(jobs, opt, withPrelude)
 	emittedSet := map[string]bool{}
-	for _, sf := range p.Files {
-		if sf.IsDecl {
-			continue
-		}
-		dst, ok := OutputForFile(p.Cfg, sf.Path)
-		if !ok {
-			continue
-		}
-		out, mappings := emitter.EmitFileWithMap(sf.File, opt)
-		if withPrelude {
-			out, mappings = PrependPrelude(out, mappings)
-		}
-		rel, err := filepath.Rel(filepath.Join(p.Cfg.Dir, p.Cfg.RootDir()), sf.Path)
-		if err != nil {
-			rel = filepath.Base(sf.Path)
-		}
-		srcRel := filepath.ToSlash(rel)
-		// Handle `.d.tl` already skipped; `foo.tl` -> `foo.lua`.
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return emitted, err
-		}
-		if p.Cfg.CompilerOptions.SourceMap {
-			base := filepath.Base(dst)
-			for i := range mappings {
-				mappings[i].SrcFile = srcRel
-			}
-			raw, err := sourcemap.Encode(base, []string{srcRel}, []string{sf.Content}, nil, mappings)
-			if err != nil {
-				return emitted, err
-			}
-			if err := os.WriteFile(dst+".map", raw, 0o644); err != nil {
-				return emitted, err
-			}
-			out += "--# sourceMappingURL=" + base + ".map\n"
-		}
-		if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
-			return emitted, err
-		}
-		emitted = append(emitted, dst)
-		emittedSet[filepath.Clean(dst)] = true
+	emitted, err := writeEmitJobs(jobs, nil, emittedSet)
+	if err != nil {
+		return emitted, err
 	}
 	assets, err := p.emitNativeAssets(emittedSet)
 	if err != nil {
 		return emitted, err
 	}
 	return append(emitted, assets...), nil
+}
+
+// emitJob is one file's output unit (mapping in, rendered bytes out).
+type emitJob struct {
+	sf       *SourceFile
+	dst      string
+	srcRel   string
+	out      string
+	mapRaw   []byte
+	mapErr   error
+	wantMap  bool
+	mapName  string
+	mapLabel string // "--# sourceMappingURL=..." footer, appended after map write
+}
+
+// collectEmitJobs maps non-decl files to outputs in program order.
+func collectEmitJobs(cfg *config.Config, files []*SourceFile) []emitJob {
+	var jobs []emitJob
+	for _, sf := range files {
+		if sf.IsDecl {
+			continue
+		}
+		dst, ok := OutputForFile(cfg, sf.Path)
+		if !ok {
+			continue
+		}
+		rel, err := filepath.Rel(filepath.Join(cfg.Dir, cfg.RootDir()), sf.Path)
+		if err != nil {
+			rel = filepath.Base(sf.Path)
+		}
+		srcRel := filepath.ToSlash(rel)
+		jb := emitJob{sf: sf, dst: dst, srcRel: srcRel}
+		if cfg.CompilerOptions.SourceMap {
+			// Handle `.d.tl` already skipped; `foo.tl` -> `foo.lua`.
+			base := filepath.Base(dst)
+			jb.wantMap = true
+			jb.mapName = dst + ".map"
+			jb.mapLabel = "--# sourceMappingURL=" + base + ".map\n"
+		}
+		jobs = append(jobs, jb)
+	}
+	return jobs
+}
+
+// computeEmitJobs runs the pure render phase in parallel:
+// EmitFileWithMap, PrependPrelude and sourcemap.Encode touch only fresh
+// per-file slices (no shared state).
+func computeEmitJobs(jobs []emitJob, opt emitter.Options, withPrelude bool) {
+	parallelDo(len(jobs), func(i int) {
+		jb := &jobs[i]
+		out, mappings := emitter.EmitFileWithMap(jb.sf.File, opt)
+		if withPrelude {
+			out, mappings = PrependPrelude(out, mappings)
+		}
+		if jb.wantMap {
+			for k := range mappings {
+				mappings[k].SrcFile = jb.srcRel
+			}
+			raw, err := sourcemap.Encode(filepath.Base(jb.dst), []string{jb.srcRel}, []string{jb.sf.Content}, nil, mappings)
+			if err != nil {
+				jb.mapErr = err
+				return
+			}
+			jb.mapRaw = raw
+		}
+		jb.out = out
+	})
+}
+
+// writeEmitJobs performs the ordered write phase: mkdir, encode-error
+// check, map write, lua write per file (same fault order as the original
+// sequential emitter). Content-compared writes keep mtimes stable;
+// skipped paths still count as emitted. Fills emittedSet with every
+// destination (needed by the native-asset collision guard).
+func writeEmitJobs(jobs []emitJob, emitted []string, emittedSet map[string]bool) ([]string, error) {
+	for i := range jobs {
+		jb := &jobs[i]
+		// Handle `.d.tl` already skipped; `foo.tl` -> `foo.lua`.
+		if err := os.MkdirAll(filepath.Dir(jb.dst), 0o755); err != nil {
+			return emitted, err
+		}
+		// Same fault order as before: mkdir, encode, map write, lua write.
+		if jb.wantMap && jb.mapErr != nil {
+			return emitted, jb.mapErr
+		}
+		if jb.wantMap {
+			if _, err := writeFileIfChanged(jb.mapName, jb.mapRaw); err != nil {
+				return emitted, err
+			}
+			jb.out += jb.mapLabel
+		}
+		if _, err := writeFileIfChanged(jb.dst, []byte(jb.out)); err != nil {
+			return emitted, err
+		}
+		emitted = append(emitted, jb.dst)
+		emittedSet[filepath.Clean(jb.dst)] = true
+	}
+	return emitted, nil
+}
+
+// writeFileIfChanged writes data to path, skipping the write (and the mtime
+// bump) when current content is byte-identical. Reports whether it wrote.
+// Skipped paths still count as emitted so watch stale-tracking stays exact.
+func writeFileIfChanged(path string, data []byte) (bool, error) {
+	if cur, err := os.ReadFile(path); err == nil && string(cur) == string(data) {
+		return false, nil
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // EmitToString is for tests.

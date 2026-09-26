@@ -55,31 +55,10 @@ func applyOverrides(cfg *config.Config, ov cliOverrides) {
 	}
 }
 
-// checkOnce runs load + check a single time.
-func checkOnce(cfg *config.Config) *compiler.Program {
-	p := compiler.NewProgram(cfg)
-	// Load only fails for whole-program reasons (bad glob root); per-file
-	// read errors become TL4001 diagnostics and must not stop the cycle.
-	_ = p.Load()
-	p.Check()
-	return p
-}
-
-// buildOnce runs load + check + emit a single time.
-func buildOnce(cfg *config.Config) (*compiler.Program, []string, error) {
-	p := compiler.NewProgram(cfg)
-	_ = p.Load()
-	if len(p.Files) == 0 {
-		return p, nil, fmt.Errorf("no .tl files found")
-	}
-	p.Check()
-	emitted, err := p.Emit()
-	return p, emitted, err
-}
-
-func countErrors(p *compiler.Program) int {
+// countSessionErrors counts error-severity diagnostics in a session.
+func countSessionErrors(sess *compiler.Session) int {
 	n := 0
-	for _, d := range p.Diags {
+	for _, d := range sess.Diags() {
 		if d.Severity == diag.Error {
 			n++
 		}
@@ -212,6 +191,11 @@ func resolveWatchFlags(wf *watchFlags) {
 // runWatch is the tsc --watch equivalent: build/check once, then rebuild
 // on every input or config change until interrupted. Diagnostic failures
 // never stop the session; only SIGINT/SIGTERM ends it (exit 0).
+//
+// Steady-state cycles are incremental: a compiler.Session reuses parsed
+// ASTs and cached check results, reprocessing only watcher-reported
+// changes (plus their require closure). Config changes reset the session
+// for a full rebuild.
 func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverrides, wf watchFlags) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -219,13 +203,20 @@ func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverride
 	watchLog("Starting compilation in watch mode...")
 	emittedBySrc := map[string]string{}
 	var baseline watch.Snapshot
+	sess := compiler.NewSession(cfg)
 
-	cycle := func(configChanged bool) {
+	cycle := func(configChanged bool, changes []watch.Change) {
 		if configChanged {
-			cfg, cfgPath = reloadCfg(cfg, cfgPath, ov)
+			// reloadCfg returns prev on any failure, so a changed pointer
+			// exactly means "reloaded successfully": reset for a full
+			// rebuild, otherwise keep the incremental state.
+			if nextCfg, nextPath := reloadCfg(cfg, cfgPath, ov); nextCfg != cfg {
+				cfg, cfgPath = nextCfg, nextPath
+				sess.Reset(cfg)
+			}
 		}
 		if r := safeCycle(func() {
-			runWatchCycle(mode, cfg, emittedBySrc)
+			runWatchCycle(mode, cfg, sess, changes, emittedBySrc)
 		}); r != nil {
 			stack := debug.Stack()
 			if len(stack) > 8192 {
@@ -241,8 +232,8 @@ func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverride
 		}
 	}
 
-	// Initial compilation.
-	cycle(false)
+	// Initial compilation (session is empty: full sync).
+	cycle(false, nil)
 	if baseline == nil {
 		if snap, err := watch.Collect(cfg); err == nil {
 			baseline = snap
@@ -274,37 +265,40 @@ func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverride
 		}
 		baseline = next
 		describeChanges(changes)
-		cycle(watch.HasConfigChange(changes))
+		cycle(watch.HasConfigChange(changes), changes)
 	}
 }
 
 // runWatchCycle performs one check/build pass with watch-style reporting.
-// emittedBySrc is updated in place for stale-output tracking.
-func runWatchCycle(mode watchMode, cfg *config.Config, emittedBySrc map[string]string) {
+// emittedBySrc is updated in place for stale-output tracking. Checking and
+// building go through the session (incremental after the first cycle).
+func runWatchCycle(mode watchMode, cfg *config.Config, sess *compiler.Session, changes []watch.Change, emittedBySrc map[string]string) {
 	if mode == modeCheck {
-		p := checkOnce(cfg)
-		if len(p.Diags) > 0 {
-			fmt.Print(p.FormatDiags())
+		if _, err := sess.Sync(false, changes, false); err != nil {
+			watchLog("warning: incremental check failed (%v); keeping previous results", err)
 		}
-		n := countErrors(p)
+		if out := sess.FormatDiags(); out != "" {
+			fmt.Print(out)
+		}
+		n := countSessionErrors(sess)
 		if n == 0 {
-			fmt.Printf("checked %d file(s): no errors\n", len(p.Files))
+			fmt.Printf("checked %d file(s): no errors\n", sess.FileCount())
 		} else {
-			fmt.Printf("found %d error(s) in %d file(s)\n", n, len(p.Files))
+			fmt.Printf("found %d error(s) in %d file(s)\n", n, sess.FileCount())
 		}
 		watchLog("Found %d error(s). Watching for file changes.", n)
 		return
 	}
-	p, emitted, err := buildOnce(cfg)
-	if err != nil && len(p.Files) == 0 {
+	emitted, err := sess.Sync(false, changes, true)
+	if err != nil && sess.FileCount() == 0 {
 		fmt.Printf("error: %v\n", err)
 		watchLog("Found 0 error(s). Watching for file changes.")
 		return
 	}
-	if len(p.Diags) > 0 {
-		fmt.Print(p.FormatDiags())
+	if out := sess.FormatDiags(); out != "" {
+		fmt.Print(out)
 	}
-	n := countErrors(p)
+	n := countSessionErrors(sess)
 	if err != nil {
 		fmt.Printf("emit failed: %v\n", err)
 	} else {
@@ -312,13 +306,13 @@ func runWatchCycle(mode watchMode, cfg *config.Config, emittedBySrc map[string]s
 	}
 	// Refresh src->dst mapping and drop outputs whose source is gone.
 	curSrc := map[string]bool{}
-	for _, sf := range p.Files {
+	for _, sf := range sess.Files() {
 		if sf.IsDecl {
 			continue
 		}
 		curSrc[absPath(sf.Path)] = true
 	}
-	for _, sf := range p.Files {
+	for _, sf := range sess.Files() {
 		if sf.IsDecl {
 			continue
 		}

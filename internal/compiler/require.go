@@ -8,6 +8,7 @@ import (
 	"github.com/typelua/typelua/internal/ast"
 	"github.com/typelua/typelua/internal/checker"
 	"github.com/typelua/typelua/internal/config"
+	"github.com/typelua/typelua/internal/diag"
 	"github.com/typelua/typelua/internal/mod"
 	"github.com/typelua/typelua/internal/types"
 )
@@ -27,8 +28,12 @@ import (
 // fileByPath finds a program file by cleaned path (exact match only,
 // so shadowing stays predictable).
 func (p *Program) fileByPath(path string) *SourceFile {
+	return fileByPathIn(p.Files, path)
+}
+
+func fileByPathIn(files []*SourceFile, path string) *SourceFile {
 	clean := filepath.Clean(path)
-	for _, sf := range p.Files {
+	for _, sf := range files {
 		if filepath.Clean(sf.Path) == clean {
 			return sf
 		}
@@ -85,7 +90,11 @@ func candidateRels(dotted string) []string {
 
 // resolveRequire maps a dotted require path to a program source file.
 func (p *Program) resolveRequire(from *SourceFile, dotted string) *SourceFile {
-	if full, ok := p.shorts[dotted]; ok {
+	return resolveRequireIn(p.Files, p.shorts, p.Cfg.Dir, from, dotted)
+}
+
+func resolveRequireIn(files []*SourceFile, shorts map[string]string, cfgDir string, from *SourceFile, dotted string) *SourceFile {
+	if full, ok := shorts[dotted]; ok {
 		dotted = full
 	}
 	segs := strings.Split(dotted, ".")
@@ -97,18 +106,91 @@ func (p *Program) resolveRequire(from *SourceFile, dotted string) *SourceFile {
 	for _, rel := range candidateRels(dotted) {
 		bases := []string{
 			filepath.Join(filepath.Dir(from.Path), rel),
-			filepath.Join(p.Cfg.Dir, mod.VendorDir, rel),
+			filepath.Join(cfgDir, mod.VendorDir, rel),
 		}
 		for _, base := range bases {
-			if sf := p.fileByPath(base + ".tl"); sf != nil {
+			if sf := fileByPathIn(files, base+".tl"); sf != nil {
 				return sf
 			}
-			if sf := p.fileByPath(filepath.Join(base, "init.tl")); sf != nil {
+			if sf := fileByPathIn(files, filepath.Join(base, "init.tl")); sf != nil {
 				return sf
 			}
 		}
 	}
 	return nil
+}
+
+// checkDriver runs memoized depth-first checking over a file set, feeding
+// each file the module types of its requirements. Files check exactly
+// once; cycles and missing targets degrade to `any` for the affected edge
+// only. Roots are visited in slice order, so runs over the same set with
+// the same seed produce identical results. The driver is single-threaded:
+// checker scopes share ambient entries with warm mutable caches by design,
+// so parallel checking would corrupt results (see ambient.go).
+type checkDriver struct {
+	files   []*SourceFile
+	shorts  map[string]string
+	cfgDir  string
+	ambient *checker.Scope
+	opt     checker.Options
+	state   map[*SourceFile]int
+	modTy   map[*SourceFile]types.Type
+	// requires lists a file's dotted requires; nil selects the live walk
+	// (checker.RequiredModules). Sessions inject parse-time caches.
+	requires func(sf *SourceFile) []string
+	// onCheck receives each completed file in visit order.
+	onCheck func(sf *SourceFile, ds []diag.Diagnostic, mt types.Type)
+}
+
+func liveRequires(sf *SourceFile) []string {
+	return checker.RequiredModules(sf.File)
+}
+
+const (
+	checkUnvisited = 0
+	checkBusy      = 1
+	checkDone      = 2
+)
+
+// seedDone pre-marks files as already checked (ambient decls, or cached
+// files in incremental runs) with their known module types.
+func (d *checkDriver) seedDone(sf *SourceFile, mt types.Type) {
+	d.state[sf] = checkDone
+	d.modTy[sf] = mt
+}
+
+func (d *checkDriver) checkOne(sf *SourceFile) {
+	if d.state[sf] == checkDone {
+		return
+	}
+	if d.state[sf] == checkBusy {
+		return // cyclic require: preset Any stands for this edge
+	}
+	d.state[sf] = checkBusy
+	d.modTy[sf] = types.Any
+	env := map[string]types.Type{}
+	// requires defaults to a live walk (pre-own-expansion at this point in
+	// full runs); incremental runs inject parse-time cached requires so
+	// rechecks of already-expanded ASTs see identical edges.
+	reqs := liveRequires(sf)
+	if d.requires != nil {
+		reqs = d.requires(sf)
+	}
+	for _, dotted := range reqs {
+		tgt := resolveRequireIn(d.files, d.shorts, d.cfgDir, sf, dotted)
+		if tgt == nil || tgt.IsDecl {
+			continue
+		}
+		d.checkOne(tgt)
+		env[dotted] = d.modTy[tgt]
+	}
+	fileOpt := d.opt
+	fileOpt.RequireTypes = env
+	fileOpt.Ambient = d.ambient
+	ds, _, mt := checker.CheckFileModule(sf.File, fileOpt)
+	d.modTy[sf] = mt
+	d.state[sf] = checkDone
+	d.onCheck(sf, ds, mt)
 }
 
 // checkAll checks every file in dependency order, feeding each file the
@@ -119,51 +201,28 @@ func (p *Program) resolveRequire(from *SourceFile, dotted string) *SourceFile {
 // front into a shared parent scope (builtins + globals, like tsconfig
 // types); program files then check as children so shadowing stays detached.
 func (p *Program) checkAll(opt checker.Options) {
-	const (
-		unvisited = 0
-		busy      = 1
-		done      = 2
-	)
 	ambient := p.buildAmbient(opt)
-	state := map[*SourceFile]int{}
-	modTy := map[*SourceFile]types.Type{}
+	d := &checkDriver{
+		files:   p.Files,
+		shorts:  p.shorts,
+		cfgDir:  p.Cfg.Dir,
+		ambient: ambient,
+		opt:     opt,
+		state:   map[*SourceFile]int{},
+		modTy:   map[*SourceFile]types.Type{},
+		onCheck: func(sf *SourceFile, ds []diag.Diagnostic, mt types.Type) {
+			p.Diags = append(p.Diags, ds...)
+		},
+	}
 	// Decl files contribute only ambient (checked once above); they never
 	// carry a runtime module type, preserving the classic any-fallback.
 	for _, sf := range p.Files {
 		if sf.IsDecl {
-			state[sf] = done
-			modTy[sf] = types.Any
+			d.seedDone(sf, types.Any)
 		}
-	}
-	var checkOne func(sf *SourceFile)
-	checkOne = func(sf *SourceFile) {
-		if state[sf] == done {
-			return
-		}
-		if state[sf] == busy {
-			return // cyclic require: preset Any stands for this edge
-		}
-		state[sf] = busy
-		modTy[sf] = types.Any
-		env := map[string]types.Type{}
-		for _, dotted := range checker.RequiredModules(sf.File) {
-			tgt := p.resolveRequire(sf, dotted)
-			if tgt == nil || tgt.IsDecl {
-				continue
-			}
-			checkOne(tgt)
-			env[dotted] = modTy[tgt]
-		}
-		fileOpt := opt
-		fileOpt.RequireTypes = env
-		fileOpt.Ambient = ambient
-		ds, _, mt := checker.CheckFileModule(sf.File, fileOpt)
-		p.Diags = append(p.Diags, ds...)
-		modTy[sf] = mt
-		state[sf] = done
 	}
 	for _, sf := range p.Files {
-		checkOne(sf)
+		d.checkOne(sf)
 	}
 }
 

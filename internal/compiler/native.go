@@ -67,7 +67,8 @@ func (p *Program) emitNativeAssets(emittedSet map[string]bool) ([]string, error)
 		if err != nil {
 			continue // transient race (deleted mid-build); next cycle heals
 		}
-		if err := os.WriteFile(dst, raw, 0o644); err != nil {
+		// Content compare keeps mtimes stable for unchanged assets.
+		if _, err := writeFileIfChanged(dst, raw); err != nil {
 			return copied, err
 		}
 		emittedSet[filepath.Clean(dst)] = true
