@@ -9,12 +9,13 @@ import (
 )
 
 // Native asset passthrough (cross-language contract): *.lua shims and
-// native libraries (*.so/*.dylib/*.dll) travel from source/vendor into dist
+// native libraries (*.so/*.dylib/*.dll shared, *.a static) travel from
+// source/vendor into dist
 // preserving layout, so vendored `init.lua` + `ffi.load` relative paths keep
 // working without manual copy steps.
 //
 // Rules (bug-avoidance first):
-//   - Only static assets: .lua/.so/.dylib/.dll. Headers/docs never copy.
+//   - Only static assets: .lua/.so/.dylib/.dll/.a. Headers/docs never copy.
 //   - `.tl` emit wins: an asset whose destination collides with an emitted
 //     .lua output is skipped (source of truth is the .tl file).
 //   - outDir/.git/node_modules never walked; config exclude patterns apply
@@ -28,7 +29,8 @@ func isNativeAsset(name string) bool {
 	return strings.HasSuffix(lower, ".lua") ||
 		strings.HasSuffix(lower, ".so") ||
 		strings.HasSuffix(lower, ".dylib") ||
-		strings.HasSuffix(lower, ".dll")
+		strings.HasSuffix(lower, ".dll") ||
+		strings.HasSuffix(lower, ".a")
 }
 
 var _ = isNativeAsset

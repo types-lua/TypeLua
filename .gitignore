@@ -9,6 +9,13 @@
 /dist/
 examples/*/dist/
 
+# Locally built native libs beside examples (build.sh products, e.g.
+# examples/c/libmylib.so, examples/leveldb/libleveldb.so+.a); never commit.
+examples/*/*.so
+examples/*/*.a
+examples/*/*.dylib
+examples/*/*.dll
+
 # OS / editor clutter
 .DS_Store
 Thumbs.db

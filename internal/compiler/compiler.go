@@ -103,7 +103,7 @@ func (p *Program) HasErrors() bool {
 // Emit writes .lua outputs to outDir. Returns emitted paths. Skips .d.tl and `declare` bodies.
 // Type-only decls are erased by the emitter; `declare function` empty bodies are skipped at file level?
 // For safety, we emit every non-decl file (even empty) to preserve build shape.
-// Native assets (*.lua shims, *.so/*.dylib/*.dll) are then copied preserving
+// Native assets (*.lua shims, *.so/*.dylib/*.dll/*.a) are then copied preserving
 // layout so vendored cross-language bindings run without manual steps.
 func (p *Program) Emit() ([]string, error) {
 	var emitted []string

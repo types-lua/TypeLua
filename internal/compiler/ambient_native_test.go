@@ -113,6 +113,7 @@ func TestNativeAssetsPassthrough(t *testing.T) {
 	write("main.tl", "local x: number = 1\nprint(x)\n")
 	write("tlua_modules/example.com/mylib/init.lua", "local M = {}\nfunction M.add(a, b) return a + b end\nreturn M\n")
 	write("tlua_modules/example.com/mylib/libmylib.so", "fake-so-bytes")
+	write("tlua_modules/example.com/mylib/libmylib.a", "fake-archive-bytes")
 	cfg, err := config.Load(filepath.Join(dir, "tlua.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +130,7 @@ func TestNativeAssetsPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foundLua, foundSo := false, false
+	foundLua, foundSo, foundA := false, false, false
 	for _, e := range emitted {
 		if strings.HasSuffix(e, "init.lua") {
 			foundLua = true
@@ -137,8 +138,11 @@ func TestNativeAssetsPassthrough(t *testing.T) {
 		if strings.HasSuffix(e, "libmylib.so") {
 			foundSo = true
 		}
+		if strings.HasSuffix(e, "libmylib.a") {
+			foundA = true
+		}
 	}
-	if !foundLua || !foundSo {
+	if !foundLua || !foundSo || !foundA {
 		t.Fatalf("native assets must copy to dist, got %v", emitted)
 	}
 }

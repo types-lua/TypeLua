@@ -23,8 +23,8 @@ import (
 //
 // Two runtimes, switched by flag:
 //   - embedded golua (default): zero external dependencies, pure Lua only.
-//     FFI (require "ffi") and C modules (.so) are NOT supported here —
-//     golua has no Lua C-module loader by design.
+//     FFI (require "ffi") and C modules (.so/.dll/.a) are NOT supported
+//     here — golua has no Lua C-module loader by design.
 //   - external (--lua <bin>): emit to a temp dir and exec the interpreter
 //     (lua5.4, luajit, ...). The emitted bootstrap prelude sets
 //     package.path/cpath from the script directory, so this works the same

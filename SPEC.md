@@ -316,7 +316,8 @@ print(M.native_add(20, 22))
 
 - 三形态坍缩为一口：`A.Lua C Module(luaopen_*)`、`B.FFI直调(ffi.load/cdef)`、`C.Shim进程(IPC/wasm)` 皆由 shim 藏起差异（`examples/native/native_shim.lua` 为 B 式最小样板）。
 - 优雅形态（推荐，见 `examples/c`）：`.h` 为唯一源、`bindgen` 生成 `.d.tl`、一次封装的 **TypeLua shim**（`mylib.tl` 内做 `cdef` + `ffi.load` + 唯一 `as`，末尾 `return M`），调用方 `import C from "mylib"` 零 cast——模块类型由 `return M` 推断直达（`require` 按引用文件同目录优先消解）。`.so` 与 shim 同目录（源码与 `dist` 同布局），shim 内以 `debug.getinfo` 定脚本目录拼绝对路径 `ffi.load`（`ffi.load` 不走 `package.cpath`）。
-- 包即普通 git 包：`*.tl（含.d.tl)` + `*.lua` shim + `*.so/*.dylib/*.dll` 同进 `tlua_modules/<path>/`（`mod vendor` 已透传三类，头文件/文档留缓存）；`tlua.lock` 的 commit 即 pin（大二进制进 git 为 MVP 取舍，未来加 artifact hash）。
-- 构建集成：`build` 按布局拷贝静态资产到 `dist`（`.tl` 发射优先，同名 `.lua` 跳过；删源的 native 残留需 `clean`，`watch`  stale 清理仅管 `.tl` 产物）；运行时 prelude 置 `package.path` 与 `package.cpath`（脚本目录优先，用户项保留）+ 点式 vendor searcher（仅 `.lua`，点式 `.so` 无 shim 不支持——按约必须配 `init.lua`）。
-- 监听集 = `ListFiles`（含 `typeRoots` 的 `.d.tl`）+ `ListNativeAssets`（`.lua/.so` 改动亦重编）+ `tlua.json/toml/lock`；`outDir` 恒不监听。
+- 包即普通 git 包：`*.tl（含.d.tl)` + `*.lua` shim + `*.so/*.dylib/*.dll` 共享库 + `*.a` 静态库同进 `tlua_modules/<path>/`（`mod vendor` 透传四类，头文件/文档留缓存）；`tlua.lock` 的 commit 即 pin（大二进制进 git 为 MVP 取舍，未来加 artifact hash）。
+- 构建集成：`build` 按布局拷贝静态资产到 `dist`（`.tl` 发射优先，同名 `.lua` 跳过；删源的 native 残留需 `clean`，`watch`  stale 清理仅管 `.tl` 产物）；运行时 prelude 置 `package.path` 与 `package.cpath`（脚本目录优先，用户项保留；`.a` 永不进 `cpath`，见下）+ 点式 vendor searcher（仅 `.lua`，点式 `.so` 无 shim 不支持——按约必须配 `init.lua`）。
+- 静态库形态（`*.a`）：与 `.so` 走同一透传/vendor/监听通道，但**运行时语义不同**——动态加载器打不开 `.a`，故无 `ffi.load` 形态。用法是构建宿主时把 `.a` 链进 LuaJIT 可执行文件（`luajit myapp.c libfoo.a`），运行时符号已在进程内，shim 内以 `ffi.C`（同 `cdef`、无 `load`）直调。`bindgen --so` 缺省仍为 `.so`（shim 加载态）；静态形态手写 shim 时把 `ffi.load(...)` 换成 `ffi.C` 即可，`.d.tl` 契约不变。
+- 监听集 = `ListFiles`（含 `typeRoots` 的 `.d.tl`）+ `ListNativeAssets`（`.lua/.so/.a` 改动亦重编）+ `tlua.json/toml/lock`；`outDir` 恒不监听。
 - 限制：LSP 暂无 ambient（多文件工程以 `tlua check` 为准）；`.d.tl` 的 `require` 边恒 `any`（声明文件无运行时值）；`select/pcall` 穿 `yield` 等 §14 限制对 FFI 回调同样适用。

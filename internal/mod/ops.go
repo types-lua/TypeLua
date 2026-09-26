@@ -377,7 +377,8 @@ func (p *Project) VendorDir() string {
 // modules.txt manifest. Vendored assets: *.tl (incl. *.d.tl type contracts),
 // *.lua shims (the cross-language runtime contract: init.lua hides
 // ffi.load/C-module/IPC differences), and native libraries (*.so/*.dylib/
-// *.dll). Headers and other files stay in the module cache only.
+// *.dll shared, *.a static). Headers and other files stay in the module
+// cache only.
 func (p *Project) Vendor(ctx context.Context, cache *Cache) error {
 	if p.Lock == nil || len(p.Lock.Entries) == 0 {
 		return fmt.Errorf("nothing to vendor (empty lock; run `tlua mod fetch` first)")
@@ -419,7 +420,8 @@ func SortedEntries(l *Lock) []LockEntry {
 }
 
 // copyTlTree copies module runtime assets (preserving layout) from src to dst:
-// *.tl (incl. *.d.tl), *.lua shims, and native libs (*.so/*.dylib/*.dll).
+// *.tl (incl. *.d.tl), *.lua shims, and native libs (*.so/*.dylib/*.dll shared,
+// *.a static).
 // Dotfiles and .git stay out; everything else (headers, docs) stays cached.
 func copyTlTree(src, dst string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
@@ -442,7 +444,7 @@ func copyTlTree(src, dst string) error {
 		lower := strings.ToLower(name)
 		isTl := strings.HasSuffix(lower, ".tl")
 		isLua := strings.HasSuffix(lower, ".lua")
-		isNative := strings.HasSuffix(lower, ".so") || strings.HasSuffix(lower, ".dylib") || strings.HasSuffix(lower, ".dll")
+		isNative := strings.HasSuffix(lower, ".so") || strings.HasSuffix(lower, ".dylib") || strings.HasSuffix(lower, ".dll") || strings.HasSuffix(lower, ".a")
 		if !isTl && !isLua && !isNative {
 			return nil
 		}

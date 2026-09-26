@@ -32,6 +32,9 @@ import (
 // precedence over vendored ones — exactly like check-time resolution.
 // Native packages must ship an init.lua shim (the cross-language contract);
 // dotted .so layouts without a shim stay unsupported by design.
+// Static archives (*.a) never enter package.cpath on purpose: the Lua C
+// loader cannot open them. Link .a into the host binary at build time and
+// reach the symbols via ffi.C (same cdef, no ffi.load).
 //
 // The prelude is Lua 5.1-safe (no goto, no //, no bitwise ops, no <const>)
 // and defensive: missing debug/package libraries degrade instead of

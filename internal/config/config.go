@@ -233,7 +233,8 @@ func (c *Config) ListFiles() ([]string, error) {
 }
 
 // ListNativeAssets lists static cross-language assets (*.lua shims,
-// *.so/*.dylib/*.dll) under RootDir and tlua_modules, excluding outDir.
+// *.so/*.dylib/*.dll shared libraries, *.a static archives) under RootDir
+// and tlua_modules, excluding outDir.
 // Headers/docs never list; missing dirs are ignored. Used by build Trois
 // passthrough and watch triggering alike so both agree on the input set.
 func (c *Config) ListNativeAssets() ([]string, error) {
@@ -290,7 +291,11 @@ func isNativeAssetName(name string) bool {
 	return strings.HasSuffix(lower, ".lua") ||
 		strings.HasSuffix(lower, ".so") ||
 		strings.HasSuffix(lower, ".dylib") ||
-		strings.HasSuffix(lower, ".dll")
+		strings.HasSuffix(lower, ".dll") ||
+		// Static archives travel the same passthrough/vendor/watch path as
+		// shared libs (link into the host at build time, then ffi.C at
+		// runtime). They never enter package.cpath (see bootstrap.go).
+		strings.HasSuffix(lower, ".a")
 }
 
 // listTypeRootDecls finds ambient *.d.tl under typeRoots not already listed.

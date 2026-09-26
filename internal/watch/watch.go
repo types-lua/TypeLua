@@ -100,8 +100,8 @@ func configPaths(cfg *config.Config) []string {
 // Collect snapshots the current watch set. Files that cannot be statted
 // are omitted so their disappearance reads as Removed (the rebuild will
 // surface the underlying TL4001); transient read races resolve on the
-// next cycle. Native assets (*.lua/*.so) join .tl sources so shim/binary
-// edits retrigger the passthrough copy.
+// next cycle. Native assets (*.lua shims, *.so/*.dylib/*.dll/*.a) join .tl
+// sources so shim/binary edits retrigger the passthrough copy.
 func Collect(cfg *config.Config) (Snapshot, error) {
 	list, err := cfg.ListFiles()
 	if err != nil {

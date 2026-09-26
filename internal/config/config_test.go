@@ -78,14 +78,15 @@ func TestListNativeAssets(t *testing.T) {
 	write("main.tl")
 	write("tlua_modules/a/init.lua")
 	write("tlua_modules/a/lib.so")
+	write("tlua_modules/a/lib.a")
 	write("notes.txt")
 	c := Default(dir)
 	assets, err := c.ListNativeAssets()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(assets) != 2 {
-		t.Fatalf("want init.lua + lib.so, got %v", assets)
+	if len(assets) != 3 {
+		t.Fatalf("want init.lua + lib.so + lib.a, got %v", assets)
 	}
 }
 

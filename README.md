@@ -63,7 +63,7 @@ go build -o tlua ./cmd/tlua
 ```
 
 - 默认内嵌 `golua`（纯 Go 实现，零外部依赖）：转译结果写入临时目录后在进程内执行，退出自动清理；多文件 `require`、包自举（`package.path` 前缀 + 点式 vendor searcher）、`concurrent` 调度器照常工作；工程外的单文件自动退化为单文件程序。
-- 限制：内嵌模式跑不了 `require("ffi")` 与 `.so/.dll` C 模块（golua 无 C 模块加载器）——这类工程用 `--lua luajit`（配 `--target 5.1`）。
+- 限制：内嵌模式跑不了 `require("ffi")` 与 `.so/.dll/.a` C 模块（golua 无 C 模块加载器）——这类工程用 `--lua luajit`（配 `--target 5.1`）。
 
 ## 语言速览
 
