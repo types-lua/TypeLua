@@ -12,9 +12,13 @@ func (p *Parser) synchronize() {
 		if k == token.EOF {
 			return
 		}
-		// Statement boundaries.
+		// Statement boundaries. RBrace joins End here so an error inside
+		// a `{ ... }` function body resyncs at the body's own closer
+		// instead of skipping it and cascading outward; every loop that
+		// can reach synchronize (block/table/class/select members)
+		// already terminates on RBrace.
 		switch k {
-		case token.End, token.Else, token.Elseif, token.Until:
+		case token.End, token.Else, token.Elseif, token.Until, token.RBrace:
 			return
 		case token.Semi:
 			p.next()

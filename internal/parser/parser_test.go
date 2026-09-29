@@ -354,6 +354,19 @@ func TestParseBraceFuncBody(t *testing.T) {
   m(): number { return 1 },
 }`)
 	mustParse(t, `local r = table.sort({3, 1, 2}, function(a: number, b: number): boolean { return a < b })`)
+	// Highest-risk adjacencies: table-type returns, generics, anonymous
+	// functions in tables/calls/conditions, async/spawn, export, and
+	// closers inside strings/comments/long-strings.
+	mustParse(t, `local function f(): {x: number} { return { x = 1 } }`)
+	mustParse(t, `local function id<T>(v: T): T { return v }`)
+	mustParse(t, "local t = { function() { return 1 } }")
+	mustParse(t, `print(f(function() { return 1 }, {2}))`)
+	mustParse(t, `local task = async function(): void { print(1) }`)
+	mustParse(t, `spawn function() { print(1) }`)
+	mustParse(t, `export function g(): number { return 1 }`)
+	mustParse(t, `local function f() { print("{ not a brace }") }`)
+	mustParse(t, "local function f() { print([[ } end ]]) }")
+	mustParse(t, "local function f() { -- }\n return 1 }")
 	// The body lands in the same AST slot as the `end` form.
 	f := mustParse(t, `local function f(x: number): number { return x + 1 }`)
 	lf, ok := f.Block.Stmts[0].(*ast.LocalFuncDef)
@@ -374,5 +387,23 @@ func TestParseBraceFuncBody(t *testing.T) {
 		if _, diags := ParseFile("t.tl", src); len(diags) == 0 {
 			t.Fatalf("expected errors for %q", src)
 		}
+	}
+}
+
+func TestParseBraceFuncBodyRecovery(t *testing.T) {
+	// An error inside a `{ ... }` body resyncs at the body's own `}`,
+	// exactly like `end`: only the genuine diagnostics survive and the
+	// statements after the function still parse.
+	f, diags := ParseFile("t.tl", "local function f() { @@@ } \nprint(1)\n")
+	for _, d := range diags {
+		if d.Code != diag.LexInvalidCharacter {
+			t.Fatalf("cascade diag, want only lexer errors: %v", d)
+		}
+	}
+	if len(f.Block.Stmts) != 2 {
+		t.Fatalf("tail statement lost, stmts=%d", len(f.Block.Stmts))
+	}
+	if _, ok := f.Block.Stmts[1].(*ast.ExprStmt); !ok {
+		t.Fatalf("tail not exprstmt %T", f.Block.Stmts[1])
 	}
 }
