@@ -24,9 +24,24 @@ func (p *Parser) parseFuncBody(isMethod bool) *ast.FuncLit {
 		p.next()
 		retTy = p.parseType()
 	}
+	body := p.parseFuncBlock()
+	return &ast.FuncLit{Params: params, HasVarArg: hasVA, VarArgName: vaName, VarArgType: vaTy, ReturnType: retTy, Body: body, IsMethod: isMethod, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+}
+
+// parseFuncBlock parses one function body in either shape: a brace block
+// `{ ... }` (no `end`, pure sugar) or a classic block closed by `end`.
+// The AST is identical either way, so checking, emission and tooling only
+// ever see the canonical form.
+func (p *Parser) parseFuncBlock() *ast.Block {
+	if p.at(token.LBrace) {
+		p.next() // {
+		body := p.parseBlock()
+		p.expect(token.RBrace, "'}'")
+		return body
+	}
 	body := p.parseBlock()
 	p.expect(token.End, "'end'")
-	return &ast.FuncLit{Params: params, HasVarArg: hasVA, VarArgName: vaName, VarArgType: vaTy, ReturnType: retTy, Body: body, IsMethod: isMethod, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
+	return body
 }
 
 func (p *Parser) parseParams() ([]*ast.Param, bool, *ast.Ident, ast.TypeNode) {

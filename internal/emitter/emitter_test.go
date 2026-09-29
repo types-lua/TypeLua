@@ -220,3 +220,32 @@ func TestAnonymousCallParenthesized(t *testing.T) {
 		t.Fatalf("got %q", out)
 	}
 }
+
+func TestEmitBraceFuncBody(t *testing.T) {
+	// Brace bodies emit the canonical `end` form, byte-identical to it.
+	pairs := [][2]string{
+		{
+			`local function f(x: number): number { return x + 1 }`,
+			"local function f(x)\n    return x + 1\nend\n",
+		},
+		{
+			`local cb = function(a: number): number { return a * 2 }`,
+			"local cb = function(a) return a * 2 end\n",
+		},
+		{
+			"local function e() {}",
+			"local function e()\nend\n",
+		},
+	}
+	for i, pr := range pairs {
+		if got := emit(t, pr[0]); got != pr[1] {
+			t.Fatalf("case %d: got %q, want %q", i, got, pr[1])
+		}
+	}
+	// Class brace methods match their `end` twins byte for byte.
+	a := emit(t, "class C {\n  m(): number { return 1 },\n}\n")
+	b := emit(t, "class C {\n  m(): number return 1 end,\n}\n")
+	if a != b {
+		t.Fatalf("class brace/end differ:\n%s\n---\n%s", a, b)
+	}
+}

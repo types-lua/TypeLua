@@ -71,6 +71,7 @@ import G: GreetApi from "example.com.greet.greet"  -- 糖：local G = require(..
 ```
 
 - `export`/`declare` 仅修饰声明；`declare` 无发射。
+- 函数体两种写法等价：`... end` 或 `{ ... }`（具名/匿名/方法/`async`/类方法通用；`{}` 为空体）。AST 完全一致，检查与发射只认标准形（产物恒为 `end` 式地道 Lua）。
 - 泛型：`<T>`, `<T extends C>`, `<T = Default>`；调用时推断，也支持显式 `f<T>()`（含 `obj:m<T>()`、`C.new<T>()`、`C<T>()`；不足位用推断/默认值补齐，超位与约束违反报错）。
 - 属性：`local x <const> = 1`，`local h <close> = ...`（`--target 5.1` 时剥离）。
 - `import` 三式：`import "p"`（副作用）、`import N from "p"`、`import N: T from "p"`；检查按依赖拓扑排序并从源文件推断模块类型（无注解即可用，有注解则校验一致，不一致报 `TL3010`）；`import` 仍是普通标识符（`local import = 1`、`import("x")`、跨行字符串调用不受影响）。

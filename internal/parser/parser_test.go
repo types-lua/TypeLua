@@ -340,3 +340,39 @@ func TestParseDefer(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBraceFuncBody(t *testing.T) {
+	// Every function shape accepts `{ ... }` instead of `... end`.
+	mustParse(t, `local function f(x: number): number { return x + 1 }`)
+	mustParse(t, `local function e() {}`)
+	mustParse(t, `local cb = function(a: number, b: number): number { return a + b }`)
+	mustParse(t, `function M.m(self, x: number) { print(x) }`)
+	mustParse(t, "local t = { f = function() { return 1 } }")
+	mustParse(t, "local function outer(): number\n  local function inner(): number { return 7 }\n  return inner()\nend")
+	mustParse(t, `class C {
+  constructor(x: number) { self.x = x },
+  m(): number { return 1 },
+}`)
+	mustParse(t, `local r = table.sort({3, 1, 2}, function(a: number, b: number): boolean { return a < b })`)
+	// The body lands in the same AST slot as the `end` form.
+	f := mustParse(t, `local function f(x: number): number { return x + 1 }`)
+	lf, ok := f.Block.Stmts[0].(*ast.LocalFuncDef)
+	if !ok {
+		t.Fatalf("not localfuncdef %T", f.Block.Stmts[0])
+	}
+	if lf.Func == nil || lf.Func.Body == nil || lf.Func.Body.Ret == nil {
+		t.Fatalf("brace body missing return")
+	}
+	// Errors, all recoverable: missing `}` and mixed closers.
+	for _, src := range []string{
+		`local function f(x: number): number { return x + 1 `,
+		`local function f(x: number): number { return x + 1 end }`,
+		`class C {
+  m(): number { return 1 end },
+}`,
+	} {
+		if _, diags := ParseFile("t.tl", src); len(diags) == 0 {
+			t.Fatalf("expected errors for %q", src)
+		}
+	}
+}

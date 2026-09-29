@@ -496,10 +496,9 @@ loop:
 			m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
 			return m
 		}
-		m.Body = p.parseBlock()
-		p.expect(token.End, "'end'")
-		m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
-		return m
+	m.Body = p.parseFuncBlock()
+	m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
+	return m
 	}
 	// Field: `name[: T] [= init]`.
 	if isCtor {

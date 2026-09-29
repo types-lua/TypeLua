@@ -69,3 +69,13 @@ function Counter:inc(): number
 end
 
 print(Counter:inc())
+
+-- Brace bodies: `{ ... }` replaces `... end` everywhere a function body
+-- appears (named, anonymous, methods, async). Same AST, same types.
+local function sub(a: number, b: number): number { return a - b }
+
+local greet = function(name: string): string { return "yo " .. name }
+
+function Counter:dec(): number { self.count = self.count - 1 return self.count }
+
+print(sub(9, 4), greet("bob"), Counter:dec())
