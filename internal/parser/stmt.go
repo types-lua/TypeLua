@@ -8,6 +8,21 @@ import (
 
 // ---------- blocks & statements ----------
 
+// 语句/块物理布局：
+//
+//	parseBlock
+//	  ├── 循环：EOF/End/Else/Elseif/Until/RBrace 停止；';' 作空语句
+//	  ├── Return 必须末尾：parseReturn 后 break
+//	  └── 其余 parseStmt 分派
+//
+//	parseStmt 按首 Token 分派：
+//	  import/defer/spawn/select/async  (软关键字，isXxxStart 判定)
+//	  do/if/while/repeat/for/break/goto/label
+//	  function/local/export/declare/macro/type/interface/enum/class/abstract
+//	  默认：parseExprStmtOrAssign（赋值或调用语句）
+//
+// Block.Ret 独立存放 return，结构上保证 return 只在块末。
+
 func (p *Parser) parseBlock() *ast.Block {
 	start := p.cur()
 	p.enterDepth(start.Span)

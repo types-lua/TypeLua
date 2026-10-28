@@ -6,36 +6,42 @@ import (
 	"strings"
 )
 
-// Code is a stable diagnostic identifier (`TLnnnn`). Every diagnostic the
-// compiler can emit is declared here exactly once: a typed constant plus
-// a table entry with its category and a short description. Call sites use
-// the constant (`diag.AwaitOutsideAsync`), never a raw string, so a typo
-// is a compile error instead of a silently wrong code.
+// Code 是稳定的诊断标识符（`TLnnnn`）。编译器能发出的每条诊断
+// 都在这里声明一次：一个类型化常量加一个表条目（类别 + 简短描述）。
+// 调用点使用常量（`diag.AwaitOutsideAsync`），从不用原始字符串，
+// 因此拼写错误是编译错误而非静默的错误码。
 //
-// Numeric ranges (kept stable for tooling and SPEC references):
+// 数值范围（为工具与 SPEC 引用保持稳定）：
 //
-//	TL1xxx  lexer
-//	TL2xxx  parser (TL203x class members, TL2038-TL2041 macro params)
-//	TL3xxx  checker (TL30xx statements/scopes, TL31xx type resolution,
-//	        TL32xx expressions/calls, TL33xx classes, TL36xx advanced
-//	        types, TL37xx macros, TL38xx concurrency)
-//	TL4xxx  project / I-O
+//	TL1xxx  词法
+//	TL2xxx  语法 (TL203x 类成员, TL2038-TL2041 宏参数)
+//	TL3xxx  检查器 (TL30xx 语句/作用域, TL31xx 类型解析,
+//	        TL32xx 表达式/调用, TL33xx 类, TL36xx 高级
+//	        类型, TL37xx 宏, TL38xx 并发)
+//	TL4xxx  工程 / I-O
 type Code string
 
-// Category groups codes by the stage that emits them.
+// Category 按发出阶段分组错误码。
 type Category int
 
 const (
+	// CatLexer 表示词法阶段。
 	CatLexer Category = iota
+	// CatParser 表示语法阶段。
 	CatParser
+	// CatChecker 表示类型检查阶段。
 	CatChecker
+	// CatExpander 表示宏展开阶段。
 	CatExpander
+	// CatConcurrency 表示并发语义阶段。
 	CatConcurrency
+	// CatProject 表示工程/发射阶段。
 	CatProject
-	// CatUnknown is reported for codes outside the registry.
+	// CatUnknown 表示注册表之外的错误码。
 	CatUnknown
 )
 
+// String 返回 Category 的文本形式。
 func (c Category) String() string {
 	switch c {
 	case CatLexer:
@@ -54,7 +60,7 @@ func (c Category) String() string {
 	return "unknown"
 }
 
-// ---- Lexer (TL1xxx) ----
+// ---- 词法 (TL1xxx) ----
 
 const (
 	LexUnterminatedLongComment Code = "TL1001"
@@ -64,7 +70,7 @@ const (
 	LexUnterminatedLongString  Code = "TL1005"
 )
 
-// ---- Parser (TL2xxx) ----
+// ---- 语法 (TL2xxx) ----
 
 const (
 	ParseExpectedToken       Code = "TL2001"
@@ -98,7 +104,7 @@ const (
 	ParseMacroVarargLast      Code = "TL2041"
 )
 
-// ---- Checker: statements & scopes (TL30xx) ----
+// ---- 检查器：语句与作用域 (TL30xx) ----
 
 const (
 	CheckerUnsupportedStmt  Code = "TL3000"
@@ -120,7 +126,7 @@ const (
 	UndefinedLabel          Code = "TL3050"
 )
 
-// ---- Checker: type resolution & declarations (TL31xx) ----
+// ---- 检查器：类型解析与声明 (TL31xx) ----
 
 const (
 	UnsupportedTypeNode       Code = "TL3100"
@@ -143,7 +149,7 @@ const (
 	CyclicInheritanceRef      Code = "TL3132"
 )
 
-// ---- Checker: expressions & calls (TL32xx) ----
+// ---- 检查器：表达式与调用 (TL32xx) ----
 
 const (
 	InvalidExpression      Code = "TL3200"
@@ -168,7 +174,7 @@ const (
 	BareVarargInTaskCall   Code = "TL3235"
 )
 
-// ---- Checker: classes (TL33xx) ----
+// ---- 检查器：类 (TL33xx) ----
 
 const (
 	SuperOutsideDerivedMethod Code = "TL3301"
@@ -192,7 +198,7 @@ const (
 	ImplementsNotSatisfied    Code = "TL3352"
 )
 
-// ---- Checker: advanced types (TL36xx) ----
+// ---- 检查器：高级类型 (TL36xx) ----
 
 const (
 	InferOutsideExtends  Code = "TL3601"
@@ -200,7 +206,7 @@ const (
 	IndexedAccessInvalid Code = "TL3603"
 )
 
-// ---- Expander: macros (TL37xx) ----
+// ---- 展开器：宏 (TL37xx) ----
 
 const (
 	UnexpandedMacro            Code = "TL3700"
@@ -212,7 +218,7 @@ const (
 	MacroVarargOutsideCallArgs Code = "TL3706"
 )
 
-// ---- Checker: concurrency (TL38xx) ----
+// ---- 检查器：并发 (TL38xx) ----
 
 const (
 	AwaitOutsideAsync     Code = "TL3801"
@@ -222,14 +228,14 @@ const (
 	AsyncCallOutsideAsync Code = "TL3805"
 )
 
-// ---- Project / I-O (TL4xxx) ----
+// ---- 工程 / I-O (TL4xxx) ----
 
 const (
 	CannotReadFile Code = "TL4001"
 )
 
-// codeDef is one registry row. Name must match the constant declared
-// above (a test enforces the pairing by parsing this file).
+// codeDef 是注册表的一行。Name 必须与上面声明的常量匹配
+// （测试通过解析本文件强制配对）。
 type codeDef struct {
 	code Code
 	name string
@@ -237,9 +243,8 @@ type codeDef struct {
 	desc string
 }
 
-// codeTable is the single source of truth for code metadata. Keep it
-// sorted by code; a test verifies sorting, uniqueness, and that the
-// constants above cover it exactly.
+// codeTable 是错误码元数据的唯一真相来源。按错误码排序；
+// 测试验证排序、唯一性与上面常量的完整覆盖。
 var codeTable = []codeDef{
 	{LexUnterminatedLongComment, "LexUnterminatedLongComment", CatLexer, "unterminated long comment"},
 	{LexInvalidCharacter, "LexInvalidCharacter", CatLexer, "invalid character"},
@@ -376,7 +381,7 @@ var codeTable = []codeDef{
 	{CannotReadFile, "CannotReadFile", CatProject, "cannot read a source file"},
 }
 
-// codeIndex maps every registered code to its row.
+// codeIndex 把每个注册错误码映射到其行。
 var codeIndex = func() map[Code]codeDef {
 	m := make(map[Code]codeDef, len(codeTable))
 	for _, d := range codeTable {
@@ -385,16 +390,16 @@ var codeIndex = func() map[Code]codeDef {
 	return m
 }()
 
-// String returns the wire spelling (`TLnnnn`).
+// String 返回 Code 的线上传输拼写（TLnnnn）。
 func (c Code) String() string { return string(c) }
 
-// Known reports whether the code is in the registry.
+// Known 报告 Code 是否在注册表中。
 func (c Code) Known() bool {
 	_, ok := codeIndex[c]
 	return ok
 }
 
-// Valid reports whether c has the `TLnnnn` shape (known or not).
+// Valid 报告 Code 是否符合 TLnnnn 形状（无论是否注册）。
 func (c Code) Valid() bool {
 	s := string(c)
 	if len(s) != 6 || s[0] != 'T' || s[1] != 'L' {
@@ -408,9 +413,7 @@ func (c Code) Valid() bool {
 	return true
 }
 
-// Category reports the stage that emits the code. Unknown but valid
-// codes fall back to the numeric prefix; malformed codes report
-// CatUnknown.
+// Category 返回发出该错误码的阶段。
 func (c Code) Category() Category {
 	if d, ok := codeIndex[c]; ok {
 		return d.cat
@@ -421,7 +424,7 @@ func (c Code) Category() Category {
 	return categoryOf(string(c))
 }
 
-// Description returns the registry description, or "" when unknown.
+// Description 返回注册表中的简短描述（未知返回空）。
 func (c Code) Description() string {
 	if d, ok := codeIndex[c]; ok {
 		return d.desc
@@ -429,7 +432,7 @@ func (c Code) Description() string {
 	return ""
 }
 
-// Name returns the constant identifier for a registered code, or "".
+// Name 返回注册表中对应的常量标识符（未知返回空）。
 func (c Code) Name() string {
 	if d, ok := codeIndex[c]; ok {
 		return d.name
@@ -437,7 +440,7 @@ func (c Code) Name() string {
 	return ""
 }
 
-// categoryOf derives the category from the numeric prefix.
+// categoryOf 从数值前缀推导类别。
 func categoryOf(s string) Category {
 	switch {
 	case strings.HasPrefix(s, "TL1"):
@@ -456,7 +459,7 @@ func categoryOf(s string) Category {
 	return CatUnknown
 }
 
-// Lookup parses a wire spelling and returns the registered code.
+// Lookup 解析线上传输拼写并返回注册错误码。
 func Lookup(s string) (Code, bool) {
 	c := Code(s)
 	if !c.Known() {
@@ -465,7 +468,7 @@ func Lookup(s string) (Code, bool) {
 	return c, true
 }
 
-// Codes returns every registered code in ascending order.
+// Codes 返回所有注册错误码（升序）。
 func Codes() []Code {
 	out := make([]Code, len(codeTable))
 	for i, d := range codeTable {
@@ -475,8 +478,8 @@ func Codes() []Code {
 	return out
 }
 
-// MarkdownTable renders the full registry as a Markdown table (used by
-// docs/11-diagnostics.md and kept in sync by a test).
+// MarkdownTable 把完整注册表渲染为 Markdown 表格
+// （被 docs/11-diagnostics.md 使用，并由测试保持同步）。
 //
 //go:generate go test -run TestDiagnosticsDocInSync -update .
 func MarkdownTable() string {

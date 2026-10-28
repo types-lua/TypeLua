@@ -7,22 +7,25 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Core expander: definition collection, statement/expression drivers.
+// 展开器核心：定义收集、语句/表达式驱动。
 
-// Diagnostics: TL37xx macro expansion.
+// maxExpandDepth 是宏递归展开的深度上限，防止无限递归。
 const maxExpandDepth = 64
 
-// macroDef is a collected macro definition.
+// macroDef 是收集到的单个宏定义（参数、是否 vararg、体、是否表达式宏）。
+// 它只在展开期存活；类型检查与发射阶段完全不知道宏存在。
 type macroDef struct {
 	name      string
 	params    []string
-	hasVarArg bool       // trailing `...` collects extra call arguments
-	body      ast.Expr   // expression macro
-	block     *ast.Block // statement macro
+	hasVarArg bool       // 尾随 `...` 收集多余调用实参
+	body      ast.Expr   // 表达式宏体
+	block     *ast.Block // 语句宏体
 	isExpr    bool
 	span      token.Span
 }
 
+// scope 是宏定义的词法作用域：父子链 + 当前块的宏定义表。
+// 与 checker 的 Scope 分离：宏只看语法，不看类型。
 type scope struct {
 	parent *scope
 	defs   map[string]*macroDef
@@ -37,10 +40,11 @@ func (s *scope) lookup(name string) *macroDef {
 	return nil
 }
 
+// expander 是一次 ExpandFile 调用的遍历状态：诊断、fresh 名计数器、活跃宏栈（递归检测）。
 type expander struct {
 	diags   []diag.Diagnostic
 	counter int
-	stack   []string // active macro names for recursion detection
+	stack   []string // 活跃宏名，用于递归检测
 }
 
 func (e *expander) errorf(code diag.Code, sp token.Span, format string, args ...any) {
@@ -57,8 +61,8 @@ func (e *expander) fresh(base string, avoid map[string]bool) string {
 	}
 }
 
-// ExpandFile expands all macro calls in f, erasing definitions.
-// Idempotent: a second run finds no definitions and changes nothing.
+// ExpandFile 展开 f 中所有宏调用，并擦除定义。
+// 幂等：第二次运行找不到定义，什么都不改。
 func ExpandFile(f *ast.File) []diag.Diagnostic {
 	e := &expander{}
 	if f.Block != nil {
@@ -71,7 +75,7 @@ func (e *expander) expandBlock(b *ast.Block, env *scope) {
 	if b == nil {
 		return
 	}
-	// Collect definitions first (forward references work, like types).
+	// 先收集定义（支持前向引用，类似类型）。
 	for _, st := range b.Stmts {
 		if md, ok := st.(*ast.MacroDef); ok {
 			if _, dup := env.defs[md.Name.Name]; dup {
@@ -81,17 +85,17 @@ func (e *expander) expandBlock(b *ast.Block, env *scope) {
 			if env.defs == nil {
 				env.defs = map[string]*macroDef{}
 			}
-		params := make([]string, len(md.Params))
-		for i, p := range md.Params {
-			params[i] = p.Name
-		}
-		env.defs[md.Name.Name] = &macroDef{name: md.Name.Name, params: params, hasVarArg: md.HasVarArg, body: md.Body, block: md.Block, isExpr: md.IsExpr, span: md.Span()}
+			params := make([]string, len(md.Params))
+			for i, p := range md.Params {
+				params[i] = p.Name
+			}
+			env.defs[md.Name.Name] = &macroDef{name: md.Name.Name, params: params, hasVarArg: md.HasVarArg, body: md.Body, block: md.Block, isExpr: md.IsExpr, span: md.Span()}
 		}
 	}
 	var out []ast.Stmt
 	for _, st := range b.Stmts {
 		if _, ok := st.(*ast.MacroDef); ok {
-			continue // definitions erase
+			continue // 定义擦除
 		}
 		out = append(out, e.expandStmtInto(st, env)...)
 	}
@@ -103,9 +107,9 @@ func (e *expander) expandBlock(b *ast.Block, env *scope) {
 	}
 }
 
-// expandStmtInto expands one statement, splicing statement-macro results.
+// expandStmtInto 展开一条语句，拼接语句宏结果。
 func (e *expander) expandStmtInto(st ast.Stmt, env *scope) []ast.Stmt {
-	// Statement-macro call in statement position splices.
+	// 语句位置的语句宏调用进行拼接。
 	if es, ok := st.(*ast.ExprStmt); ok {
 		if call, ok := es.E.(*ast.CallExpr); ok {
 			if id, ok := call.Func.(*ast.Ident); ok {
@@ -224,13 +228,13 @@ func (e *expander) expandStmtInto(st ast.Stmt, env *scope) []ast.Stmt {
 		}
 		return []ast.Stmt{st}
 	case *ast.MacroDef:
-		return nil // erased (defensive; normally dropped by expandBlock)
+		return nil // 擦除（防御性；通常由 expandBlock 丢弃）
 	default:
 		return []ast.Stmt{st}
 	}
 }
 
-// expandExpr expands macro calls inside an expression.
+// expandExpr 展开表达式内的宏调用。
 func (e *expander) expandExpr(x ast.Expr, env *scope) ast.Expr {
 	switch n := x.(type) {
 	case *ast.CallExpr:

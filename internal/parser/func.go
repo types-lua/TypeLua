@@ -7,6 +7,17 @@ import (
 
 // ---------- function bodies ----------
 
+// 函数体物理布局：
+//
+//	parseFuncBody
+//	  ├── expect '(' ──► parseParams (含 ...vararg)
+//	  ├── 返回类型：'->' 多返回元组  或  ':' 单类型
+//	  └── parseFuncBlock
+//	        ├── '{' ... '}'  花括号体（纯语法糖，AST 与 end 体一致）
+//	        └── ... 'end'    经典体
+//
+// 两形状产出相同 AST，检查/发射/工具只看规范形式。
+
 func (p *Parser) parseFuncBody(isMethod bool) *ast.FuncLit {
 	start := p.cur()
 	if _, ok := p.expect(token.LParen, "'('"); !ok {
@@ -30,8 +41,7 @@ func (p *Parser) parseFuncBody(isMethod bool) *ast.FuncLit {
 
 // parseFuncBlock parses one function body in either shape: a brace block
 // `{ ... }` (no `end`, pure sugar) or a classic block closed by `end`.
-// The AST is identical either way, so checking, emission and tooling only
-// ever see the canonical form.
+// 两种形态的 AST 完全相同，因此检查、发射与工具链只看到规范形式。
 func (p *Parser) parseFuncBlock() *ast.Block {
 	if p.at(token.LBrace) {
 		p.next() // {

@@ -7,6 +7,10 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：collectTypes 先把本块所有类型名登记进 Scope.types（两遍
+// 的第一遍），再 checkStmt 逐语句；这样类型声明的顺序与相互引用都不阻塞。
+// recordScope 把作用域与块 span 绑定，供 LSP 做作用域查询。
+
 // Block checking and per-block type collection.
 
 // ---------- blocks ----------

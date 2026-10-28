@@ -1,3 +1,5 @@
+// Package main 是 tlua 命令行入口：编译、检查、运行、监视、包管理与 bindgen。
+
 package main
 
 import (
@@ -11,6 +13,7 @@ import (
 	"github.com/typelua/typelua/internal/lsp"
 )
 
+// Version 是 tlua CLI 的版本号。
 const Version = "0.1.0"
 
 func main() {

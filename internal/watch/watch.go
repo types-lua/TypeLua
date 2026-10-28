@@ -1,15 +1,13 @@
-// Package watch implements tsc-style `--watch` polling for tlua.
+// Package watch 实现 tsc 风格的 `--watch` 轮询重建。
 //
-// Design notes (correctness first):
-//   - The watched set is derived from config.Config.ListFiles plus the
-//     config files themselves (tlua.json/tlua.toml/tlua.lock), so watch
-//     triggers exactly when the build input set changes — nothing more.
-//   - Anything under the resolved outDir is never watched, so emitting
-//     can never retrigger a rebuild (self-trigger loop).
-//   - Polling (no external deps, works on every platform/FS) with
-//     debounce coalescing: rapid saves collapse into one rebuild, and the
-//     baseline is refreshed after every rebuild so edits made mid-build
-//     are never lost.
+// 设计说明（正确性优先）：
+//   - 监视集由 config.Config.ListFiles 加配置文件本身（tlua.json/tlua.toml/tlua.lock）
+//     导出，因此仅在构建输入集变化时触发重建——不多不少。
+//   - 解析后的 outDir 下的任何内容都不监视，因此发射永远不能
+//     重触发重建（自触发循环）。
+//   - 轮询（无外部依赖，全平台/文件系统可用）+ 防抖合并：
+//     快速保存折叠为一次重建，每次重建后刷新基线，
+//     构建中途的编辑不丢失。
 package watch
 
 import (
@@ -23,35 +21,57 @@ import (
 	"github.com/typelua/typelua/internal/config"
 )
 
-// ChangeKind describes how a watched file differs from the baseline.
+// ChangeKind 描述被监视文件与基线的差异方式。
 type ChangeKind string
 
 const (
-	Added    ChangeKind = "added"
-	Removed  ChangeKind = "removed"
+	// Added 表示监视集中新增的文件。
+	Added ChangeKind = "added"
+	// Removed 表示监视集中消失的文件。
+	Removed ChangeKind = "removed"
+	// Modified 表示元信息变化的文件。
 	Modified ChangeKind = "modified"
 )
 
-// Change is a single watched-file difference, sorted by Path by Diff.
+// Change 是单个被监视文件的差异，Diff 按 Path 排序。
+//
+// 物理布局：
+//
+//	Change
+//	├── Path   string     // 绝对/清理后的路径
+//	├── Kind   ChangeKind  // added/removed/modified
+//	└── Config bool       // 是否为配置文件（tlua.json/toml/lock）
 type Change struct {
 	Path string
 	Kind ChangeKind
-	// Config is true when the path is a config file (tlua.json/toml/lock)
-	// rather than a program source.
+	// Config 为真时表示路径是配置文件（tlua.json/toml/lock）
+	// 而非程序源。
 	Config bool
 }
 
-// FileMeta is the identity we track per watched file.
+// FileMeta 是被监视文件的追踪身份（大小 + 修改时间）。
+//
+// 物理布局：
+//
+//	FileMeta
+//	├── Size    int64 // 字节数
+//	├── ModTime int64 // UnixNano
+//	└── Config  bool  // 是否配置文件
 type FileMeta struct {
 	Size    int64
 	ModTime int64 // UnixNano
 	Config  bool
 }
 
-// Snapshot maps absolute-clean paths to their tracked identity.
+// Snapshot 是监视集的快照：清理后的绝对路径 -> FileMeta。
+//
+// 物理布局（概念）：
+//
+//	Snapshot (map)
+//	└── path -> FileMeta{Size, ModTime, Config}
 type Snapshot map[string]FileMeta
 
-// OutDirAbs resolves the effective output directory to an absolute path.
+// OutDirAbs 把有效输出目录解析为绝对路径。
 func OutDirAbs(cfg *config.Config) string {
 	out := cfg.OutDir()
 	if filepath.IsAbs(out) {
@@ -60,7 +80,7 @@ func OutDirAbs(cfg *config.Config) string {
 	return filepath.Clean(filepath.Join(cfg.Dir, out))
 }
 
-// underDir reports whether p is inside dir (boundary-aware).
+// underDir 报告 p 是否在 dir 内（边界感知）。
 func underDir(p, dir string) bool {
 	if p == dir {
 		return true
@@ -68,7 +88,7 @@ func underDir(p, dir string) bool {
 	return strings.HasPrefix(p, dir+string(os.PathSeparator))
 }
 
-// abs cleans p to an absolute path.
+// abs 把 p 清理为绝对路径。
 func abs(p string) string {
 	if a, err := filepath.Abs(p); err == nil {
 		return filepath.Clean(a)
@@ -76,8 +96,8 @@ func abs(p string) string {
 	return filepath.Clean(p)
 }
 
-// configPaths returns the config files to watch: the tlua.json in effect
-// plus tlua.toml/tlua.lock beside it when they exist.
+// configPaths 返回要监视的配置文件：生效的 tlua.json
+// 以及同目录存在的 tlua.toml/tlua.lock。
 func configPaths(cfg *config.Config) []string {
 	var out []string
 	if cfg.Path != "" {
@@ -97,11 +117,10 @@ func configPaths(cfg *config.Config) []string {
 	return out
 }
 
-// Collect snapshots the current watch set. Files that cannot be statted
-// are omitted so their disappearance reads as Removed (the rebuild will
-// surface the underlying TL4001); transient read races resolve on the
-// next cycle. Native assets (*.lua shims, *.so/*.dylib/*.dll/*.a) join .tl
-// sources so shim/binary edits retrigger the passthrough copy.
+// Collect 快照当前监视集。无法 stat 的文件被省略，
+// 其消失读作 Removed（重建会暴露底层 TL4001）；
+// 瞬态读取竞争在下个周期解决。原生资产（*.lua shim、*.so/*.dylib/*.dll/*.a）
+// 加入 .tl 源，使 shim/二进制编辑重触发直通复制。
 func Collect(cfg *config.Config) (Snapshot, error) {
 	list, err := cfg.ListFiles()
 	if err != nil {
@@ -123,7 +142,7 @@ func Collect(cfg *config.Config) (Snapshot, error) {
 	for _, f := range list {
 		a := abs(f)
 		if outAbs != "" && underDir(a, outAbs) {
-			continue // never watch our own outputs
+			continue // 永不监视我们自己的输出
 		}
 		st, err := os.Stat(a)
 		if err != nil || st.IsDir() {
@@ -134,8 +153,8 @@ func Collect(cfg *config.Config) (Snapshot, error) {
 	for _, c := range configPaths(cfg) {
 		st, err := os.Stat(c)
 		if err != nil || st.IsDir() {
-			// A config that vanished is itself a change only when it was
-			// in the baseline; absence here vs presence there => Removed.
+			// 消失的配置本身只有在基线中存在时才是变化；
+			// 此处缺失 vs 彼处存在 => Removed。
 			continue
 		}
 		if outAbs != "" && underDir(c, outAbs) {
@@ -146,8 +165,7 @@ func Collect(cfg *config.Config) (Snapshot, error) {
 	return snap, nil
 }
 
-// Diff compares a baseline against the current snapshot. The result is
-// sorted by path for deterministic output.
+// Diff 比较基线与当前快照。结果按路径排序以保证确定性。
 func Diff(base, cur Snapshot) []Change {
 	var out []Change
 	for p, bm := range base {
@@ -169,7 +187,7 @@ func Diff(base, cur Snapshot) []Change {
 	return out
 }
 
-// HasConfigChange reports whether any change touches a config file.
+// HasConfigChange 报告是否有变化触及配置文件。
 func HasConfigChange(changes []Change) bool {
 	for _, c := range changes {
 		if c.Config {
@@ -179,21 +197,27 @@ func HasConfigChange(changes []Change) bool {
 	return false
 }
 
-// Watcher polls Collect until the snapshot differs from the baseline.
+// Watcher 轮询 Collect，直到快照与基线不同。
+//
+// 物理布局：
+//
+//	Watcher
+//	├── Poll    time.Duration  // 轮询间隔（<50ms 钳到 50ms）
+//	├── Debounce time.Duration  // 防抖窗口
+//	└── Collect func() (Snapshot, error) // 快照采集（默认 Collect(cfg)）
 type Watcher struct {
-	// Poll is the polling interval. Values < 50ms are clamped to 50ms.
+	// Poll 是轮询间隔。小于 50ms 的值钳到 50ms。
 	Poll time.Duration
-	// Debounce coalesces rapid successive saves into one rebuild.
+	// Debounce 把快速连续保存合并为一次重建。
 	Debounce time.Duration
-	// Collect snapshots the watch set; defaults to Collect(cfg) via closure.
+	// Collect 快照监视集；默认通过闭包使用 Collect(cfg)。
 	Collect func() (Snapshot, error)
 }
 
-// Next blocks until the watch set differs from base, then waits out the
-// debounce window and re-snapshots so one rebuild covers the whole burst.
-// It returns the fresh snapshot (the caller's next baseline) and the
-// coalesced changes. ctx cancellation aborts the wait. Collect errors are
-// returned immediately; the caller should back off before retrying.
+// Next 阻塞直到监视集与 base 不同，然后等待防抖窗口并重新快照，
+// 使一次重建覆盖整个突发。返回新鲜快照（调用方的下一个基线）
+// 与合并后的变化。ctx 取消中止等待。Collect 错误立即返回；
+// 调用方应在重试前退避。
 func (w *Watcher) Next(ctx context.Context, base Snapshot) (Snapshot, []Change, error) {
 	poll := w.Poll
 	if poll < 50*time.Millisecond {
@@ -217,8 +241,8 @@ func (w *Watcher) Next(ctx context.Context, base Snapshot) (Snapshot, []Change, 
 			if len(Diff(base, cur)) == 0 {
 				continue
 			}
-			// Burst coalescing: wait out the debounce, then capture the
-			// final state. A change observed here always rebuilds once.
+			// 突发合并：等待防抖窗口，然后捕获最终状态。
+			// 此处观察到的变化总是重建一次。
 			if debounce > 0 {
 				timer := time.NewTimer(debounce)
 				select {
@@ -234,8 +258,7 @@ func (w *Watcher) Next(ctx context.Context, base Snapshot) (Snapshot, []Change, 
 				if changes := Diff(base, cur2); len(changes) > 0 {
 					return cur2, changes, nil
 				}
-				// Flapped back to identical identity; keep watching from
-				// the newest state.
+				// 已回到相同身份；从最新状态继续监视。
 				base = cur2
 				continue
 			}

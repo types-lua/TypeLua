@@ -10,6 +10,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：表达式检查返回类型切片以承载多返回；table 字面量按"纯列表
+// -> Tuple，含命名 -> Object"分流；索引/字段访问统一走 lookupField。
+
 // Expression checking, table literals, and operators.
 
 // ---------- expressions ----------

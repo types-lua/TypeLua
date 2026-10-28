@@ -6,14 +6,17 @@ import (
 	"github.com/typelua/typelua/internal/expand"
 )
 
+// 设计者视角：Ambient 作用域是"只读父节点"——所有文件共享同一份
+// builtins + .d.tl 声明；文件检查只写入自己的子作用域，避免重复定义与
+// 跨文件污染。共享 typeEntry 的缓存按顺序追加，不并发。
+
 // Ambient .d.tl support (like tsconfig types/typeRoots): declaration files
 // are checked once into a shared parent scope holding builtins + globals.
 // Program files then check in child scopes so shadowing stays detached and
 // duplicate detection only applies within the file itself.
 //
-// The shared scope is frozen after construction: file checking only writes
-// to its child top scope (bindVar/collectTypes touch cur only; lookups walk
-// parents read-only), so sequential reuse is safe. Type entries are shared
+// 共享作用域在构造后冻结：文件检查只写入其子顶层作用域（bindVar/collectTypes
+// 仅触碰 cur；查找只读地向上遍历），因此可安全顺序复用。类型条目共享
 // by pointer with warm caches; generic instantiation appends to shared
 // cacheInst maps sequentially (no concurrency in Program.Check).
 

@@ -4,7 +4,7 @@ import (
 	"github.com/typelua/typelua/internal/ast"
 )
 
-// Expression emission and operator spellings.
+// 表达式发射与运算符拼写。
 
 func itoa(i int) string {
 	if i == 0 {
@@ -37,7 +37,7 @@ func parseInt(s string) (int, error) {
 	} else if len(s) > 0 && s[0] == '+' {
 		s = s[1:]
 	}
-	// Strip underscores.
+	// 去掉下划线。
 	clean := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
 		if s[i] == '_' {
@@ -62,6 +62,7 @@ var errNotInt = errString("not int")
 
 type errString string
 
+// Error 返回 errString 的文本。
 func (x errString) Error() string { return string(x) }
 
 func (e *emitter) emitExpr(x ast.Expr) {
@@ -114,9 +115,9 @@ func (e *emitter) emitExpr(x ast.Expr) {
 		e.write("function(")
 		e.emitParams(n)
 		e.write(")")
-		// Body on same line if tiny? Always block for simplicity.
-		// Inline single-return for readability, unless a named rest
-		// parameter needs its rebinding prelude (forces multiline).
+		// 小函数体同行？为简单起见一律块状。
+		// 单返回内联以提高可读性，除非具名 rest
+		// 参数需要重绑前导（强制多行）。
 		needsPrelude := n.HasVarArg && n.VarArgName != nil
 		if isSmallBody(n.Body) && !needsPrelude {
 			if n.Body.Ret != nil && len(n.Body.Ret.Exprs) > 0 {
@@ -153,7 +154,7 @@ func (e *emitter) emitExpr(x ast.Expr) {
 		e.emitExpr(n.Obj)
 		e.write("." + n.Field.Name)
 	case *ast.CallExpr:
-		// `super(...)` inside a derived method builds on the base.
+		// 派生方法内的 `super(...)` 基于基类构造。
 		if id, ok := n.Func.(*ast.Ident); ok && id.Name == "super" {
 			if cc := e.curClass(); cc != nil && cc.base != "" {
 				e.write(cc.base + ".constructor(self")
@@ -165,8 +166,8 @@ func (e *emitter) emitExpr(x ast.Expr) {
 				break
 			}
 		}
-		// Lua requires parentheses around a function literal before a
-		// call: `(function() end)()`, not `function() end()`.
+		// Lua 要求函数字面量调用前加括号：
+		// `(function() end)()`，而非 `function() end()`。
 		if _, ok := n.Func.(*ast.FuncLit); ok {
 			e.write("(")
 			e.emitExpr(n.Func)
@@ -183,7 +184,7 @@ func (e *emitter) emitExpr(x ast.Expr) {
 		}
 		e.write(")")
 	case *ast.MethodCallExpr:
-		// `super:m(...)` dispatches to the base with the current self.
+		// `super:m(...)` 以当前 self 分发到基类。
 		if id, ok := n.Obj.(*ast.Ident); ok && id.Name == "super" {
 			if cc := e.curClass(); cc != nil && cc.base != "" {
 				e.write(cc.base + "." + n.Method.Name + "(self")
@@ -216,18 +217,18 @@ func (e *emitter) emitExpr(x ast.Expr) {
 		e.emitExpr(n.R)
 	case *ast.UnOpExpr:
 		e.write(unOpString(n.Op))
-		// `not x` needs space; `-x`, `#x`, `~x` don't.
+		// `not x` 需要空格；`-x`、`#x`、`~x` 不需要。
 		if n.Op.String() == "not" {
 			e.write(" ")
 		}
 		e.emitExpr(n.X)
 	case *ast.CastExpr:
-		// Erased.
+		// 擦除。
 		e.emitExpr(n.E)
 	case *ast.NonNullExpr:
 		e.emitExpr(n.E)
 	case *ast.AwaitExpr:
-		// Erased: the inner call yields by itself in the scheduler.
+		// 擦除：内层调用在调度器中自行 yield。
 		e.emitExpr(n.X)
 	default:
 		e.write("nil")
@@ -243,7 +244,7 @@ func isSmallBody(b *ast.Block) bool {
 
 func binOpString(k interface{ String() string }) string {
 	s := k.String()
-	// `!=` is parsed as alias for `~=`; always emit Lua form.
+	// `!=` 解析为 `~=` 的别名；始终发射 Lua 形式。
 	if s == "!=" {
 		return "~="
 	}

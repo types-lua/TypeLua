@@ -10,6 +10,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：类型实例化三段式——先占位（inflight shell），再填充
+//（build），最后回填壳保持指针稳定；maxTypeDepth 防止无限展开。
+
 // Type-entry instantiation with memoization and recursive shells.
 
 // maxTypeDepth caps generic instantiation nesting (see typeDepth).

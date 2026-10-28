@@ -5,6 +5,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：类型声明在 collectTypes 阶段已登记；此处仅 resolve 以
+// 触发错误与缓存，并为 enum 生成运行时表值。
+
 // Type declaration checking (aliases, interfaces, enums).
 
 // ---------- type declarations ----------

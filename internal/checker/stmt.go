@@ -6,6 +6,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：语句检查维护 retStack/labelStack/gotoList 三栈；if 的
+// 分支发散信息用于流敏感窄化（return 后条件翻转）。
+
 // Statement checking (locals, assignment, control flow, return).
 
 // ---------- statements ----------

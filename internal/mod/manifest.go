@@ -18,8 +18,7 @@ const (
 )
 
 // pathRe validates module paths: host-like first segment plus slashes.
-// The first segment must contain a dot (decentralized hosting) unless the
-// dependency overrides the fetch URL.
+// 第一段必须包含点（去中心化托管），除非依赖覆盖了拉取 URL。
 var pathRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~%-]*/[A-Za-z0-9._~%-]+(/[A-Za-z0-9._~%-]+)*$`)
 
 // ValidPath reports whether p is a plausible module path.

@@ -19,6 +19,21 @@ import (
 // `async`/`await`/`spawn`/`select`/`case`/`default` stay plain identifiers
 // everywhere else (`local await = 1`, `spawn(x)`, `select(...)`, ...).
 
+// 并发语法物理布局（软关键字，保持 Lua 超集）：
+//
+//	语句级：
+//	  async function ... end   ──► parseAsyncGlobal
+//	  local async function ... ──► parseAsyncLocalFunc
+//	  spawn <call>            ──► parseSpawn (函数字面量隐式 async)
+//	  select { case ... }     ──► parseSelect
+//	表达式级：
+//	  async function() ... end ──► parseAsyncFuncLit (匿名)
+//	  await <expr>            ──► parseAwait (仅前缀位置)
+//	同步原语：
+//	  ch:send(v) / ch:recv() / sleep(s) / timeout(s)
+//
+// 所有关键字判定靠 isXxxStart（同行情境），避免词法层状态。
+
 func isIdentNamed(t token.Token, name string) bool {
 	return t.Kind == token.Ident && t.Literal == name
 }

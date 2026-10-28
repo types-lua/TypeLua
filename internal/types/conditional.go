@@ -1,8 +1,20 @@
 package types
 
-// Conditional is `Check extends Extends ? True : False`. While Check still
-// mentions type parameters it stays deferred; Distributive mirrors TS
-// (naked type-param checks distribute over unions).
+// Conditional 是 `Check extends Extends ? TrueBranch : FalseBranch`。
+//
+// 为什么“先保持延迟”：只要 Check 仍含未实例化的类型参数，条件类型就不能求值，
+// 否则会把泛型函数的条件结果过早固化。Distributive 镜像 TS：裸类型参数的
+// 检查会按联合成员分发（`T extends U ? X : Y` 对 `A|B` 展开为
+// `(A extends U?X:Y) | (B extends U?X:Y)`）。
+//
+// 物理布局：
+//
+//	Conditional
+//	├── Check        Type   // 被检查的类型
+//	├── Extends      Type   // 约束/模式（可含 infer）
+//	├── TrueBranch   Type   // 命中分支
+//	├── FalseBranch  Type   // 未命中分支
+//	└── Distributive bool   // 是否按联合成员分发
 type Conditional struct {
 	Check        Type
 	Extends      Type
@@ -11,13 +23,19 @@ type Conditional struct {
 	Distributive bool
 }
 
+// Kind 返回 Conditional 的类型分类标签。
 func (t *Conditional) Kind() Kind { return KConditional }
+
+// String 把 Conditional 渲染为规范文本。
 func (t *Conditional) String() string { return t.stringSeen(map[Type]bool{}) }
 func (t *Conditional) stringSeen(seen map[Type]bool) string {
 	return typeString(t.Check, seen) + " extends " + typeString(t.Extends, seen) + " ? " + typeString(t.TrueBranch, seen) + " : " + typeString(t.FalseBranch, seen)
 }
 
-// TryEvalConditional evaluates c when its check type is concrete.
+// TryEvalConditional 在 Check 为具体类型时求值 c，否则原样返回 false。
+//
+// 为什么返回 bool 而非直接求值：让调用方区分“已求值”与“仍延迟”，避免把
+// 未实例化的条件类型误当成最终类型；opt 控制 nil 严格性。
 func TryEvalConditional(c *Conditional, opt Options) (Type, bool) {
 	if !IsConcreteType(c.Check) {
 		return c, false
@@ -25,7 +43,10 @@ func TryEvalConditional(c *Conditional, opt Options) (Type, bool) {
 	return EvalConditional(c.Check, c.Extends, c.TrueBranch, c.FalseBranch, c.Distributive, opt), true
 }
 
-// EvalConditional evaluates a conditional with a concrete check type.
+// EvalConditional 用已知的具体 check 类型求值条件类型（含分发）。
+//
+// 为什么拆出 EvalConditional：TryEvalConditional 负责守门（具体性），求值
+// 逻辑集中于此，便于 subst/assign 复用；distributive 在此按联合分发。
 func EvalConditional(check, extends, trueB, falseB Type, distributive bool, opt Options) Type {
 	if distributive {
 		if u, ok := check.(*Union); ok {

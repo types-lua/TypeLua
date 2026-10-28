@@ -5,6 +5,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：require 解析分两层——RequiredModules 静态收集路径供驱动，
+// requirePathType 在检查时查 RequireTypes 映射；ffi 特例在检查侧短路。
+
 // Cross-file require support: the driver (compiler.Program) resolves
 // dotted require paths to files, checks them in dependency order, and
 // feeds each file the module types of its requirements through

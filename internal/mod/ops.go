@@ -136,8 +136,8 @@ func (p *Project) registryFor(cache *Cache) Registry {
 }
 
 // Get adds/updates requirements, resolves, downloads, and writes the lock.
-// Each spec is `path` or `path@query` (default: keep manifest query, else
-// latest). With no specs, all direct requirements re-resolve (upgrade).
+// 每个 spec 为 `path` 或 `path@query`（默认：保留 manifest query，否则
+// latest）。无 spec 时，所有直接依赖重新解析（升级）。
 func Get(ctx context.Context, p *Project, cache *Cache, specs []string) (*Lock, error) {
 	if err := GitAvailable(ctx); err != nil {
 		return nil, err

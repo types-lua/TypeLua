@@ -1,9 +1,9 @@
 package bindgen
 
-// C header subset -> TypeLua .d.tl (cross-language type contract).
+// C 头文件子集 -> TypeLua .d.tl（跨语言类型契约）。
 //
-// Total and defensive: unknown constructs never error, they become `any`
-// with a `-- skipped` comment, so output always parses. Supported:
+// 总而全且防御性：未知构造从不报错，退化为 `any` 并附
+// `-- skipped` 注释，因此输出始终可解析。支持：
 //
 //	typedef struct { ... } Name;  struct Name { ... };
 //	typedef enum { A, B = 5 } Name;  enum Name { ... };
@@ -27,8 +27,8 @@ import (
 
 var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Generate renders a .d.tl contract for headerSrc. libName is the interface
-// holding functions + #defines (default CLib).
+// Generate 为 headerSrc 渲染 .d.tl 契约。libName 是持有函数与 #define 的接口
+// （默认 CLib）。
 func Generate(headerSrc, libName string) string {
 	if strings.TrimSpace(libName) == "" {
 		libName = "CLib"
@@ -46,7 +46,7 @@ func Generate(headerSrc, libName string) string {
 	fmt.Fprintf(&b, "-- Pointers/arrays are `cdata` (except char* -> string);\n")
 	fmt.Fprintf(&b, "-- unknown by-value types are `any` (no false positives).\n")
 	fmt.Fprintf(&b, "-- Usage: local C = ffi.load(\"mylib\") as %s\n\n", libName)
-	// Deterministic: structs, enums, aliases sorted; methods in source order.
+	// 确定性：struct/enum/alias 排序；方法保持源序。
 	names := append([]string(nil), p.structOrder...)
 	sort.Strings(names)
 	for _, n := range names {
@@ -132,8 +132,8 @@ func (p *parser) addAlias(name, body string) {
 	p.aliasOrder = append(p.aliasOrder, name)
 }
 
-// scanDefines collects simple #defines before comment stripping (so values
-// with // inside strings survive; we only accept int/string literals).
+// scanDefines 在注释剥离前收集简单 #define（使字符串内 // 存活；
+// 只接受整数/字符串字面量）。
 func (p *parser) scanDefines(src string) {
 	for _, line := range strings.Split(src, "\n") {
 		t := strings.TrimSpace(line)
@@ -205,7 +205,7 @@ func stripComments(src string) string {
 		b.WriteByte(src[i])
 		i++
 	}
-	// Drop preprocessor lines (defines already scanned).
+	// 丢弃预处理行（define 已扫描）。
 	var out strings.Builder
 	for _, line := range strings.Split(b.String(), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
@@ -217,7 +217,7 @@ func stripComments(src string) string {
 	return out.String()
 }
 
-// splitTopLevel splits on ';' at brace/paren depth 0.
+// splitTopLevel 在花括号/括号深度 0 处按 ';' 拆分。
 func splitTopLevel(src string) []string {
 	var out []string
 	depthBrace, depthParen := 0, 0
@@ -254,8 +254,8 @@ func (p *parser) handleDecl(d string) {
 	if t == "" {
 		return
 	}
-	// Function pointer typedef: typedef R (*Name)(P...);
-	// parseFuncPtrTypedef already returns a full `type X = ...` body.
+	// 函数指针 typedef：typedef R (*Name)(P...);
+	// parseFuncPtrTypedef 已返回完整 `type X = ...` 体。
 	if strings.HasPrefix(t, "typedef") && strings.Contains(t, "(*") {
 		if name, ft := parseFuncPtrTypedef(t, p.known); name != "" {
 			p.addAlias(name, ft)
@@ -285,15 +285,15 @@ func (p *parser) handleDecl(d string) {
 		return
 	}
 	if strings.HasPrefix(t, "struct") || strings.HasPrefix(t, "enum") || strings.HasPrefix(t, "union") {
-		// Forward decl (`struct Foo;`) carries no fields; skip silently
-		// unless it names something (map to cdata alias for nominal use).
+		// 前向声明（`struct Foo;`）无字段；静默跳过，
+		// 除非它命名某物（映射为 cdata 别名以供名义使用）。
 		if name := forwardDeclName(t); name != "" && !p.known[name] {
 			p.addAlias(name, fmt.Sprintf("type %s = cdata", name))
 			return
 		}
 		return
 	}
-	// Prototype: must contain '(' and look like `ret name(params)`.
+	// 原型：必须含 '(' 且形如 `ret name(params)`。
 	if strings.Contains(t, "(") && strings.Contains(t, ")") && !strings.Contains(t, "{") {
 		if m := parsePrototype(t, p.known); m != "" {
 			p.methods = append(p.methods, m)
@@ -302,8 +302,8 @@ func (p *parser) handleDecl(d string) {
 		p.skipped = append(p.skipped, oneLine(t))
 		return
 	}
-	// Top-level variable? `extern int x;` -> skip (belongs in interface only
-	// via explicit header review); record to avoid silent loss.
+	// 顶层变量？`extern int x;` -> 跳过（仅属于接口，需显式头文件审查）；
+	// 记录以避免静默丢失。
 	if t != "" {
 		p.skipped = append(p.skipped, oneLine(t))
 	}
@@ -327,7 +327,7 @@ func (p *parser) handleTypedef(t string) {
 			// typedef enum {...} Name -> enum Name {...}
 			if name, body := parseEnumDecl("enum " + afterBraceTypedefName(t, inner)); name != "" {
 				_ = body
-				// parseEnumDecl expects full decl; reconstruct:
+				// parseEnumDecl 期望完整声明；重构：
 				if n2, b2 := parseEnumDecl("enum " + typedefTrailingName(t) + " " + bracePart(t)); n2 != "" {
 					p.addEnum(n2, b2)
 					return
@@ -337,12 +337,12 @@ func (p *parser) handleTypedef(t string) {
 		p.skipped = append(p.skipped, oneLine("typedef "+t))
 		return
 	}
-	// typedef <type> Name; (single declarator only; multi-declarator skipped)
+	// typedef <type> Name;（仅单声明符；多声明符跳过）
 	if strings.Contains(t, ",") {
 		p.skipped = append(p.skipped, oneLine("typedef "+t))
 		return
 	}
-	// Split trailing name: last ident is the alias.
+	// 拆分尾随名：最后一个标识符为别名。
 	fields := strings.Fields(t)
 	if len(fields) < 2 {
 		p.skipped = append(p.skipped, oneLine("typedef "+t))
@@ -356,7 +356,7 @@ func (p *parser) handleTypedef(t string) {
 	base := strings.TrimSpace(strings.TrimSuffix(t, fields[len(fields)-1]))
 	base = strings.TrimSpace(strings.TrimSuffix(base, "*") + starSuffix(fields[len(fields)-1]))
 	mapped := mapCType(base, p.known)
-	// Pointers already map to cdata/string; by-value unknowns stay any.
+	// 指针已映射为 cdata/string；按值未知类型保持 any。
 	p.addAlias(alias, fmt.Sprintf("type %s = %s", alias, mapped))
 }
 

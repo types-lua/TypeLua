@@ -12,7 +12,7 @@ var (
 	identFind = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 )
 
-// bracePart returns the first {...} substring (inclusive).
+// bracePart 返回第一个 {...} 子串（含括号）。
 func bracePart(s string) string {
 	start := strings.Index(s, "{")
 	if start < 0 {
@@ -32,7 +32,7 @@ func bracePart(s string) string {
 	return ""
 }
 
-// typedefTrailingName returns the trailing identifier of a typedef (after }).
+// typedefTrailingName 返回 typedef 的尾随标识符（} 之后）。
 func typedefTrailingName(t string) string {
 	end := strings.LastIndex(t, "}")
 	if end < 0 {
@@ -48,7 +48,7 @@ func typedefTrailingName(t string) string {
 }
 
 func afterBraceTypedefName(t, _ string) string {
-	// Reconstruct "Name { ... }" for enum parsing.
+	// 为枚举解析重构 "Name { ... }"。
 	name := typedefTrailingName(t)
 	return name + " " + bracePart(t)
 }
@@ -57,11 +57,11 @@ func cleanIdent(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, "*() [],;")
 	s = strings.TrimSpace(s)
-	// Strip array suffix: `buf[64]` -> `buf`.
+	// 剥离数组后缀：`buf[64]` -> `buf`。
 	if i := strings.Index(s, "["); i >= 0 {
 		s = strings.TrimSpace(s[:i])
 	}
-	// Strip bitfield: `x:4` -> `x`.
+	// 剥离位域：`x:4` -> `x`。
 	if i := strings.Index(s, ":"); i >= 0 {
 		s = strings.TrimSpace(s[:i])
 	}
@@ -77,7 +77,7 @@ func forwardDeclName(t string) string {
 	return ""
 }
 
-// parseStructDecl handles `struct Name {...}` and `typedef struct [Tag] {...} Alias`.
+// parseStructDecl 处理 `struct Name {...}` 与 `typedef struct [Tag] {...} Alias`。
 func parseStructDecl(t string, isTypedef bool, known map[string]bool) (string, string) {
 	brace := bracePart(t)
 	if brace == "" {
@@ -88,7 +88,7 @@ func parseStructDecl(t string, isTypedef bool, known map[string]bool) (string, s
 	if isTypedef {
 		name = typedefTrailingName(t)
 		if name == "" {
-			// typedef struct Tag {...}; (no alias) -> use Tag.
+			// typedef struct Tag {...};（无别名）-> 使用 Tag。
 			name = structTagName(t)
 		}
 	} else {
@@ -108,7 +108,7 @@ func parseStructDecl(t string, isTypedef bool, known map[string]bool) (string, s
 }
 
 func structTagName(t string) string {
-	// struct Tag {...} — Tag is the ident after struct (if not `{`).
+	// struct Tag {...} — Tag 是 struct 后的标识符（若非 `{`）。
 	rest := strings.TrimSpace(t)
 	rest = strings.TrimPrefix(rest, "typedef")
 	rest = strings.TrimSpace(rest)
@@ -119,7 +119,7 @@ func structTagName(t string) string {
 	}
 	f := strings.Fields(rest)
 	if len(f) > 0 && identRe.MatchString(cleanIdent(f[0])) && !strings.HasPrefix(strings.TrimSpace(rest), "{") {
-		// Ensure Tag precedes `{` (not trailing alias confusion).
+		// 确保 Tag 在 `{` 之前（避免尾随别名混淆）。
 		before := rest[:strings.Index(rest, "{")]
 		bf := strings.Fields(before)
 		if len(bf) > 0 {
@@ -129,7 +129,7 @@ func structTagName(t string) string {
 	return ""
 }
 
-// parseStructFields splits struct body on ';' at depth 0.
+// parseStructFields 在深度 0 按 ';' 拆分结构体体。
 func parseStructFields(inner string, known map[string]bool) []string {
 	var out []string
 	for _, stmt := range splitFields(inner) {
@@ -137,12 +137,12 @@ func parseStructFields(inner string, known map[string]bool) []string {
 		if stmt == "" {
 			continue
 		}
-		// Nested struct/union/enum definitions: opaque.
+		// 嵌套 struct/union/enum 定义：不透明。
 		if strings.Contains(stmt, "{") {
 			out = append(out, "-- nested: "+oneLine(stmt))
 			continue
 		}
-		// Multiple declarators: `int x, y[4];`
+		// 多声明符：`int x, y[4];`
 		base, declarators := splitDeclarators(stmt)
 		if base == "" || len(declarators) == 0 {
 			continue
@@ -181,9 +181,9 @@ func splitFields(s string) []string {
 	return out
 }
 
-// splitDeclarators separates `int x, *y[4]` into base `int` + declarators.
+// splitDeclarators 把 `int x, *y[4]` 拆为基类型 `int` + 声明符。
 func splitDeclarators(stmt string) (string, []string) {
-	// Split on ',' at depth 0 (brackets/parens).
+	// 在深度 0（括号/方括号）处按 ',' 拆分。
 	var parts []string
 	depth := 0
 	start := 0
@@ -206,14 +206,14 @@ func splitDeclarators(stmt string) (string, []string) {
 	if len(parts) == 0 {
 		return "", nil
 	}
-	// Base type = first declarator minus its trailing name.
+	// 基类型 = 第一个声明符去掉尾随名。
 	first := parts[0]
 	name := declaratorName(first)
 	base := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(first), strings.TrimSpace(name)))
-	// If name extraction consumed stars (e.g. `*p`), restore them to base?
-	// declaratorName strips `*`; suffix() recovers per-declarator stars.
+	// 若名字提取消耗了星号（如 `*p`），恢复到基类型？
+	// declaratorName 剥离 `*`；suffix() 恢复每个声明符的星号。
 	if base == "" {
-		// Statement like `unsigned;` (anonymous bitfield width?) — skip.
+		// 类似 `unsigned;` 的语句（匿名位域宽度？）——跳过。
 		return "", nil
 	}
 	return base, parts
@@ -221,16 +221,16 @@ func splitDeclarators(stmt string) (string, []string) {
 
 func declaratorName(d string) string {
 	d = strings.TrimSpace(d)
-	// Function declarator inside struct (function pointer field)?
-	// `int (*cb)(int)` -> name `cb`.
+	// 结构体内的函数声明符（函数指针字段）？
+	// `int (*cb)(int)` -> 名字 `cb`。
 	if i := strings.Index(d, "(*"); i >= 0 {
 		rest := d[i+2:]
 		if j := strings.Index(rest, ")"); j >= 0 {
 			return cleanIdent(rest[:j])
 		}
 	}
-	// Normal: trailing identifier (strip *, arrays, bitfield, initializer).
-	// Remove initializer: `x = 5` -> `x`.
+	// 普通：尾随标识符（剥离 *、数组、位域、初始化器）。
+	// 去掉初始化器：`x = 5` -> `x`。
 	if i := strings.Index(d, "="); i >= 0 {
 		d = strings.TrimSpace(d[:i])
 	}
@@ -242,7 +242,7 @@ func declaratorName(d string) string {
 }
 
 func declaratorSuffix(d string) string {
-	// Recover per-declarator pointer/array marks for mapping.
+	// 恢复每个声明符的指针/数组标记以供映射。
 	s := ""
 	if strings.Contains(d, "*") {
 		s += " *"
@@ -256,13 +256,13 @@ func declaratorSuffix(d string) string {
 	return s
 }
 
-// parseEnumDecl handles `enum Name { A, B = 5, ... }`.
+// parseEnumDecl 处理 `enum Name { A, B = 5, ... }`。
 func parseEnumDecl(t string) (string, string) {
 	brace := bracePart(t)
 	if brace == "" {
 		return "", ""
 	}
-	// Name precedes `{`.
+	// 名字在 `{` 之前。
 	before := strings.TrimSpace(t[:strings.Index(t, "{")])
 	f := strings.Fields(before)
 	name := ""
@@ -280,7 +280,7 @@ func parseEnumDecl(t string) (string, string) {
 		if part == "" {
 			continue
 		}
-		// Strip trailing comments already gone; handle `A = expr`.
+		// 剥离尾随注释（已处理）；处理 `A = expr`。
 		eq := strings.Index(part, "=")
 		mname := strings.TrimSpace(part)
 		mval := ""
@@ -301,7 +301,7 @@ func parseEnumDecl(t string) (string, string) {
 			members = append(members, fmt.Sprintf("%s = %d", mname, v))
 			auto = v + 1
 		} else {
-			// Complex expr (1<<3): keep auto numbering, note original.
+			// 复杂表达式（1<<3）：保持自动编号，记录原值。
 			members = append(members, fmt.Sprintf("%s = %d", mname, auto))
 			auto++
 		}
@@ -325,7 +325,7 @@ func evalSimpleInt(expr string) (int, bool) {
 	} else if strings.HasPrefix(expr, "+") {
 		expr = strings.TrimSpace(expr[1:])
 	}
-	// Hex/octal/decimal via ParseInt base 0; underscores allowed in C23?
+	// 通过 ParseInt base 0 处理十六/八/十进制；C23 允许下划线？
 	expr = strings.ReplaceAll(expr, "_", "")
 	v, err := strconv.ParseInt(expr, 0, 64)
 	if err != nil {
@@ -337,7 +337,7 @@ func evalSimpleInt(expr string) (int, bool) {
 	return int(v), true
 }
 
-// parsePrototype handles `<ret> <name>(<params>)`.
+// parsePrototype 处理 `<ret> <name>(<params>)`。
 func parsePrototype(t string, known map[string]bool) string {
 	open := strings.Index(t, "(")
 	close := strings.LastIndex(t, ")")
@@ -346,7 +346,7 @@ func parsePrototype(t string, known map[string]bool) string {
 	}
 	head := strings.TrimSpace(t[:open])
 	params := strings.TrimSpace(t[open+1 : close])
-	// Head: last ident is function name (strip `*` for returning pointer).
+	// Head：最后一个标识符为函数名（返回指针时剥离 `*`）。
 	toks := identFind.FindAllString(head, -1)
 	if len(toks) == 0 {
 		return ""
@@ -362,7 +362,7 @@ func parsePrototype(t string, known map[string]bool) string {
 	if ret == "" {
 		ret = "any"
 	}
-	// Params.
+	// 参数。
 	if params == "" || params == "void" {
 		return fmt.Sprintf("%s(): %s", fname, ret)
 	}
@@ -384,20 +384,20 @@ func parsePrototype(t string, known map[string]bool) string {
 	return fmt.Sprintf("%s(%s): %s", fname, strings.Join(out, ", "), ret)
 }
 
-// ptrMark recovers a `*` between ret type and name (e.g. `char *foo`).
+// ptrMark 恢复返回类型与名字之间的 `*`（如 `char *foo`）。
 func ptrMark(t string, open int, fname, head string) string {
-	// head already excludes fname; check gap between ret tokens and fname.
+	// head 已排除 fname；检查返回 token 与 fname 之间的间隙。
 	i := strings.LastIndex(head, fname)
 	if i < 0 {
 		return ""
 	}
 	gap := head
 	_ = gap
-	// Look at raw text before '(' for '*' after ret type.
+	// 查看 '(' 前的原始文本，寻找返回类型后的 '*'。
 	pre := strings.TrimSpace(t[:open])
 	if strings.Contains(pre, "*") {
-		// If mapped type already includes *, mapCType handles it via suffix;
-		// ensure a star is present in the type string passed to mapCType.
+		// 若映射类型已含 *，mapCType 通过后缀处理；
+		// 确保传给 mapCType 的类型字符串含星号。
 		if !strings.Contains(head, "*") {
 			return " *"
 		}
@@ -433,12 +433,12 @@ func splitParam(pm string, idx int, known map[string]bool) (string, string) {
 	if pm == "..." {
 		return "...args", "any[]"
 	}
-	// Function pointer param: `int (*cb)(int)` -> cdata? Better: function type.
+	// 函数指针参数：`int (*cb)(int)` -> cdata？更好：函数类型。
 	if strings.Contains(pm, "(*") {
 		if name, ft := parseFuncPtrTypedef("typedef "+pm+";", known); name != "" {
 			_ = name
-			// Named callback type inline: use the function shape directly.
-			// `typedef` wrapper produced `type X = (…)->R`; inline the RHS.
+			// 命名回调类型内联：直接使用函数形状。
+			// `typedef` 包装产生 `type X = (…)->R`；内联 RHS。
 			rhs := ft
 			if i := strings.Index(rhs, "="); i >= 0 {
 				rhs = strings.TrimSpace(rhs[i+1:])
@@ -455,13 +455,13 @@ func splitParam(pm string, idx int, known map[string]bool) (string, string) {
 	if len(toks) == 0 {
 		return fmt.Sprintf("arg%d", idx), "any"
 	}
-	// `void` single already handled; trailing ident is name unless type-only.
-	// Heuristic: if pm has >=2 idents, last is name; else synthesize.
+	// `void` 单独已处理；尾随标识符为名字，除非仅类型。
+	// 启发式：pm 有 >=2 个标识符时，最后为名字；否则合成。
 	name := ""
 	typ := pm
 	if len(toks) >= 2 {
 		name = toks[len(toks)-1]
-		// Avoid swallowing type keywords as names (`unsigned int` -> int is type).
+		// 避免把类型关键字当作名字（`unsigned int` -> int 是类型）。
 		if isTypeKeyword(name) && len(toks) == 2 {
 			name = fmt.Sprintf("arg%d", idx)
 		} else {
@@ -478,7 +478,7 @@ func splitParam(pm string, idx int, known map[string]bool) (string, string) {
 	if !identRe.MatchString(name) {
 		name = fmt.Sprintf("arg%d", idx)
 	}
-	// Preserve pointer/array marks from full declarator.
+	// 从完整声明符保留指针/数组标记。
 	full := pm
 	if !strings.Contains(typ, "*") && strings.Contains(full, "*") {
 		typ += " *"
@@ -497,7 +497,7 @@ func isTypeKeyword(s string) bool {
 	return false
 }
 
-// parseFuncPtrTypedef handles `typedef R (*Name)(P...);` -> (name, "type ...").
+// parseFuncPtrTypedef 处理 `typedef R (*Name)(P...);` -> (name, "type ...")。
 func parseFuncPtrTypedef(t string, known map[string]bool) (string, string) {
 	t = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(t), ";"))
 	if !strings.HasPrefix(t, "typedef") {
@@ -545,13 +545,13 @@ func funcPtrName(pm string) string {
 	return ""
 }
 
-// mapCType maps a C type spelling to a TypeLua type.
+// mapCType 把 C 类型拼写映射为 TypeLua 类型。
 func mapCType(raw string, known map[string]bool) string {
 	t := strings.TrimSpace(raw)
 	if t == "" {
 		return "any"
 	}
-	// Array declarator already folded to `[]` suffix.
+	// 数组声明符已折叠为 `[]` 后缀。
 	isArray := strings.Contains(t, "[") || strings.HasSuffix(t, "[]")
 	t = strings.ReplaceAll(t, "[]", "")
 	t = strings.TrimSpace(t)
@@ -559,8 +559,8 @@ func mapCType(raw string, known map[string]bool) string {
 	t = strings.ReplaceAll(t, "*", " ")
 	t = spaceRe.ReplaceAllString(strings.TrimSpace(t), " ")
 	low := strings.ToLower(t)
-	// Strip qualifiers token-wise (substring replace would corrupt
-	// `unsigned` via inner `signed`; see unsigned-long regression).
+	// 按 token 剥离限定符（子串替换会因内含 `signed` 破坏
+	// `unsigned`；见 unsigned-long 回归）。
 	var qtoks []string
 	for _, tok := range strings.Fields(low) {
 		switch tok {
@@ -571,7 +571,7 @@ func mapCType(raw string, known map[string]bool) string {
 		}
 	}
 	base := strings.TrimSpace(spaceRe.ReplaceAllString(strings.Join(qtoks, " "), " "))
-	// char* -> string (before generic pointer rule).
+	// char* -> string（在通用指针规则之前）。
 	if isPtr && (base == "char" || base == "char const" || base == "const char") {
 		return "string"
 	}
@@ -594,7 +594,7 @@ func mapCType(raw string, known map[string]bool) string {
 	case "void *", "void*":
 		return "cdata"
 	}
-	// Nominal: single known identifier stays; unknown -> any.
+	// 名义：单个已知标识符保留；未知 -> any。
 	f := strings.Fields(t)
 	if len(f) == 1 {
 		id := cleanIdent(f[0])
@@ -602,12 +602,12 @@ func mapCType(raw string, known map[string]bool) string {
 			if known[id] {
 				return id
 			}
-			// Common scalar typedefs without header: assume integer-ish?
-			// Stay permissive (any) to avoid false TL3103.
+			// 无头文件的常见标量 typedef：假设为整数类？
+			// 保持宽容（any）以避免误报 TL3103。
 			return "any"
 		}
 	}
-	// Multi-token unknown (e.g. `unsigned mytype`): last ident nominal?
+	// 多 token 未知（如 `unsigned mytype`）：最后标识符名义？
 	toks := identFind.FindAllString(t, -1)
 	if len(toks) > 0 {
 		last := toks[len(toks)-1]

@@ -36,7 +36,7 @@ import (
 // loader cannot open them. Link .a into the host binary at build time and
 // reach the symbols via ffi.C (same cdef, no ffi.load).
 //
-// The prelude is Lua 5.1-safe (no goto, no //, no bitwise ops, no <const>)
+// prelude 兼容 Lua 5.1（无 goto、无 //、无位运算、无 <const>）
 // and defensive: missing debug/package libraries degrade instead of
 // erroring. User LUA_PATH/LUA_CPATH entries keep working: we prepend/append,
 // never replace. The `__tl_` prefix is reserved (see SPEC §12); never use it.

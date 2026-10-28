@@ -18,12 +18,12 @@ func mustParseShim(t *testing.T, src string) {
 
 func TestDefaultSoName(t *testing.T) {
 	for in, want := range map[string]string{
-		"mylib.h":       "libmylib.so",
-		"dir/libfoo.h":  "libfoo.so",
-		"foo.hpp":       "libfoo.so",
-		"bar.HH":        "libbar.so",
-		"plain":         "libplain.so",
-		"a/b/calc.h":    "libcalc.so",
+		"mylib.h":      "libmylib.so",
+		"dir/libfoo.h": "libfoo.so",
+		"foo.hpp":      "libfoo.so",
+		"bar.HH":       "libbar.so",
+		"plain":        "libplain.so",
+		"a/b/calc.h":   "libcalc.so",
 	} {
 		if got := DefaultSoName(in); got != want {
 			t.Fatalf("DefaultSoName(%q) = %q, want %q", in, got, want)

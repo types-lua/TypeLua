@@ -10,16 +10,16 @@ import (
 	"strings"
 )
 
-// CacheDirName is the vendor marker; CommitFile records the pinned commit.
+// CommitFile 记录固定的 commit（vendor 标记）。
 const CommitFile = ".tlua-commit"
 
-// ModCacheEnv overrides the module cache location.
+// ModCacheEnv 覆盖模块缓存位置。
 const ModCacheEnv = "TLUA_MODCACHE"
 
-// OfflineEnv disables all network use (cache/mirrors only).
+// OfflineEnv 禁用所有网络使用（仅缓存/镜像）。
 const OfflineEnv = "TLUA_OFFLINE"
 
-// DefaultDir returns the module cache directory.
+// DefaultDir 返回模块缓存目录。
 func DefaultDir() (string, error) {
 	if v := os.Getenv(ModCacheEnv); v != "" {
 		return v, nil
@@ -31,13 +31,21 @@ func DefaultDir() (string, error) {
 	return filepath.Join(home, ".tlua", "pkg", "mod"), nil
 }
 
-// Cache stores mirrors and extracted module trees.
+// Cache 存放镜像与解压后的模块树。
+//
+// 物理布局：
+//
+//	Cache
+//	├── Root    string // 缓存根目录
+//	└── Offline bool   // 是否禁止网络
 type Cache struct {
-	Root    string
+	// Root 是模块缓存根目录（~/.tlua/pkg/mod 或 TLUA_MODCACHE）。
+	Root string
+	// Offline 为真时禁止网络访问，只复用已有镜像/树。
 	Offline bool
 }
 
-// NewCache creates a cache, reading TLUA_OFFLINE.
+// NewCache 创建缓存，读取 TLUA_OFFLINE。
 func NewCache(root string) *Cache {
 	off := false
 	if v := strings.TrimSpace(os.Getenv(OfflineEnv)); v != "" && v != "0" && !strings.EqualFold(v, "false") {
@@ -46,8 +54,8 @@ func NewCache(root string) *Cache {
 	return &Cache{Root: root, Offline: off}
 }
 
-// escapePath maps a module path to cache directories (Go-style:
-// uppercase letters become `!` + lowercase; slashes stay).
+// escapePath 把模块路径映射为缓存目录（Go 风格：
+// 大写字母变为 `!`+小写；斜杠保留）。
 func escapePath(p string) string {
 	var sb strings.Builder
 	for _, r := range p {
@@ -61,13 +69,13 @@ func escapePath(p string) string {
 	return sb.String()
 }
 
-// mirrorDir names the bare mirror for a URL (content-addressed).
+// mirrorDir 命名 URL 的裸镜像（内容寻址）。
 func (c *Cache) mirrorDir(url string) string {
 	sum := sha256.Sum256([]byte(url))
 	return filepath.Join(c.Root, "cache", "download", fmt.Sprintf("%x", sum))
 }
 
-// MirrorURL records the source URL beside a mirror (debugging aid).
+// MirrorURL 在镜像旁记录源 URL（调试辅助）。
 func (c *Cache) MirrorURL(mirrorDir string) string {
 	raw, err := os.ReadFile(filepath.Join(mirrorDir, "tlua-url"))
 	if err != nil {
@@ -76,8 +84,8 @@ func (c *Cache) MirrorURL(mirrorDir string) string {
 	return strings.TrimSpace(string(raw))
 }
 
-// Sync clones or refreshes the mirror for url, returning its directory.
-// Offline mode reuses existing mirrors and errors otherwise.
+// Sync 克隆或刷新 url 的镜像，返回其目录。
+// 离线模式复用已有镜像，否则报错。
 func (c *Cache) Sync(ctx context.Context, url string) (string, error) {
 	if err := GitAvailable(ctx); err != nil {
 		return "", err
@@ -102,12 +110,12 @@ func (c *Cache) Sync(ctx context.Context, url string) (string, error) {
 	return dir, nil
 }
 
-// TreeDir returns the extracted-tree directory for path@version.
+// TreeDir 返回 path@version 的解压树目录。
 func (c *Cache) TreeDir(path, version string) string {
 	return filepath.Join(c.Root, escapePath(path)+"@"+version)
 }
 
-// TreeCommit reads the recorded commit of an extracted tree ("", if absent).
+// TreeCommit 读取解压树记录的 commit（不存在返回 ""）。
 func (c *Cache) TreeCommit(dir string) string {
 	raw, err := os.ReadFile(filepath.Join(dir, CommitFile))
 	if err != nil {
@@ -116,8 +124,8 @@ func (c *Cache) TreeCommit(dir string) string {
 	return strings.TrimSpace(string(raw))
 }
 
-// EnsureTree materializes url@commit into the tree dir (verified reuse,
-// atomic replace via temp dir + rename). Returns the tree dir.
+// EnsureTree 把 url@commit 物化到树目录（验证复用，
+// 通过临时目录 + 重命名原子替换）。返回树目录。
 func (c *Cache) EnsureTree(ctx context.Context, url, path, version, commit string) (string, error) {
 	dst := c.TreeDir(path, version)
 	if c.TreeCommit(dst) == commit {
@@ -127,7 +135,7 @@ func (c *Cache) EnsureTree(ctx context.Context, url, path, version, commit strin
 	if err != nil {
 		return "", err
 	}
-	// Resolve (and canonicalize) the commit against the mirror.
+	// 解析（并规范化）相对于镜像的 commit。
 	full, err := RevParse(ctx, mirror, commit)
 	if err != nil {
 		return "", fmt.Errorf("resolving %s@%s: %v", url, commit, err)
@@ -158,9 +166,9 @@ func (c *Cache) EnsureTree(ctx context.Context, url, path, version, commit strin
 	return dst, nil
 }
 
-// CandidateURLs derives fetch URLs for a module path, longest first:
-// full path, then progressively shorter prefixes (minimum host + 1).
-// Callers try each until one answers.
+// CandidateURLs 为模块路径导出获取 URL，最长优先：
+// 完整路径，然后逐步缩短前缀（最少 host + 1）。
+// 调用方逐个尝试直到有响应。
 func CandidateURLs(path string) []string {
 	segs := strings.Split(path, "/")
 	var out []string
@@ -170,8 +178,8 @@ func CandidateURLs(path string) []string {
 	return out
 }
 
-// ProbeURL finds the repository root for path by longest-prefix probing.
-// Returns the repo URL (without .git suffix handling by git itself).
+// ProbeURL 通过最长前缀探测为 path 找仓库根。
+// 返回 repo URL（.git 后缀由 git 自身处理）。
 func ProbeURL(ctx context.Context, path string) (string, error) {
 	if err := GitAvailable(ctx); err != nil {
 		return "", err
@@ -187,10 +195,11 @@ func ProbeURL(ctx context.Context, path string) (string, error) {
 	return "", fmt.Errorf("no git repository found for %q (tried %d prefixes)", path, len(CandidateURLs(path)))
 }
 
-// GitRegistry resolves and reads modules through the cache.
+// GitRegistry 通过缓存解析并读取模块。
 type GitRegistry struct {
+	// Cache 是底层镜像/树缓存。
 	Cache *Cache
-	// probe memoizes discovered repo URLs per process run.
+	// probes 备忘录：进程内已发现的 repo URL，避免重复探测。
 	probes map[string]string
 }
 
@@ -198,8 +207,8 @@ func (g *GitRegistry) urlFor(ctx context.Context, path string, dep Dep) (string,
 	if g.probes == nil {
 		g.probes = map[string]string{}
 	}
-	// Explicit overrides win and stick (one source per path; the
-	// resolver rejects conflicts before we ever see them).
+	// 显式覆盖优先且固定（每路径一个源；解析器在我们看到前
+	// 就拒绝冲突）。
 	if dep.URL != "" {
 		g.probes[path] = dep.URL
 		return dep.URL, nil
@@ -218,7 +227,7 @@ func (g *GitRegistry) urlFor(ctx context.Context, path string, dep Dep) (string,
 	return u, nil
 }
 
-// Tags implements Registry via mirror tag listing.
+// Tags 通过镜像标签列表实现 Registry。
 func (g *GitRegistry) Tags(ctx context.Context, path string, dep Dep) (map[string]string, error) {
 	url, err := g.urlFor(ctx, path, dep)
 	if err != nil {
@@ -231,8 +240,8 @@ func (g *GitRegistry) Tags(ctx context.Context, path string, dep Dep) (map[strin
 	return MirrorTags(ctx, mirror)
 }
 
-// Manifest implements Registry by reading tlua.toml at the commit
-// (missing file = leaf module, nil manifest).
+// Manifest 通过读取 commit 处的 tlua.toml 实现 Registry
+// （文件缺失 = 叶模块，nil manifest）。
 func (g *GitRegistry) Manifest(ctx context.Context, path, commit string) (*Manifest, error) {
 	url, err := g.urlFor(ctx, path, Dep{})
 	if err != nil {
@@ -244,7 +253,7 @@ func (g *GitRegistry) Manifest(ctx context.Context, path, commit string) (*Manif
 	}
 	raw, err := ShowFile(ctx, mirror, commit, ManifestName)
 	if err != nil {
-		// Missing manifest: treat as dependency-free leaf.
+		// 缺失 manifest：视为无依赖的叶模块。
 		return nil, nil
 	}
 	m, err := ParseManifest(string(raw))
@@ -254,7 +263,7 @@ func (g *GitRegistry) Manifest(ctx context.Context, path, commit string) (*Manif
 	return m, nil
 }
 
-// ResolveRev implements Registry.
+// ResolveRev 实现 Registry。
 func (g *GitRegistry) ResolveRev(ctx context.Context, path string, dep Dep, rev string) (string, error) {
 	url, err := g.urlFor(ctx, path, dep)
 	if err != nil {
@@ -267,23 +276,26 @@ func (g *GitRegistry) ResolveRev(ctx context.Context, path string, dep Dep, rev 
 	return RevParse(ctx, mirror, rev)
 }
 
-// LocalDir implements Registry (base registries have no local content).
+// LocalDir 实现 Registry（基础 registry 无本地内容）。
 func (g *GitRegistry) LocalDir(_ string) (string, bool) {
 	return "", false
 }
 
-// replaceRegistry overlays local-directory replacements and records
-// transitive path links (resolved against each manifest's own directory,
-// Cargo-style) for the resolving run.
+// replaceRegistry 覆盖本地目录替换，并记录传递性 path 链接
+// （相对于每个 manifest 自身目录，Cargo 风格）供本次解析运行。
 type replaceRegistry struct {
-	base     Registry
-	replace  map[string]string // root manifest replaces, project-relative
-	rootDir  string
-	recorded map[string]string // discovered transitive links, absolute dirs
+	// base 是被包装的底层 Registry。
+	base Registry
+	// replace 是根 manifest 的 replace 指令（项目相对路径）。
+	replace map[string]string
+	// rootDir 是项目根目录，用于解析相对 replace 目标。
+	rootDir string
+	// recorded 是解析过程中发现的传递性 path 链接（绝对目录）。
+	recorded map[string]string
 }
 
-// ReplaceRegistry wraps reg with replace directives. Always wrapped (even
-// empty) so transitive path links record uniformly.
+// ReplaceRegistry 用 replace 指令包装 reg。即使为空也包装，
+// 使传递性 path 链接统一记录。
 func ReplaceRegistry(reg Registry, replace map[string]string, rootDir string) Registry {
 	if replace == nil {
 		replace = map[string]string{}
@@ -304,7 +316,7 @@ func (r *replaceRegistry) localDir(path string) (string, bool) {
 	return "", false
 }
 
-// LocalDir implements Registry.
+// LocalDir 实现 Registry。
 func (r *replaceRegistry) LocalDir(path string) (string, bool) {
 	return r.localDir(path)
 }
@@ -317,7 +329,7 @@ func (r *replaceRegistry) readLocal(path, dir string) *Manifest {
 	return m
 }
 
-// readLocalStrict reads and validates a local manifest (errors loud).
+// readLocalStrict 读取并校验本地 manifest（错误显式）。
 func (r *replaceRegistry) readLocalStrict(path, dir string) (*Manifest, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, ManifestName))
 	if err != nil {
@@ -331,15 +343,15 @@ func (r *replaceRegistry) readLocalStrict(path, dir string) (*Manifest, error) {
 	return m, nil
 }
 
-// recordLinks remembers transitive path links against the manifest's own
-// directory (Cargo-style relative paths).
+// recordLinks 记住相对于 manifest 自身目录的传递性 path 链接
+// （Cargo 风格相对路径）。
 func (r *replaceRegistry) recordLinks(dir string, m *Manifest) {
 	for path, dep := range m.Deps {
 		if dep.Path == "" {
 			continue
 		}
 		if _, ok := r.replace[path]; ok {
-			continue // root replace wins
+			continue // 根 replace 优先
 		}
 		tgt := dep.Path
 		if !filepath.IsAbs(tgt) {
@@ -349,6 +361,7 @@ func (r *replaceRegistry) recordLinks(dir string, m *Manifest) {
 	}
 }
 
+// Tags 实现 Registry：本地替换返回本地版本，否则委托 base。
 func (r *replaceRegistry) Tags(ctx context.Context, path string, dep Dep) (map[string]string, error) {
 	if dir, ok := r.localDir(path); ok {
 		m := r.readLocal(path, dir)
@@ -361,6 +374,7 @@ func (r *replaceRegistry) Tags(ctx context.Context, path string, dep Dep) (map[s
 	return r.base.Tags(ctx, path, dep)
 }
 
+// Manifest 实现 Registry：本地替换读本地 manifest 并记录传递链接。
 func (r *replaceRegistry) Manifest(ctx context.Context, path, commit string) (*Manifest, error) {
 	if dir, ok := r.localDir(path); ok {
 		m, err := r.readLocalStrict(path, dir)
@@ -374,9 +388,9 @@ func (r *replaceRegistry) Manifest(ctx context.Context, path, commit string) (*M
 	if err != nil || m == nil {
 		return m, err
 	}
-	// Remote manifests: path links only compose with a version (Cargo
-	// publish rule); bare ones name their fix explicitly. Work on a copy
-	// (registries may share manifest objects).
+	// 远程 manifest：path 链接只与版本组合（Cargo 发布规则）；
+	// 裸的显式命名其修正。操作副本
+	//（registry 可能共享 manifest 对象）。
 	cp := &Manifest{Name: m.Name, Version: m.Version, Deps: map[string]*Dep{}, Replace: m.Replace}
 	for dp, dd := range m.Deps {
 		nd := &Dep{Query: dd.Query, URL: dd.URL}
@@ -384,13 +398,14 @@ func (r *replaceRegistry) Manifest(ctx context.Context, path, commit string) (*M
 			if dd.Query == "" {
 				return nil, fmt.Errorf("path dependency %q of %q needs a version to be usable transitively", dp, path)
 			}
-			// Version governs remotely; the path stays local-only.
+			// 版本远程治理；path 保持仅本地。
 		}
 		cp.Deps[dp] = nd
 	}
 	return cp, nil
 }
 
+// ResolveRev 实现 Registry：本地替换直接返回 "local"。
 func (r *replaceRegistry) ResolveRev(ctx context.Context, path string, dep Dep, rev string) (string, error) {
 	if _, ok := r.localDir(path); ok {
 		return "local", nil
@@ -398,7 +413,7 @@ func (r *replaceRegistry) ResolveRev(ctx context.Context, path string, dep Dep, 
 	return r.base.ResolveRev(ctx, path, dep, rev)
 }
 
-// SortedModulePaths lists locked paths in order (for stable output).
+// SortedModulePaths 按顺序列出锁定路径（稳定输出）。
 func SortedModulePaths(l *Lock) []string {
 	var out []string
 	for _, e := range l.Entries {

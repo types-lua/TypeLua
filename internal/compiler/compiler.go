@@ -16,7 +16,15 @@ import (
 	"github.com/typelua/typelua/internal/sourcemap"
 )
 
-// SourceFile is a loaded unit.
+// SourceFile 是一个加载单元（路径、内容、AST、是否声明文件）。
+//
+// 物理布局：
+//
+//	SourceFile
+//	├── Path    string      // 绝对/相对源路径
+//	├── Content string      // 原始源文本（供 source map）
+//	├── File    *ast.File   // 解析后的 AST（nil 若读取失败）
+//	└── IsDecl  bool        // *.d.tl 声明文件：只检查、不发货
 type SourceFile struct {
 	Path    string
 	Content string
@@ -24,23 +32,35 @@ type SourceFile struct {
 	IsDecl  bool // *.d.tl
 }
 
-// Program is the full pipeline (like tsc Program).
+// Program 是编译流水线的总控（类似 tsc Program）。
+//
+// 物理布局：
+//
+//	Program
+//	├── Cfg    *config.Config      // 配置与文件发现
+//	├── Files  []*SourceFile        // 按路径排序的加载单元
+//	├── Diags  []diag.Diagnostic   // 聚合诊断（按文件-行-列排序输出）
+//	└── shorts map[string]string    // manifest 短名 -> 全路径（内部）
+//
+// 数据流：Load/LoadSources -> Check -> Emit；声明文件 IsDecl=true 不发货。
 type Program struct {
 	Cfg   *config.Config
 	Files []*SourceFile
 	Diags []diag.Diagnostic
-	// Per-file checker diags (same as Diags aggregated).
-	// shorts maps manifest short names to full module paths for this run.
+	// 每文件检查器诊断（与 Diags 聚合相同）。
+	// shorts 把 manifest 短名映射到本次运行的完整模块路径。
 	shorts map[string]string
 }
 
+// NewProgram 用 cfg 创建一个空 Program（Files/Diags 尚未填充）。
+// 调用方随后按 Load -> Check -> Emit 驱动流水线。
 func NewProgram(cfg *config.Config) *Program {
 	return &Program{Cfg: cfg}
 }
 
-// Load reads + parses all files. Lex/parse diags are collected.
-// Files parse in parallel (bounded worker pool); results assemble in
-// sorted-path order, so Files/Diags are identical to sequential loading.
+// Load 读取并解析所有文件，收集词法/语法诊断。
+// 文件并行解析（有界 worker 池）；结果按路径排序组装，
+// 因此 Files/Diags 与顺序加载完全一致。
 func (p *Program) Load() error {
 	list, err := p.Cfg.ListFiles()
 	if err != nil {
@@ -65,7 +85,7 @@ func (p *Program) Load() error {
 		if r, err := filepath.Rel(p.Cfg.Dir, fp); err == nil {
 			rel = r
 		}
-		// parser.ParseFile is pure (no package-level mutable state).
+		// parser.ParseFile 是纯函数（无包级可变状态）。
 		f, pdiags := parser.ParseFile(rel, string(data))
 		results[i] = parsed{data: data, file: f, pdiags: pdiags}
 	})
@@ -81,7 +101,7 @@ func (p *Program) Load() error {
 	return nil
 }
 
-// LoadSources is for tests / in-memory use.
+// LoadSources 供测试/内存使用。
 func (p *Program) LoadSources(srcs map[string]string) {
 	var names []string
 	for n := range srcs {
@@ -95,9 +115,8 @@ func (p *Program) LoadSources(srcs map[string]string) {
 	}
 }
 
-// Check runs the type checker on all files in dependency order (see
-// require.go): each file sees the module types of its requirements,
-// falling back to `any` per edge when unresolved.
+// Check 按依赖顺序对所有文件运行类型检查（见 require.go）：
+// 每个文件看到其 require 的模块类型，未解析的边退化为 `any`。
 func (p *Program) Check() {
 	opt := checker.Options{
 		Strict:          p.Cfg.Strict(),
@@ -109,7 +128,7 @@ func (p *Program) Check() {
 	p.checkAll(opt)
 }
 
-// HasErrors reports whether any error-severity diagnostic exists.
+// HasErrors 报告是否存在错误级别诊断。
 func (p *Program) HasErrors() bool {
 	for _, d := range p.Diags {
 		if d.Severity == diag.Error {
@@ -119,17 +138,16 @@ func (p *Program) HasErrors() bool {
 	return false
 }
 
-// Emit writes .lua outputs to outDir. Returns emitted paths. Skips .d.tl and `declare` bodies.
-// Type-only decls are erased by the emitter; `declare function` empty bodies are skipped at file level?
-// For safety, we emit every non-decl file (even empty) to preserve build shape.
-// Native assets (*.lua shims, *.so/*.dylib/*.dll/*.a) are then copied preserving
-// layout so vendored cross-language bindings run without manual steps.
+// Emit 把 .lua 输出写入 outDir，返回发射路径。跳过 .d.tl 与 `declare` 主体。
+// 类型-only 声明被发射器擦除；`declare function` 空体在文件级跳过？
+// 为安全起见，每个非声明文件（即使空）都发射，以保持构建形状。
+// 原生资产（*.lua shim、*.so/*.dylib/*.dll/*.a）随后按布局复制，
+// 使 vendored 跨语言绑定无需手动步骤即可运行。
 //
-// Performance: emit compute (AST render + sourcemap encode, the CPU-heavy
-// part) runs in parallel; filesystem writes stay sequential in file order,
-// preserving exact error/partial-output semantics. Writes are content
-// compared first, so unchanged outputs keep their mtime (no downstream
-// rebuild loops); skipped paths still count as emitted.
+// 性能：发射计算（AST 渲染 + sourcemap 编码，CPU 重）并行运行；
+// 文件系统写入按文件顺序串行，保持精确的错误/部分输出语义。写入前先
+// 比较内容，未变化的输出保留 mtime（避免下游重建循环）；跳过的路径
+// 仍计为已发射。
 func (p *Program) Emit() ([]string, error) {
 	withPrelude := NeedsModPath(p)
 	opt := emitter.Options{Target: p.Cfg.Target(), TreeShake: p.Cfg.CompilerOptions.TreeShake}
@@ -147,7 +165,7 @@ func (p *Program) Emit() ([]string, error) {
 	return append(emitted, assets...), nil
 }
 
-// emitJob is one file's output unit (mapping in, rendered bytes out).
+// emitJob 是一个文件的输出单元（映射进，渲染字节出）。
 type emitJob struct {
 	sf       *SourceFile
 	dst      string
@@ -157,10 +175,10 @@ type emitJob struct {
 	mapErr   error
 	wantMap  bool
 	mapName  string
-	mapLabel string // "--# sourceMappingURL=..." footer, appended after map write
+	mapLabel string // "--# sourceMappingURL=..." 页脚，追加在 map 写入后
 }
 
-// collectEmitJobs maps non-decl files to outputs in program order.
+// collectEmitJobs 把非声明文件映射为按程序顺序的输出。
 func collectEmitJobs(cfg *config.Config, files []*SourceFile) []emitJob {
 	var jobs []emitJob
 	for _, sf := range files {
@@ -178,7 +196,7 @@ func collectEmitJobs(cfg *config.Config, files []*SourceFile) []emitJob {
 		srcRel := filepath.ToSlash(rel)
 		jb := emitJob{sf: sf, dst: dst, srcRel: srcRel}
 		if cfg.CompilerOptions.SourceMap {
-			// Handle `.d.tl` already skipped; `foo.tl` -> `foo.lua`.
+			// `.d.tl` 已跳过；`foo.tl` -> `foo.lua`。
 			base := filepath.Base(dst)
 			jb.wantMap = true
 			jb.mapName = dst + ".map"
@@ -189,9 +207,9 @@ func collectEmitJobs(cfg *config.Config, files []*SourceFile) []emitJob {
 	return jobs
 }
 
-// computeEmitJobs runs the pure render phase in parallel:
-// EmitFileWithMap, PrependPrelude and sourcemap.Encode touch only fresh
-// per-file slices (no shared state).
+// computeEmitJobs 并行运行纯渲染阶段：
+// EmitFileWithMap、PrependPrelude 与 sourcemap.Encode 只触及每个文件
+// 新鲜的切片（无共享状态）。
 func computeEmitJobs(jobs []emitJob, opt emitter.Options, withPrelude bool) {
 	parallelDo(len(jobs), func(i int) {
 		jb := &jobs[i]
@@ -214,19 +232,18 @@ func computeEmitJobs(jobs []emitJob, opt emitter.Options, withPrelude bool) {
 	})
 }
 
-// writeEmitJobs performs the ordered write phase: mkdir, encode-error
-// check, map write, lua write per file (same fault order as the original
-// sequential emitter). Content-compared writes keep mtimes stable;
-// skipped paths still count as emitted. Fills emittedSet with every
-// destination (needed by the native-asset collision guard).
+// writeEmitJobs 执行有序写入阶段：mkdir、编码错误检查、map 写入、
+// lua 写入（每个文件，与原顺序发射器相同的故障顺序）。内容比较写入
+// 保持 mtime 稳定；跳过的路径仍计为已发射。用每个目标填充 emittedSet
+// （原生资产碰撞守卫所需）。
 func writeEmitJobs(jobs []emitJob, emitted []string, emittedSet map[string]bool) ([]string, error) {
 	for i := range jobs {
 		jb := &jobs[i]
-		// Handle `.d.tl` already skipped; `foo.tl` -> `foo.lua`.
+		// `.d.tl` 已跳过；`foo.tl` -> `foo.lua`。
 		if err := os.MkdirAll(filepath.Dir(jb.dst), 0o755); err != nil {
 			return emitted, err
 		}
-		// Same fault order as before: mkdir, encode, map write, lua write.
+		// 与之前相同的故障顺序：mkdir、encode、map 写入、lua 写入。
 		if jb.wantMap && jb.mapErr != nil {
 			return emitted, jb.mapErr
 		}
@@ -245,9 +262,9 @@ func writeEmitJobs(jobs []emitJob, emitted []string, emittedSet map[string]bool)
 	return emitted, nil
 }
 
-// writeFileIfChanged writes data to path, skipping the write (and the mtime
-// bump) when current content is byte-identical. Reports whether it wrote.
-// Skipped paths still count as emitted so watch stale-tracking stays exact.
+// writeFileIfChanged 把 data 写入 path；当当前内容字节相同则跳过写入
+// （与 mtime 提升）。报告是否写入。跳过的路径仍计为已发射，
+// 使 watch 过时追踪保持精确。
 func writeFileIfChanged(path string, data []byte) (bool, error) {
 	if cur, err := os.ReadFile(path); err == nil && string(cur) == string(data) {
 		return false, nil
@@ -258,7 +275,7 @@ func writeFileIfChanged(path string, data []byte) (bool, error) {
 	return true, nil
 }
 
-// EmitToString is for tests.
+// EmitToString 供测试使用。
 func (p *Program) EmitToString() map[string]string {
 	opt := emitter.Options{Target: p.Cfg.Target(), TreeShake: p.Cfg.CompilerOptions.TreeShake}
 	out := map[string]string{}
@@ -271,7 +288,7 @@ func (p *Program) EmitToString() map[string]string {
 	return out
 }
 
-// FormatDiags renders diagnostics with file:line:col + message, sorted.
+// FormatDiags 渲染诊断为 file:line:col + message，已排序。
 func (p *Program) FormatDiags() string {
 	ds := append([]diag.Diagnostic{}, p.Diags...)
 	sort.Slice(ds, func(i, j int) bool {

@@ -6,6 +6,10 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：builtins 用 any-based 宽松签名避免对标准库误报；coroutine
+// 等版本相关 API 按 Target 裁剪（5.1 隐藏 5.4-only）。IsBuiltin 标记让
+// shadowing 检查豁免本地化重定义。
+
 // Builtin value definitions (permissive any-based to avoid false positives).
 
 // ---------- builtins (permissive any-based to avoid false positives) ----------

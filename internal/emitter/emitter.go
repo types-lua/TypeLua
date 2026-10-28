@@ -8,33 +8,38 @@ import (
 	"github.com/typelua/typelua/internal/sourcemap"
 )
 
-// Core emitter state, file drivers, and block output with source maps.
+// 发射器核心状态、文件驱动与带 source map 的块输出。
 
-// Options for code generation.
+// Options 是发射选项。
+//
+// 物理布局：
+//
+//	Options
+//	├── Target     string // "5.4" (默认) 或 "5.1"
+//	└── TreeShake  bool   // 是否删除零引用纯局部函数
 type Options struct {
-	// Target is "5.4" (default) or "5.1". Under 5.1, `<const>`/`<close>` are stripped.
+	// Target 为 "5.4"（默认）或 "5.1"；5.1 下剥离 `<const>`/`<close>`。
 	Target string
-	// TreeShake drops zero-reference pure local functions
-	// (`local function f`, single `local x = function`). Default false:
-	// shaking runs before concurrency detection, so files whose only
-	// `await` lived in removed code emit no scheduler prelude.
+	// TreeShake 删除零引用的纯局部函数（`local function f`、单个
+	// `local x = function`）。默认 false：shaking 在并发检测之前运行，
+	// 因此仅在被删代码里含 await 的文件不会触发调度器前导。
 	TreeShake bool
 }
 
+// DefaultOptions 返回默认发射选项：目标 Lua 5.4，不做 tree-shaking。
 func DefaultOptions() Options { return Options{Target: "5.4"} }
 
-// EmitFile renders a parsed file to Lua source (type erasure).
+// EmitFile 把已解析文件渲染为 Lua 源码（类型擦除）。
 func EmitFile(f *ast.File, opt Options) string {
 	out, _ := EmitFileWithMap(f, opt)
 	return out
 }
 
-// EmitFileWithMap renders Lua source plus source-map entries (statement
-// granularity, rune columns). Entries are always collected; encoding
-// happens only when the caller wants a map (near-zero overhead).
-// Files using cooperative concurrency (spawn/await/select/channels) get the
-// scheduler prelude plus a `__tl_run(function() ... end)` chunk wrapper
-// (reentrant, so required modules inherit the caller's task).
+// EmitFileWithMap 渲染 Lua 源码及 source-map 条目（语句粒度、rune 列）。
+// 条目始终收集；仅当调用方需要映射时才编码（开销近似为零）。
+// 使用协作并发（spawn/await/select/通道）的文件获得调度器前导与
+// `__tl_run(function() ... end)` 代码块包装（可重入，故被 require 的
+// 模块继承调用方的任务）。
 func EmitFileWithMap(f *ast.File, opt Options) (string, []sourcemap.Mapping) {
 	if opt.TreeShake && f != nil {
 		shake.ShakeFile(f)
@@ -82,18 +87,18 @@ type emitter struct {
 	buf        strings.Builder
 	indent     int
 	classStack []classEmitCtx
-	line       int // 1-based generated line
-	col        int // 0-based generated column (runes)
+	line       int // 生成行号（1 起）
+	col        int // 生成列号（0 起，rune）
 	pending    *pendingMark
 	mappings   []sourcemap.Mapping
-	// Defer frames (one per function body under emission, incl. chunk).
+	// Defer 帧（每个正在发射的函数体一个，含 chunk）。
 	deferStack []*deferFrame
-	tmpCount   int // unique generated temporaries per file
+	tmpCount   int // 文件内唯一生成的临时变量计数
 }
 
 type classEmitCtx struct {
 	name string
-	base string // "" if none
+	base string // 基类名，无则为空
 }
 
 func (e *emitter) curClass() *classEmitCtx {
@@ -105,7 +110,7 @@ func (e *emitter) curClass() *classEmitCtx {
 
 func (e *emitter) write(s string) {
 	for _, r := range s {
-		// Flush a pending statement mark on the first visible rune.
+		// 在第一个可见 rune 上冲刷挂起的语句标记。
 		if e.pending != nil && r != ' ' && r != '\t' && r != '\n' && r != '\r' {
 			sp := e.pending.span.Span()
 			e.mappings = append(e.mappings, sourcemap.Mapping{
@@ -134,12 +139,12 @@ func (e *emitter) pad() {
 	}
 }
 
-// mark records the next visible output position for a source node.
+// mark 记录源节点的下一个可见输出位置。
 func (e *emitter) mark(n ast.Node, name string) {
 	e.pending = &pendingMark{span: n, name: name}
 }
 
-// stmtName extracts a debug name for function definitions.
+// stmtName 提取函数定义的调试名。
 func stmtName(st ast.Stmt) string {
 	switch n := st.(type) {
 	case *ast.LocalFuncDef:

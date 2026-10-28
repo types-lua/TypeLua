@@ -7,9 +7,8 @@ type Options struct {
 }
 
 // visit identifies one coinductive subtyping hypothesis by pointer identity.
-// All Type implementations are pointers, so interface equality is pointer
-// equality. Using identity (instead of the old %p:String rendering) avoids
-// a full recursive String() on every recursion step; distinct pointers with
+// 所有 Type 实现都是指针，因此接口相等即指针相等。使用身份（而非旧的
+// %p:String 渲染）避免每步递归都做完整 String()；不同指针但
 // identical structure simply miss the cache and recompute, which is always
 // sound (hypotheses only ever conclude "true" for cycles).
 type visit struct {

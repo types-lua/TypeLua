@@ -6,6 +6,21 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
+// 声明子系统物理布局：
+//
+//	parseExport / parseDeclare  ──► 分派到
+//	  ├── parseClassDecl   (class/abstract class, members)
+//	  ├── parseTypeDecl    (type alias / interface / enum)
+//	  ├── parseGlobalFunc / parseAsyncGlobal  (function)
+//	  ├── parseLocal       (local var/func/type/class/macro)
+//	  └── parseMacroDef   (macro)
+//
+// parseClassDecl 成员循环：
+//   modifiers(async/vis/static/readonly/abstract) ──► name ──►
+//     方法：generics? params return? body(end or }) ；声明/抽象无体
+//     字段：[: type] [= init]
+//   恢复：synchronizeClassMember 推进到下一个成员起始。
+
 func (p *Parser) parseExport() ast.Stmt {
 	start := p.next()
 	if p.at(token.ClassKw) || (p.at(token.AbstractKw) && p.peek(1).Kind == token.ClassKw) {
@@ -134,9 +149,11 @@ func (p *Parser) parseDeclare() ast.Stmt {
 }
 
 // parseMacroDef parses:
-//   macro Name(p1, p2) = expr            (expression macro)
-//   macro Name(p1, p2) do stmts end      (statement macro)
-// A trailing `...` collects extra call arguments (variadic macro).
+//
+//	macro Name(p1, p2) = expr            (expression macro)
+//	macro Name(p1, p2) do stmts end      (statement macro)
+//
+// 尾部的 `...` 收集额外调用实参（变参 macro）。
 // Parameters are strict identifiers; `self`/`super` are reserved.
 func (p *Parser) parseMacroDef() ast.Stmt {
 	start := p.next() // macro
@@ -304,7 +321,9 @@ func (p *Parser) parseTypeDecl(exported, declared bool) ast.Stmt {
 }
 
 // parseClassDecl parses:
-//   [abstract] class Name<T> [extends Base] [implements I, ...] { members }
+//
+//	[abstract] class Name<T> [extends Base] [implements I, ...] { members }
+//
 // Members are fields (`[mods] name[: T] [= init]`), methods
 // (`[mods] name<T>(params)[: R | -> R] body end`) and at most one
 // `constructor(params) body end`. In `declare` classes and on `abstract`
@@ -496,9 +515,9 @@ loop:
 			m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
 			return m
 		}
-	m.Body = p.parseFuncBlock()
-	m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
-	return m
+		m.Body = p.parseFuncBlock()
+		m.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
+		return m
 	}
 	// Field: `name[: T] [= init]`.
 	if isCtor {

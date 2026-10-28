@@ -10,6 +10,10 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：resolveTypeWithSub 是类型语法到 types.Type 的唯一入口；
+// generic substitution 通过 sub 表传播，conditional/mapped/indexed access
+// 尽量在具体类型上求值，其余保留为延迟节点。
+
 // Type-node resolution (named, table, function, conditional, mapped, keyof, ...).
 
 // ---------- type resolution ----------
@@ -108,14 +112,14 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 			return types.Table
 		case "thread":
 			return types.Thread
-    case "userdata":
-      return types.Userdata
-    case "cdata":
-      return types.Cdata
-    case "ctype":
-      return types.Ctype
-    case "function":
-      return types.Function
+		case "userdata":
+			return types.Userdata
+		case "cdata":
+			return types.Cdata
+		case "ctype":
+			return types.Ctype
+		case "function":
+			return types.Function
 		}
 	}
 	// Qualified names: not supported in v1 (modules).

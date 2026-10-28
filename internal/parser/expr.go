@@ -8,6 +8,20 @@ import (
 
 // ---------- assignment / expr statements ----------
 
+// 表达式子系统物理布局（Pratt + 后缀链）：
+//
+//	parseExprStmtOrAssign
+//	  ├── parseExpr ──► parseExprPrec(precNone+1)
+//	  │                    ├── parseUnary  (前缀 ! # ~ - await)
+//	  │                    │     └── parseSuffix
+//	  │                    │           ├── parsePrimary  (字面量/标识符/括号/表/函数)
+//	  │                    │           └── 后缀链：. [] : < () {} string  as  !  >>  (泛型试探)
+//	  │                    └── 二元循环：binPrec 查表取优先级/结合性
+//	  └── 赋值分支：多 LHS 逗号收集 + '=' + parseExprList
+//
+// 试探解析：`f<T>(args)` / `obj:m<T>(args)` 用 saveCursor + 诊断长度回退，
+// 泛型参数必须后接 '(' 才提交，否则按比较处理。
+
 func (p *Parser) parseExprStmtOrAssign() ast.Stmt {
 	start := p.cur()
 	first := p.parseExpr()
@@ -282,14 +296,14 @@ func (p *Parser) parseSuffix() ast.Expr {
 			var targs []ast.TypeNode
 			if p.at(token.Lt) {
 				// `obj:m<T>(args)`: tentative type args, must be followed by `(`.
-			save := p.saveCursor()
-			nd := len(p.diags)
-			if tas, ok := p.tryParseTypeArgs(); ok && p.at(token.LParen) {
-				targs = tas
-			} else {
-				p.restoreCursor(save)
-				p.diags = p.diags[:nd]
-			}
+				save := p.saveCursor()
+				nd := len(p.diags)
+				if tas, ok := p.tryParseTypeArgs(); ok && p.at(token.LParen) {
+					targs = tas
+				} else {
+					p.restoreCursor(save)
+					p.diags = p.diags[:nd]
+				}
 			}
 			args := p.parseCallArgs()
 			if args == nil {
@@ -300,14 +314,14 @@ func (p *Parser) parseSuffix() ast.Expr {
 		case p.at(token.Lt):
 			// `f<T>(args)`: explicit generic arguments. Tentative: `<` types `>`
 			// must be followed by `(`; otherwise this is a `<` comparison.
-		save := p.saveCursor()
-		nd := len(p.diags)
-		tas, ok := p.tryParseTypeArgs()
-		if !ok || !p.at(token.LParen) {
-			p.restoreCursor(save)
-			p.diags = p.diags[:nd]
-			return e
-		}
+			save := p.saveCursor()
+			nd := len(p.diags)
+			tas, ok := p.tryParseTypeArgs()
+			if !ok || !p.at(token.LParen) {
+				p.restoreCursor(save)
+				p.diags = p.diags[:nd]
+				return e
+			}
 			args := p.parseCallArgs()
 			e = &ast.CallExpr{Func: e, TypeArgs: tas, Args: args, S: token.Span{Start: e.Span().Start, End: p.prevEnd(), File: p.file}}
 		case p.at(token.LParen), p.at(token.LBrace), p.at(token.String):

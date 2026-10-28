@@ -11,9 +11,8 @@ import (
 	"github.com/typelua/typelua/internal/parser"
 )
 
-// cmdBindgen generates a .d.tl type contract (and optionally the typed .tl
-// shim) from a C header subset:
-// `tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so] [--check]`.
+// cmdBindgen 从 C 头文件子集生成 .d.tl 类型契约（可选类型化 .tl shim）：
+// `tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so] [--check]`。
 func cmdBindgen(args []string) error {
 	fs := flag.NewFlagSet("bindgen", flag.ContinueOnError)
 	header := fs.String("header", "", "input C header file (required)")
@@ -34,8 +33,8 @@ func cmdBindgen(args []string) error {
 	}
 	got := bindgen.Generate(string(raw), *lib)
 	if *check || strings.HasSuffix(*out, ".d.tl") || *out == "" {
-		// Always validate when emitting a contract; stdout still validates
-		// silently (errors go to stderr, output stays pure for piping).
+		// 发射契约时始终校验；stdout 仍静默校验
+		//（错误走 stderr，输出保持纯净以便管道）。
 		name := *out
 		if name == "" {
 			name = "bindgen.d.tl"

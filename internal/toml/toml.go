@@ -1,12 +1,10 @@
-// Package toml is a small strict TOML subset for tlua manifests and locks.
+// Package toml 是 tlua 清单与锁文件使用的严格 TOML 子集。
 //
-// Supported: tables `[a.b."c.d"]`, arrays of tables `[[a]]`, key/value
-// pairs with bare or quoted keys, and basic/literal strings, integers,
-// floats, booleans, arrays (multiline, trailing commas, comments), and
-// single-line inline tables.
-// Unsupported (clear errors): datetimes, hex/oct/bin integers, multi-line
-// strings. Decoding preserves nothing but values; encoding is
-// deterministic (callers order keys).
+// 支持：表 `[a.b."c.d"]`、表数组 `[[a]]`、裸键或引号键的键值对，
+// 以及基本/字面量字符串、整数、浮点、布尔、数组（多行、尾逗号、注释）
+// 与单行内联表。
+// 不支持（明确报错）：日期时间、进制整数、多行字符串。
+// 解码只保留值；编码确定性（调用方决定键顺序）。
 package toml
 
 import (
@@ -15,19 +13,36 @@ import (
 	"strings"
 )
 
-// Kind classifies a value.
+// Kind 分类值。
 type Kind int
 
 const (
+	// String 表示字符串值。
 	String Kind = iota
+	// Integer 表示整数值。
 	Integer
+	// Float 表示浮点值。
 	Float
+	// Boolean 表示布尔值。
 	Boolean
+	// Array 表示数组值。
 	Array
+	// Inline 表示单行内联表。
 	Inline
 )
 
-// Value is one decoded value.
+// Value 是一个解码后的 TOML 值（按 Kind 判别）。
+//
+// 物理布局：
+//
+//	Value
+//	├── Kind  Kind           // String/Integer/Float/Boolean/Array/Inline
+//	├── Str   string         // 字符串值
+//	├── Int   int64          // 整数值
+//	├── Float float64        // 浮点值
+//	├── Bool  bool           // 布尔值
+//	├── Arr   []*Value       // 数组元素
+//	└── Map   map[string]*Value // 内联表
 type Value struct {
 	Kind  Kind
 	Str   string
@@ -38,6 +53,7 @@ type Value struct {
 	Map   map[string]*Value // Inline tables
 }
 
+// String 把 Value 渲染为 TOML 文本。
 func (v *Value) String() string {
 	switch v.Kind {
 	case String:
@@ -67,13 +83,18 @@ func (v *Value) String() string {
 	return ""
 }
 
-// Table is one `[table]` body.
+// Table 是一个 `[table]` 主体。
 type Table struct {
 	Values map[string]*Value
 }
 
-// Doc is a decoded document. Tables are keyed by \x00-joined path
-// segments; Arrays holds `[[name]]` entries in file order.
+// Doc 是解码后的文档：表按 \x00 连接的路径段作键；数组表按文件顺序。
+//
+// 物理布局：
+//
+//	Doc
+//	├── Tables map[string]*Table  // [table] 主体
+//	└── Arrays map[string][]*Table // [[array]] 条目序列
 type Doc struct {
 	Tables map[string]*Table
 	Arrays map[string][]*Table
@@ -105,7 +126,7 @@ func (p *parser) fail(format string, args ...any) error {
 	return fmt.Errorf("toml:%d: %s", p.line, fmt.Sprintf(format, args...))
 }
 
-// Decode parses src into a Doc.
+// Decode 把 src 解析为 Doc。
 func Decode(src string) (*Doc, error) {
 	p := &parser{src: src, line: 1, doc: &Doc{}}
 	p.cur = p.doc.table("")
@@ -149,7 +170,7 @@ func (p *parser) skipLine() {
 	}
 }
 
-// parseHeader parses `[a.b]` or `[[a.b]]` and selects the table.
+// parseHeader 解析 `[a.b]` 或 `[[a.b]]` 并选择表。
 func (p *parser) parseHeader() error {
 	startLine := p.line
 	p.pos++ // [
@@ -195,7 +216,7 @@ func (p *parser) parseHeader() error {
 		if _, dup := p.doc.Tables[key]; dup {
 			return p.fail("duplicate table [%s]", strings.Join(segs, "."))
 		}
-		// A plain table must not collide with an array of tables.
+		// 普通表不得与表数组冲突。
 		if _, dup := p.doc.Arrays[key]; dup {
 			return p.fail("table [%s] collides with array of tables", strings.Join(segs, "."))
 		}
@@ -206,7 +227,7 @@ func (p *parser) parseHeader() error {
 	return nil
 }
 
-// parseDottedKey parses `a.b."c.d".'e'` into segments.
+// parseDottedKey 把 `a.b."c.d".'e'` 解析为段。
 func (p *parser) parseDottedKey() ([]string, error) {
 	var segs []string
 	for {
@@ -252,7 +273,7 @@ func isBareKeyChar(c byte) bool {
 	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-'
 }
 
-// parsePair parses `key = value`.
+// parsePair 解析 `key = value`。
 func (p *parser) parsePair() error {
 	segs, err := p.parseDottedKey()
 	if err != nil {
@@ -285,7 +306,7 @@ func (p *parser) parsePair() error {
 	return nil
 }
 
-// parseValue parses one value at p.pos (no leading space).
+// parseValue 在 p.pos 解析一个值（无前导空格）。
 func (p *parser) parseValue() (*Value, error) {
 	if p.pos >= len(p.src) {
 		return nil, p.fail("unexpected end in value")
@@ -328,9 +349,9 @@ func peekAt(s string, i int) byte {
 	return 0
 }
 
-// parseBasicRaw parses the body of a "..." string (no multi-line support).
+// parseBasicRaw 解析 "..." 字符串体（不支持多行）。
 func (p *parser) parseBasicRaw() (string, error) {
-	p.pos++ // opening quote
+	p.pos++ // 左引号
 	var sb strings.Builder
 	for {
 		if p.pos >= len(p.src) {
@@ -393,9 +414,9 @@ func (p *parser) parseBasicRaw() (string, error) {
 	}
 }
 
-// parseLiteralRaw parses the body of a '...' string.
+// parseLiteralRaw 解析 '...' 字符串体。
 func (p *parser) parseLiteralRaw() (string, error) {
-	p.pos++ // opening quote
+	p.pos++ // 左引号
 	start := p.pos
 	for {
 		if p.pos >= len(p.src) {
@@ -413,7 +434,7 @@ func (p *parser) parseLiteralRaw() (string, error) {
 	}
 }
 
-// parseNumber parses an integer or float.
+// parseNumber 解析整数或浮点数。
 func (p *parser) parseNumber() (*Value, error) {
 	start := p.pos
 	if p.src[p.pos] == '+' || p.src[p.pos] == '-' {
@@ -463,8 +484,8 @@ func (p *parser) parseNumber() (*Value, error) {
 	return &Value{Kind: Integer, Int: n}, nil
 }
 
-// parseInline parses a single-line `{ k = v, ... }` table (TOML forbids
-// newlines inside inline tables; dotted keys are rejected like pairs).
+// parseInline 解析单行 `{ k = v, ... }` 表（TOML 禁止内联表内换行；
+// 点键像键值对一样被拒绝）。
 func (p *parser) parseInline() (*Value, error) {
 	p.pos++ // {
 	out := &Value{Kind: Inline, Map: map[string]*Value{}}
@@ -515,8 +536,7 @@ func (p *parser) parseInline() (*Value, error) {
 	}
 }
 
-// parseInlineValue parses one inline-table value (nested inline tables
-// and arrays allowed).
+// parseInlineValue 解析一个内联表值（允许嵌套内联表与数组）。
 func (p *parser) parseInlineValue() (*Value, error) {
 	if p.pos >= len(p.src) {
 		return nil, p.fail("unexpected end in value")
@@ -558,7 +578,7 @@ func (p *parser) skipInlineSpace() {
 	}
 }
 
-// parseArray parses a possibly multi-line [...] value.
+// parseArray 解析可能多行的 [...] 值。
 func (p *parser) parseArray() (*Value, error) {
 	p.pos++ // [
 	out := &Value{Kind: Array}

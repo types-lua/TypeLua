@@ -19,10 +19,12 @@ type Lexer struct {
 	finished bool
 }
 
+// New 创建一个针对 src 的词法分析器，文件名为 filename；用于流式取 token 与收集诊断。
 func New(filename, src string) *Lexer {
 	return &Lexer{src: src, file: filename, line: 1, col: 1}
 }
 
+// Diags 返回扫描过程中累积的词法诊断切片，供 parser/compiler 聚合报告。
 func (l *Lexer) Diags() []diag.Diagnostic { return l.diags }
 
 func (l *Lexer) pos() token.Pos {
@@ -126,7 +128,9 @@ func isAlnum(c byte) bool { return isAlpha(c) || isDigit(c) }
 func isHex(c byte) bool {
 	return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
-func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f' }
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
+}
 
 // Lex scans the entire source.
 func Lex(filename, src string) ([]token.Token, []diag.Diagnostic) {

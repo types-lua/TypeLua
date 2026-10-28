@@ -7,18 +7,37 @@ import (
 
 // ---------- cursor helpers ----------
 
-// savedCursor captures the full token-stream position for speculative
-// parses: the index plus any pending split remainders from consumeGt.
-// The pending queue is copied so later splits cannot alias the snapshot.
+// savedCursor 捕获试探解析的完整 Token 流位置：索引 pos 加上 consumeGt
+// 拆分产生的 pending 余量。pending 队列被复制，避免后续拆分别名快照。
+//
+// 游标物理布局（单槽 + 待消费队列）：
+//
+//	toks []token.Token  (只读 Token 流)
+//	┌────┬────┬────┬────┬────┐
+//	│ 0  │ 1  │ 2  │... │ n-1│
+//	└────┴────┴────┴────┴────┘
+//	           ▲
+//	           │ pos
+//	pending []token.Token  (consumeGt 拆分余量，优先消费)
+//	┌────┬────┐
+//	│ >  │ =  │  (例如 >= 拆成 '>' '=')
+//	└────┴────┘
+//	   ▲
+//	   │ next() 先吃这里
+//
+// cur()/peek()/next() 都“pending 优先、toks 兜底”；saveCursor 复制 pending，
+// restoreCursor 整体回退，实现试探解析零副作用。
 type savedCursor struct {
 	pos     int
 	pending []token.Token
 }
 
+// saveCursor 快照当前 pos 与 pending（pending 复制，避免别名）。
 func (p *Parser) saveCursor() savedCursor {
 	return savedCursor{pos: p.pos, pending: append([]token.Token(nil), p.pending...)}
 }
 
+// restoreCursor 回退到快照，试探解析失败时零副作用恢复。
 func (p *Parser) restoreCursor(s savedCursor) {
 	p.pos = s.pos
 	p.pending = s.pending
@@ -85,11 +104,13 @@ func (p *Parser) spanBetween(start token.Token, end token.Token) token.Span {
 	return token.Span{Start: start.Span.Start, End: end.Span.End, File: p.file}
 }
 
-// consumeGt consumes a single '>', splitting >> / >= if needed.
+// consumeGt 消费单个 '>'，必要时拆分 >> / >=。
+// Token 流从不原地修改：拆分余量追加到 p.pending（最多两个：'>' 与 '='），
+// 试探解析可通过 saveCursor/restoreCursor 精确恢复。合成 Token 复用原 Token 的 Span。
 //
-// The token slice is never mutated: the remainder of a split is queued in
-// p.pending (at most two tokens: `>` then `=` for `>=`), so speculative
-// parses restore exactly via saveCursor/restoreCursor. Synthesized tokens
+// token 切片从不被修改：拆分的余下部分排队进入 p.pending（`>=` 最多两个
+// token：`>` 然后 `=`），因此推测式解析可通过 saveCursor/restoreCursor 精确恢复。
+// 合成 token
 // reuse the original token's span, matching the old slice-splicing behavior.
 func (p *Parser) consumeGt() bool {
 	if len(p.pending) > 0 {

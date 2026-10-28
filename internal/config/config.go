@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// CompilerOptions mirrors tsconfig.compilerOptions (subset).
+// CompilerOptions 镜像 tsconfig.compilerOptions（子集）。
 type CompilerOptions struct {
 	Target          string   `json:"target"` // "5.4" | "5.1"
 	Strict          *bool    `json:"strict"`
@@ -17,20 +17,37 @@ type CompilerOptions struct {
 	RootDir         string   `json:"rootDir"`
 	SourceMap       bool     `json:"sourceMap"`
 	TreeShake       bool     `json:"treeShake,omitempty"`
-	Types           []string `json:"types,omitempty"`     // ambient .d.tl allowlist (nil/empty = all)
-	TypeRoots       []string `json:"typeRoots,omitempty"` // extra .d.tl roots (default: types + tlua_modules/@types)
+	Types           []string `json:"types,omitempty"`     // ambient .d.tl 允许列表（nil/空 = 全部）
+	TypeRoots       []string `json:"typeRoots,omitempty"` // 额外 .d.tl 根（默认：types + tlua_modules/@types）
 }
 
-// Config is tlua.json.
+// Config 是 tlua.json 的内存表示。
+//
+// 物理布局：
+//
+//	Config
+//	├── CompilerOptions  // 目标/严格/输出/根目录/SourceMap/TreeShake/Types/TypeRoots
+//	├── Include []string // 包含 glob
+//	├── Exclude []string // 排除 glob
+//	├── Files   []string // 显式文件列表（优先）
+//	├── Dir     string   // 配置文件所在目录（不序列化）
+//	└── Path    string   // 配置文件绝对路径（不序列化）
 type Config struct {
+	// CompilerOptions 是 tlua.json 的 compilerOptions 子集。
 	CompilerOptions CompilerOptions `json:"compilerOptions"`
-	Include         []string        `json:"include"`
-	Exclude         []string        `json:"exclude"`
-	Files           []string        `json:"files"`
-	Dir             string          `json:"-"` // config file directory
-	Path            string          `json:"-"`
+	// Include 是包含模式列表（glob）。
+	Include []string `json:"include"`
+	// Exclude 是排除模式列表（glob）。
+	Exclude []string `json:"exclude"`
+	// Files 是显式文件列表（优先于 include/exclude）。
+	Files []string `json:"files"`
+	// Dir 是配置文件所在目录（不序列化）。
+	Dir string `json:"-"`
+	// Path 是配置文件绝对路径（不序列化）。
+	Path string `json:"-"`
 }
 
+// Default 返回一个带默认值的 Config（target 5.4、strict、outDir dist、rootDir .）。
 func Default(dir string) *Config {
 	t := true
 	_ = t
@@ -41,37 +58,48 @@ func Default(dir string) *Config {
 	}
 }
 
-// Effective values with defaults.
+// 带默认值的有效值。
+// Target 返回有效目标 Lua 版本（默认 5.4）。
 func (c *Config) Target() string {
 	if c.CompilerOptions.Target == "" {
 		return "5.4"
 	}
 	return c.CompilerOptions.Target
 }
+
+// Strict 返回是否启用严格模式（默认 true）。
 func (c *Config) Strict() bool {
 	if c.CompilerOptions.Strict != nil {
 		return *c.CompilerOptions.Strict
 	}
 	return true
 }
+
+// StrictNilChecks 返回是否启用严格 nil 检查（默认继承 Strict）。
 func (c *Config) StrictNilChecks() bool {
 	if c.CompilerOptions.StrictNilChecks != nil {
 		return *c.CompilerOptions.StrictNilChecks
 	}
 	return c.Strict()
 }
+
+// NoImplicitAny 返回是否禁止隐式 any（默认 false）。
 func (c *Config) NoImplicitAny() bool {
 	if c.CompilerOptions.NoImplicitAny != nil {
 		return *c.CompilerOptions.NoImplicitAny
 	}
 	return false
 }
+
+// OutDir 返回有效输出目录（默认 dist）。
 func (c *Config) OutDir() string {
 	if c.CompilerOptions.OutDir == "" {
 		return "dist"
 	}
 	return c.CompilerOptions.OutDir
 }
+
+// RootDir 返回有效源根目录（默认 .）。
 func (c *Config) RootDir() string {
 	if c.CompilerOptions.RootDir == "" {
 		return "."
@@ -79,10 +107,9 @@ func (c *Config) RootDir() string {
 	return c.CompilerOptions.RootDir
 }
 
-// TypeRoots lists extra ambient type roots (like tsconfig typeRoots).
-// Relative entries resolve against the config directory; missing
-// directories are ignored by ListFiles. Default covers the two
-// conventional locations.
+// TypeRoots 列出额外的 ambient 类型根（类似 tsconfig typeRoots）。
+// 相对条目相对于配置目录解析；缺失目录被 ListFiles 忽略。
+// 默认覆盖两个常规位置。
 func (c *Config) TypeRoots() []string {
 	if len(c.CompilerOptions.TypeRoots) > 0 {
 		out := make([]string, 0, len(c.CompilerOptions.TypeRoots))
@@ -100,20 +127,20 @@ func (c *Config) TypeRoots() []string {
 	}
 }
 
-// AmbientTypes returns the `types` allowlist (nil/empty = include all
-// ambient .d.tl files, mirroring tsconfig behavior).
+// AmbientTypes 返回 `types` 允许列表（nil/空 = 包含所有
+// ambient .d.tl 文件，镜像 tsconfig 行为）。
 func (c *Config) AmbientTypes() []string {
 	return c.CompilerOptions.Types
 }
 
-// IsAmbientIncluded reports whether a .d.tl path participates as ambient
-// under the given allowlist. Empty allowlist includes everything.
+// IsAmbientIncluded 报告 .d.tl 路径在给定允许列表下是否作为 ambient 参与。
+// 空允许列表包含全部。
 func IsAmbientIncluded(path string, allow []string) bool {
 	if len(allow) == 0 {
 		return true
 	}
 	slash := filepath.ToSlash(path)
-	base := filepath.Base(slash) // e.g. foo.d.tl
+	base := filepath.Base(slash) // 例如 foo.d.tl
 	name := strings.TrimSuffix(base, ".d.tl")
 	name = strings.TrimSuffix(name, ".tl")
 	dirBase := filepath.Base(filepath.Dir(slash))
@@ -125,7 +152,7 @@ func IsAmbientIncluded(path string, allow []string) bool {
 		if name == t || dirBase == t {
 			return true
 		}
-		// Conventional layouts: .../@types/<t>/..., .../types/<t>...
+		// 常规布局：.../@types/<t>/...、.../types/<t>...
 		if strings.Contains(slash, "/@types/"+t+"/") || strings.Contains(slash, "/types/"+t+"/") {
 			return true
 		}
@@ -136,7 +163,7 @@ func IsAmbientIncluded(path string, allow []string) bool {
 	return false
 }
 
-// Load reads tlua.json at path.
+// Load 在 path 读取 tlua.json。
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -151,7 +178,7 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// FindUp searches for tlua.json from dir upward.
+// FindUp 从 dir 向上搜索 tlua.json。
 func FindUp(dir string) string {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -170,9 +197,9 @@ func FindUp(dir string) string {
 	}
 }
 
-// ListFiles resolves files per include/exclude/files.
-// Type roots contribute ambient *.d.tl files even when outside include
-// (like tsconfig typeRoots); missing roots are ignored. Callers dedupe.
+// ListFiles 按 include/exclude/files 解析文件。
+// 类型根贡献 ambient *.d.tl 文件，即使在 include 之外
+// （类似 tsconfig typeRoots）；缺失根被忽略。调用方去重。
 func (c *Config) ListFiles() ([]string, error) {
 	root := filepath.Join(c.Dir, c.RootDir())
 	if len(c.Files) > 0 {
@@ -186,17 +213,17 @@ func (c *Config) ListFiles() ([]string, error) {
 		}
 		return append(out, c.listTypeRootDecls(out)...), nil
 	}
-	// Walk root for .tl files.
+	// 遍历 root 查找 .tl 文件。
 	var all []string
 	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
 		if info.IsDir() {
-			// Skip excluded dirs + common ignores.
+			// 跳过排除目录 + 常见忽略。
 			rel, _ := filepath.Rel(c.Dir, p)
 			if rel == c.OutDir() || rel == "dist" || rel == ".git" || rel == "node_modules" {
-				// Allow if explicitly included? Keep skip for defaults.
+				// 允许显式包含？默认保持跳过。
 				if len(c.Exclude) == 0 {
 					return filepath.SkipDir
 				}
@@ -232,11 +259,10 @@ func (c *Config) ListFiles() ([]string, error) {
 	return append(all, c.listTypeRootDecls(all)...), nil
 }
 
-// ListNativeAssets lists static cross-language assets (*.lua shims,
-// *.so/*.dylib/*.dll shared libraries, *.a static archives) under RootDir
-// and tlua_modules, excluding outDir.
-// Headers/docs never list; missing dirs are ignored. Used by build Trois
-// passthrough and watch triggering alike so both agree on the input set.
+// ListNativeAssets 列出 RootDir 与 tlua_modules 下的静态跨语言资产
+// （*.lua shim、*.so/*.dylib/*.dll 共享库、*.a 静态归档），排除 outDir。
+// 头文件/文档从不列出；缺失目录忽略。构建直通与 watch 触发
+// 共用，使双方对输入集一致。
 func (c *Config) ListNativeAssets() ([]string, error) {
 	outAbs := c.OutDir()
 	if !filepath.IsAbs(outAbs) {
@@ -255,8 +281,8 @@ func (c *Config) ListNativeAssets() ([]string, error) {
 				if clean == outAbs || strings.HasPrefix(clean+string(os.PathSeparator), outAbs+string(os.PathSeparator)) {
 					return filepath.SkipDir
 				}
-				// Mirror ListFiles: a stale default `dist/` from an older
-				// outDir must never be vacuumed back in as source assets.
+				// 镜像 ListFiles：来自旧 outDir 的陈旧默认 `dist/`
+				// 绝不能作为源资产被吸回。
 				if rel, err := filepath.Rel(c.Dir, p); err == nil && rel == "dist" {
 					return filepath.SkipDir
 				}
@@ -279,7 +305,7 @@ func (c *Config) ListNativeAssets() ([]string, error) {
 	}
 	addWalk(filepath.Join(c.Dir, c.RootDir()))
 	vendor := filepath.Join(c.Dir, "tlua_modules")
-	// Vendor outside RootDir needs its own walk (inside is already covered).
+	// RootDir 之外的 vendor 需要单独遍历（内部已覆盖）。
 	if filepath.Clean(vendor) != filepath.Clean(filepath.Join(c.Dir, c.RootDir())) {
 		addWalk(vendor)
 	}
@@ -292,14 +318,14 @@ func isNativeAssetName(name string) bool {
 		strings.HasSuffix(lower, ".so") ||
 		strings.HasSuffix(lower, ".dylib") ||
 		strings.HasSuffix(lower, ".dll") ||
-		// Static archives travel the same passthrough/vendor/watch path as
-		// shared libs (link into the host at build time, then ffi.C at
-		// runtime). They never enter package.cpath (see bootstrap.go).
+		// 静态归档与共享库走相同的直通/vendor/watch 路径
+		//（构建时链接到宿主，运行时 ffi.C）。
+		// 它们从不进入 package.cpath（见 bootstrap.go）。
 		strings.HasSuffix(lower, ".a")
 }
 
-// listTypeRootDecls finds ambient *.d.tl under typeRoots not already listed.
-// Only declaration files are included (never emitted); excludes apply.
+// listTypeRootDecls 查找 typeRoots 下尚未列出的 ambient *.d.tl。
+// 只包含声明文件（从不发射）；排除规则适用。
 func (c *Config) listTypeRootDecls(have []string) []string {
 	seen := map[string]bool{}
 	for _, p := range have {
@@ -346,10 +372,10 @@ func matchAny(patterns []string, rel string) bool {
 	return false
 }
 
-// matchGlob supports *, ?, ** and character classes.
+// matchGlob 支持 *、?、** 与字符类。
 func matchGlob(pat, s string) bool {
 	pat = filepath.ToSlash(pat)
-	// Fast path: exact or dir prefix.
+	// 快路径：精确或目录前缀。
 	if pat == s {
 		return true
 	}
@@ -359,10 +385,10 @@ func matchGlob(pat, s string) bool {
 func globMatch(pat, s string) bool {
 	px, sx := 0, 0
 	var starPat, starStr = -1, -1
-	// Handle ** separately by splitting.
+	// ** 单独处理：拆分。
 	if strings.Contains(pat, "**") {
 		parts := strings.Split(pat, "**")
-		// All parts must appear in order.
+		// 所有部分必须按顺序出现。
 		pos := 0
 		for i, part := range parts {
 			part = strings.Trim(part, "/")
@@ -370,7 +396,7 @@ func globMatch(pat, s string) bool {
 				continue
 			}
 			if i == 0 && !strings.HasPrefix(pat, "**") {
-				// Must match prefix.
+				// 必须匹配前缀。
 				if !prefixGlob(part, s[pos:]) {
 					return false
 				}
@@ -383,7 +409,7 @@ func globMatch(pat, s string) bool {
 			}
 			pos += idx + globPrefixLen(part, s[pos+idx:])
 		}
-		// Last part must match suffix unless pat ends with **.
+		// 除非 pat 以 ** 结尾，最后一部分必须匹配后缀。
 		if !strings.HasSuffix(pat, "**") {
 			last := strings.Trim(parts[len(parts)-1], "/")
 			if last != "" && !suffixGlob(last, s) {
@@ -392,11 +418,11 @@ func globMatch(pat, s string) bool {
 		}
 		return true
 	}
-	// No **: use path.Match on each segment? Fall back to segment-wise.
+	// 无 **：对每段用 path.Match？回退到分段匹配。
 	pSeg := strings.Split(pat, "/")
 	sSeg := strings.Split(s, "/")
 	if len(pSeg) != len(sSeg) {
-		// Allow trailing * to match? No.
+		// 允许尾随 * 匹配？否。
 		return false
 	}
 	for i := range pSeg {
@@ -413,12 +439,12 @@ func globMatch(pat, s string) bool {
 }
 
 func pathMatch(pat, s string) (bool, error) {
-	// filepath.Match without separator concerns (single segment).
+	// filepath.Match 不考虑分隔符（单段）。
 	return filepath.Match(pat, s)
 }
 
 func prefixGlob(pat, s string) bool {
-	// pat is prefix up to next /.
+	// pat 是到下一个 / 的前缀。
 	seg := pat
 	if i := strings.Index(pat, "/"); i >= 0 {
 		seg = pat[:i]
@@ -428,7 +454,7 @@ func prefixGlob(pat, s string) bool {
 	}
 	ok, _ := filepath.Match(seg, s[:len(seg)])
 	if !ok {
-		// Try segment-wise.
+		// 尝试分段匹配。
 		sSeg := strings.SplitN(s, "/", 2)[0]
 		ok, _ = filepath.Match(seg, sSeg)
 		return ok
@@ -437,7 +463,7 @@ func prefixGlob(pat, s string) bool {
 }
 
 func globPrefixLen(pat, s string) int {
-	// Length consumed by pat prefix in s (approx: up to end of matched segment).
+	// pat 前缀在 s 中消耗的长度（近似：到匹配段末尾）。
 	if i := strings.Index(pat, "/"); i >= 0 {
 		seg := pat[:i]
 		sSeg := strings.SplitN(s, "/", 2)[0]
@@ -454,7 +480,7 @@ func indexGlob(pat, s string) int {
 	for i, ss := range sSegs {
 		ok, _ := filepath.Match(seg, ss)
 		if ok {
-			// Compute byte offset.
+			// 计算字节偏移。
 			off := 0
 			for j := 0; j < i; j++ {
 				off += len(sSegs[j]) + 1

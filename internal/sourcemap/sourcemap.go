@@ -5,22 +5,29 @@ import (
 	"strings"
 )
 
-// Mapping links a generated position to an original source position.
-// Lines/columns follow the source-map V3 convention: generated lines are
-// implicit (one group per line), generated columns are 0-based, source
-// lines/columns below are 0-based, names index into the names table.
+// Mapping 把一个生成位置映射回原始源位置（Source Map V3）。
+//
+// 物理布局：
+//
+//	Mapping
+//	├── GenLine int    // 生成行（1 起）
+//	├── GenCol  int    // 生成列（0 起，rune）
+//	├── SrcFile string // 原始文件
+//	├── SrcLine int    // 原始行（0 起）
+//	├── SrcCol  int    // 原始列（0 起）
+//	└── Name    string // 名称表条目
 type Mapping struct {
-	GenLine int // 1-based
-	GenCol  int // 0-based, runes
+	GenLine int // 1 起
+	GenCol  int // 0 起，rune
 	SrcFile string
-	SrcLine int // 0-based
-	SrcCol  int // 0-based
+	SrcLine int // 0 起
+	SrcCol  int // 0 起
 	Name    string
 }
 
 const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
-// AppendVLQ appends one base64-VLQ value (spec: sign in LSB).
+// AppendVLQ 追加一个 base64-VLQ 值（规范：符号在 LSB）。
 func AppendVLQ(dst []byte, v int) []byte {
 	var uv uint32
 	if v < 0 {
@@ -42,8 +49,8 @@ func AppendVLQ(dst []byte, v int) []byte {
 	return dst
 }
 
-// Encode builds a source-map V3 JSON document. Mappings must be sorted by
-// (GenLine, GenCol); sources/content align by index.
+// Encode 构建 Source Map V3 JSON 文档。Mappings 必须按 (GenLine, GenCol) 排序；
+// sources/content 按索引对齐。
 func Encode(file string, sources []string, contents []string, names []string, mappings []Mapping) ([]byte, error) {
 	nameIdx := map[string]int{}
 	for i, n := range names {

@@ -8,6 +8,22 @@ import (
 
 // ---------- types ----------
 
+// 类型语法物理布局（优先级从低到高）：
+//
+//	parseType ──► parseConditional  (Check extends Extends ? True : False)
+//	              └── parseUnion   ( | )
+//	                    └── parseIntersection  ( & )
+//	                          └── parseTypePostfix  (?  []  [K])
+//	                                └── parsePrimaryType
+//	                                      ├── 括号/元组/函数类型
+//	                                      ├── [ ] 元组  { } 表类型/映射类型
+//	                                      ├── 字面量/nil/...T/rest
+//	                                      ├── keyof/typeof/infer
+//	                                      └── 命名类型 (含泛型 <...> 与 . 限定)
+//
+// 条件类型 `?` 与 Optional `?` 冲突：isConditionalQ 试探（保存 pos+诊断+depth），
+// 快速路径按后续 Token 是否能开类型决定，把常见 `A?|B?` 从 O(n^2) 降到 O(n)。
+
 func (p *Parser) parseType() ast.TypeNode { return p.parseConditional() }
 
 // parseConditional parses `Check extends Extends ? True : False`

@@ -7,6 +7,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：async/spawn/select 的合法性由 asyncStack 与 spawnDepth 两个
+// 计数器判定；阻塞方法（send/recv/iter）被标 IsAsync，以便 TL3805 检查。
+
 // Cooperative CSP concurrency (Go-style, single-threaded):
 //   async function f() ... end     may contain `await`
 //   await <expr>                    suspension marker (erases to expr)

@@ -14,9 +14,9 @@ import (
 // becomes `__tl_spawn(function() <call> end)`, `select` becomes an
 // `__tl_select(specs, hasDefault)` poll/park plus an if-chain.
 //
-// The prelude is 5.1-safe (no goto, no //, no bitwise ops, no <const>)
-// and idempotent (`if not __tl_run`), so multi-file programs can each
-// carry it. User API globals: makeChan, sleep, timeout, WaitGroup, Mutex.
+// prelude 兼容 5.1（无 goto、无 //、无位运算、无 <const>）且幂等
+// （`if not __tl_run`），因此多文件程序可各自携带。用户 API 全局：
+// makeChan、sleep、timeout、WaitGroup、Mutex。
 // Everything else uses the `__tl_` prefix (reserved, see SPEC §12).
 const concurrentPrelude = `if not __tl_run then
   __tl_ready = {}

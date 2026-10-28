@@ -14,21 +14,19 @@ import (
 	"github.com/typelua/typelua/internal/compiler"
 )
 
-// cmdRun implements `tlua run`: type-erase + execute without leaving
-// build artifacts behind.
+// cmdRun 实现 `tlua run`：类型擦除 + 执行，不留下构建产物。
 //
-// Defaults mirror `tlua build` (target 5.4 unless tlua.json/--target says
-// otherwise) but type checking is OFF by default (--no-check semantics):
-// only parse errors block execution. Pass --check for build-like strictness.
+// 默认镜像 `tlua build`（target 5.4，除非 tlua.json/--target 指定），
+// 但类型检查默认关闭（--no-check 语义）：只有解析错误阻塞执行。
+// 传 --check 获得构建级严格性。
 //
-// Two runtimes, switched by flag:
-//   - embedded golua (default): zero external dependencies, pure Lua only.
-//     FFI (require "ffi") and C modules (.so/.dll/.a) are NOT supported
-//     here — golua has no Lua C-module loader by design.
-//   - external (--lua <bin>): emit to a temp dir and exec the interpreter
-//     (lua5.4, luajit, ...). The emitted bootstrap prelude sets
-//     package.path/cpath from the script directory, so this works the same
-//     as `lua dist/main.lua`. Use this for ffi/C extensions.
+// 两种运行时，由标志切换：
+//   - 嵌入式 golua（默认）：零外部依赖，纯 Lua。
+//     此处不支持 FFI（require "ffi"）与 C 模块（.so/.dll/.a）——
+//     golua 设计上没有 Lua C 模块加载器。
+//   - 外部（--lua <bin>）：发射到临时目录并执行解释器
+//     （lua5.4、luajit 等）。发射的 bootstrap 前导从脚本目录设置
+//     package.path/cpath，因此与 `lua dist/main.lua` 相同。用于 ffi/C 扩展。
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	check := fs.Bool("check", false, "type-check before running (default: parse only)")
@@ -56,9 +54,9 @@ func cmdRun(args []string) error {
 	}
 	defer os.RemoveAll(tmp)
 
-	// Load the full project (like build with no file args) so sibling
-	// requires emit alongside the entry and resolve at runtime. Standalone
-	// files outside any project fall back to a single-file program.
+	// 加载完整项目（类似无文件参数的 build），使兄弟 require
+	// 与入口一同发射并在运行时解析。项目外的独立文件
+	// 回退为单文件程序。
 	cfg, cfgPath, err := loadCfgFor(nil, tmp, *target, false, false)
 	if err != nil {
 		return err
@@ -92,8 +90,8 @@ func cmdRun(args []string) error {
 			return fmt.Errorf("found %d error(s)", len(p.Diags))
 		}
 	} else if p.HasErrors() {
-		// Parse errors alone block even --no-check runs: broken code
-		// cannot be emitted, let alone executed.
+		// 仅解析错误也会阻塞 --no-check 运行：损坏的代码
+		// 无法发射，更无法执行。
 		fmt.Print(p.FormatDiags())
 		return fmt.Errorf("found %d error(s)", len(p.Diags))
 	}
@@ -131,7 +129,7 @@ func hasSource(p *compiler.Program, abs string) bool {
 	return false
 }
 
-// runEmbedded executes emitted Lua in-process via golua.
+// runEmbedded 通过 golua 在进程内执行发射的 Lua。
 func runEmbedded(chunkName string, src []byte, tmp string, scriptArgs []string) error {
 	r := rt.New(os.Stdout)
 	r.PushContext(rt.RuntimeContextDef{MessageHandler: debuglib.Traceback})
@@ -139,7 +137,7 @@ func runEmbedded(chunkName string, src []byte, tmp string, scriptArgs []string) 
 	defer cleanup()
 	defer r.Close(nil)
 
-	// arg[0] = script name, arg[1..] = script args (matches PUC Lua).
+	// arg[0] = 脚本名，arg[1..] = 脚本参数（与 PUC Lua 一致）。
 	argTable := rt.NewTable()
 	r.SetTable(argTable, rt.IntValue(0), rt.StringValue(chunkName))
 	argVals := make([]rt.Value, len(scriptArgs))
@@ -150,8 +148,8 @@ func runEmbedded(chunkName string, src []byte, tmp string, scriptArgs []string) 
 	}
 	r.SetTable(r.GlobalEnv(), rt.StringValue("arg"), rt.TableValue(argTable))
 
-	// Serve the temp-dir outputs (entry + sibling emits + vendored lua)
-	// through the standard package.path mechanism.
+	// 通过标准 package.path 机制提供临时目录输出
+	//（入口 + 兄弟发射 + vendored lua）。
 	setup := fmt.Sprintf("package.path = %s .. \";\" .. (package.path or \"\")",
 		luaQuote(tmp+"/?.lua;"+tmp+"/?/init.lua"))
 	if err := doChunk(r, "<tlua-run-setup>", []byte(setup), nil); err != nil {
@@ -171,9 +169,9 @@ func doChunk(r *rt.Runtime, name string, src []byte, argVals []rt.Value) error {
 	return nil
 }
 
-// runExternal executes the emitted entry with an external interpreter.
-// The emitted bootstrap prelude resolves sibling/vendor modules from the
-// script directory, so no LUA_PATH setup is needed.
+// runExternal 用外部解释器执行发射的入口。
+// 发射的 bootstrap 前导从脚本目录解析兄弟/vendor 模块，
+// 因此无需设置 LUA_PATH。
 func runExternal(luaBin, entryLua string, scriptArgs []string) error {
 	bin, err := exec.LookPath(luaBin)
 	if err != nil {
@@ -192,7 +190,7 @@ func runExternal(luaBin, entryLua string, scriptArgs []string) error {
 	return nil
 }
 
-// luaQuote renders s as a Lua double-quoted string literal.
+// luaQuote 把 s 渲染为 Lua 双引号字符串字面量。
 func luaQuote(s string) string {
 	var sb strings.Builder
 	sb.WriteByte('"')

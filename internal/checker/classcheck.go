@@ -7,6 +7,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：方法体检查时把 self/super 注入当前作用域，并用 retDepth
+// 守卫 super 只在方法入口层生效；构造器的 self-before-super 顺序单独校验。
+
 // Class body checking, instantiation, and super calls.
 
 func (c *Checker) checkClass(n *ast.ClassDecl) {

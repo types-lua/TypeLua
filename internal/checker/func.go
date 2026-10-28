@@ -7,6 +7,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：未标注返回值用 nil 哨兵区分"推断模式"与"void 契约"；
+// 作用域与泛型参数栈成对 push/pop，保证嵌套函数不泄漏。
+
 // Function types and bodies, plus generic parameter scopes.
 
 // ---------- function types & bodies ----------

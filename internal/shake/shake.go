@@ -1,28 +1,28 @@
 package shake
 
-// Conservative tree-shaking for TypeLua: drop zero-reference pure local
-// functions (`local function f() ... end`, single `local x = function...
-// end`). Everything else is always kept.
+// 保守的 TypeLua tree-shaking：删除零引用的纯局部函数
+// （`local function f() ... end`、单个 `local x = function...`）。
+// 其余一切永远保留。
 //
-// Safety contract (bugs here become broken programs, so the bias is to
-// KEEP):
-//   - Only pure closure definitions are candidates. Calls, table/method
-//     assignments, globals, `require`/`import`, `return`s, multi-value or
-//     attributed (`<const>`/`<close>`) locals, classes, enums, macros and
-//     type declarations are never touched.
-//   - Name resolution is scope-aware (shadowing, params, for-vars, method
-//     `self`, select `case local` bindings). Labels, field/method names
-//     and type annotations live in other namespaces and never count.
-//   - Assignment targets and non-`local` select bindings count as uses:
-//     a write-only local is kept (a missed optimization, never a bug).
-//   - Transitive fixpoint: a candidate used only by dead candidates dies
-//     with them; anything reachable from live code survives.
-//   - Fail-safe default: any unknown Stmt/Expr node taints the run and
-//     NOTHING is removed, so future language additions degrade to today's
-//     behavior instead of mis-shaking.
+// 安全契约（这里的 bug 会变成坏程序，因此偏置为
+// 保留）：
+//   - 只有纯闭包定义是候选。调用、table/方法
+//     赋值、全局、`require`/`import`、`return`、多值或
+//     带属性（`<const>`/`<close>`）的局部、类、枚举、宏与
+//     类型声明从不触及。
+//   - 名字解析是作用域感知的（遮蔽、参数、for 变量、方法
+//     `self`、select `case local` 绑定）。标签、字段/方法名
+//     与类型注解在其他命名空间，从不计数。
+//   - 赋值目标与非 `local` 的 select 绑定计为使用：
+//     只写局部变量被保留（错失优化，而非 bug）。
+//   - 传递性不动点：仅被死候选使用的候选随其死亡；
+//     可达于活代码的任何东西存活。
+//   - 失败安全默认：任何未知 Stmt/Expr 节点污染运行，
+//     什么都不删，因此未来语言构造退化为今天的
+//     行为而非误删。
 //
-// ShakeFile mutates f in place (drops dead definition statements from
-// every block) and returns the removal count.
+// ShakeFile 原地修改 f（从每个块删除死定义语句）
+// 并返回删除数量。
 
 import (
 	"github.com/typelua/typelua/internal/ast"
@@ -32,24 +32,24 @@ const liveCtx = -1
 
 type candInfo struct {
 	id   int
-	stmt ast.Stmt // definition statement to drop when dead
+	stmt ast.Stmt // 死亡时要删除的定义语句
 }
 
 type binding struct {
-	cand int // candidate id, or liveCtx when not a candidate
+	cand int // 候选 id；非候选为 liveCtx
 }
 
 type shaker struct {
 	scopes  []map[string]*binding
 	cands   []*candInfo
 	roots   map[int]bool
-	edges   map[int]map[int]bool // enclosing candidate -> referenced candidate
-	cur     int                  // innermost enclosing candidate, or liveCtx
+	edges   map[int]map[int]bool // 外层候选 -> 被引用候选
+	cur     int                  // 最内层外层候选，或 liveCtx
 	tainted bool
 }
 
-// ShakeFile drops dead pure-local-function definitions from f.
-// It never fails: on any unrecognized shape it removes nothing.
+// ShakeFile 从 f 删除死的纯局部函数定义。
+// 从不失败：任何无法识别的形状都不删除。
 func ShakeFile(f *ast.File) int {
 	if f == nil || f.Block == nil {
 		return 0
@@ -101,16 +101,16 @@ func ShakeFile(f *ast.File) int {
 		}
 		b.Stmts = kept
 		if b.Ret != nil {
-			// Return expressions are uses, never definitions: nothing to drop.
+			// 返回表达式是使用，从不是定义：无物可删。
 		}
 	}
 	filter(f.Block)
 	return n
 }
 
-// filterStmt recurses into child blocks of st so drops apply at any depth.
-// Unknown statements are left intact (removal is pointer-driven, so this
-// needs no taint: it can only drop previously proven-dead definitions).
+// filterStmt 递归进入 st 的子块，使删除作用于任意深度。
+// 未知语句保持原样（删除由指针驱动，因此这里
+// 无需污染：只能删除先前证明死亡的定义）。
 func filterStmt(st ast.Stmt, filter func(b *ast.Block)) {
 	switch n := st.(type) {
 	case *ast.DoBlock:
@@ -171,7 +171,7 @@ func filterStmt(st ast.Stmt, filter func(b *ast.Block)) {
 	}
 }
 
-// filterExpr recurses into closures nested in expressions.
+// filterExpr 递归进入表达式中嵌套的闭包。
 func filterExpr(x ast.Expr, filter func(b *ast.Block)) {
 	switch n := x.(type) {
 	case *ast.FuncLit:
@@ -225,8 +225,8 @@ func (s *shaker) bind(name string, cand int) {
 	s.scopes[len(s.scopes)-1][name] = &binding{cand: cand}
 }
 
-// use records a value-position reference to name: a root edge when outside
-// every candidate, otherwise an edge from the enclosing candidate.
+// use 记录名字的值位置引用：在外层候选外为根边，
+// 否则为外层候选的边。
 func (s *shaker) use(id *ast.Ident) {
 	if id == nil {
 		return
@@ -234,7 +234,7 @@ func (s *shaker) use(id *ast.Ident) {
 	for i := len(s.scopes) - 1; i >= 0; i-- {
 		if b, ok := s.scopes[i][id.Name]; ok {
 			if b.cand == liveCtx {
-				return // non-candidate binding: nothing to keep
+				return // 非候选绑定：无物需保留
 			}
 			if s.cur == liveCtx {
 				s.roots[b.cand] = true
@@ -249,17 +249,17 @@ func (s *shaker) use(id *ast.Ident) {
 			return
 		}
 	}
-	// Unresolved: global/builtin/field — never a candidate.
+	// 未解析：全局/builtin/字段——从不是候选。
 }
 
-// newCand registers a removal candidate for a pure closure definition.
+// newCand 为纯闭包定义注册删除候选。
 func (s *shaker) newCand(stmt ast.Stmt) int {
 	id := len(s.cands)
 	s.cands = append(s.cands, &candInfo{id: id, stmt: stmt})
 	return id
 }
 
-// isPureFuncLit reports a side-effect-free closure value.
+// isPureFuncLit 报告无副作用的闭包值。
 func isPureFuncLit(x ast.Expr) bool {
 	_, ok := x.(*ast.FuncLit)
 	return ok
@@ -291,7 +291,7 @@ func (s *shaker) stmt(st ast.Stmt) {
 	case *ast.ExprStmt:
 		s.expr(n.E)
 	case *ast.AssignStmt:
-		// Conservative: targets count as uses (write-only locals are kept).
+		// 保守：目标计为使用（只写局部变量被保留）。
 		for _, t := range n.Targets {
 			s.expr(t)
 		}
@@ -299,13 +299,13 @@ func (s *shaker) stmt(st ast.Stmt) {
 			s.expr(v)
 		}
 	case *ast.LocalAssign:
-		// Attrs parallels Names with "" for none (see parser.parseLocal).
+		// Attrs 与 Names 平行，无属性为 ""（见 parser.parseLocal）。
 		if len(n.Names) == 1 && len(n.Values) == 1 && n.Names[0] != nil &&
 			isPureFuncLit(n.Values[0]) && !(len(n.Attrs) > 0 && n.Attrs[0] != "") {
 			id := s.newCand(st)
-			// `local x = function`: walk the value exactly once, with the
-			// candidate as enclosing context (x itself is NOT visible
-			// inside, per Lua semantics: bind only afterwards).
+			// `local x = function`：值只走一次，
+			// 候选作为外层上下文（x 本身在
+			// 内部不可见，Lua 语义：仅之后绑定）。
 			saved := s.cur
 			s.cur = id
 			s.expr(n.Values[0])
@@ -323,15 +323,15 @@ func (s *shaker) stmt(st ast.Stmt) {
 		}
 	case *ast.LocalFuncDef:
 		if n.Exported || n.Func == nil {
-			// Exported: external contract. Body-less: degenerate recovery
-			// shape; bind plainly and move on (never a candidate).
+			// 导出：外部契约。无函数体：退化恢复
+			// 形状；普通绑定后继续（从不是候选）。
 			if n.Name != nil {
 				s.bind(n.Name.Name, liveCtx)
 			}
 			return
 		}
 		id := s.newCand(st)
-		// `local function f`: f IS visible inside its own body (recursive).
+		// `local function f`：f 在其自身函数体内可见（递归）。
 		if n.Name != nil {
 			s.bind(n.Name.Name, id)
 		}
@@ -340,7 +340,7 @@ func (s *shaker) stmt(st ast.Stmt) {
 		s.funcLit(n.Func)
 		s.cur = saved
 	case *ast.FuncDefStmt:
-		// Global/method definition: always kept; prefix tables are uses.
+		// 全局/方法定义：始终保留；前缀表计为使用。
 		if n.Name != nil {
 			for _, p := range n.Name.Prefix {
 				s.use(p)
@@ -376,7 +376,7 @@ func (s *shaker) stmt(st ast.Stmt) {
 		s.block(n.Block)
 		s.pop()
 	case *ast.RepeatStmt:
-		// `until` sees body locals: one shared scope.
+		// `until` 看到函数体局部变量：一个共享作用域。
 		s.push()
 		s.block(n.Block)
 		s.expr(n.Cond)
@@ -406,7 +406,7 @@ func (s *shaker) stmt(st ast.Stmt) {
 		s.block(n.Block)
 		s.pop()
 	case *ast.GotoStmt, *ast.LabelStmt:
-		// Label namespace: neither bindings nor value uses.
+		// 标签命名空间：既非绑定也非值使用。
 	case *ast.DeferStmt:
 		s.expr(n.Call)
 	case *ast.SpawnStmt:
@@ -435,7 +435,7 @@ func (s *shaker) stmt(st ast.Stmt) {
 				s.block(c.Block)
 				s.pop()
 			} else {
-				// Predeclared case targets: conservative uses.
+				// 预声明 case 目标：保守使用。
 				for _, v := range c.RecvVars {
 					s.use(v)
 				}
@@ -448,22 +448,22 @@ func (s *shaker) stmt(st ast.Stmt) {
 			s.pop()
 		}
 	case *ast.ImportStmt:
-		// Side-effect require or module binding: always kept.
+		// 有副作用的 require 或模块绑定：始终保留。
 		if n.Name != nil {
 			s.bind(n.Name.Name, liveCtx)
 		}
 	case *ast.TypeAliasDecl, *ast.InterfaceDecl:
-		// Erased: no runtime references.
+		// 擦除：无运行时引用。
 	case *ast.EnumDecl:
-		// Enum tables are built at runtime: member values are live code.
+		// 枚举表在运行时构建：成员值是活代码。
 		for _, m := range n.Members {
 			if m != nil {
 				s.expr(m.Value)
 			}
 		}
 	case *ast.ClassDecl:
-		// Class tables are always emitted: initializers and bodies inherit
-		// the enclosing context (an edge when nested in a dead candidate).
+		// 类表始终发射：初始化器与函数体继承
+		// 外层上下文（嵌套在死候选中时为边）。
 		for _, m := range n.Members {
 			if m == nil {
 				continue
@@ -484,8 +484,8 @@ func (s *shaker) stmt(st ast.Stmt) {
 			}
 		}
 	case *ast.MacroDef:
-		// Post-expansion these are gone; pre-expansion treat bodies as
-		// ordinary code in the enclosing context (conservative).
+		// 展开后这些消失；展开前把函数体当作
+		// 外层上下文中的普通代码（保守）。
 		s.push()
 		for _, p := range n.Params {
 			if p != nil {
@@ -538,7 +538,7 @@ func (s *shaker) expr(x ast.Expr) {
 			if f == nil {
 				continue
 			}
-			// NamedField Key is a field name, not a variable use.
+			// NamedField 的 Key 是字段名，不是变量使用。
 			s.expr(f.KeyX)
 			s.expr(f.Val)
 		}
@@ -549,7 +549,7 @@ func (s *shaker) expr(x ast.Expr) {
 		s.expr(n.Key)
 	case *ast.FieldExpr:
 		s.expr(n.Obj)
-		// Field is a member name, not a variable use.
+		// Field 是成员名，不是变量使用。
 	case *ast.CallExpr:
 		s.expr(n.Func)
 		for _, a := range n.Args {
@@ -557,7 +557,7 @@ func (s *shaker) expr(x ast.Expr) {
 		}
 	case *ast.MethodCallExpr:
 		s.expr(n.Obj)
-		// Method is a member name, not a variable use.
+		// Method 是成员名，不是变量使用。
 		for _, a := range n.Args {
 			s.expr(a)
 		}
@@ -567,7 +567,7 @@ func (s *shaker) expr(x ast.Expr) {
 	case *ast.UnOpExpr:
 		s.expr(n.X)
 	case *ast.CastExpr:
-		s.expr(n.E) // type operand is erased: not a runtime use
+		s.expr(n.E) // 类型操作数被擦除：不是运行时使用
 	case *ast.NonNullExpr:
 		s.expr(n.E)
 	case *ast.AwaitExpr:

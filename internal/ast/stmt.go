@@ -8,36 +8,49 @@ import (
 
 // ---------- Statements ----------
 
+// ReturnStmt 表示 return 语句节点；Exprs 为返回表达式列表，S 为源码 Span，用于诊断与定位。
 type ReturnStmt struct {
 	S     token.Span
 	Exprs []Expr
 }
 
-func (*ReturnStmt) stmtNode()       {}
+func (*ReturnStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *ReturnStmt) Span() token.Span { return n.S }
 
+// EmptyStmt 表示空语句节点；S 为源码 Span，用于诊断与定位。
 type EmptyStmt struct{ S token.Span }
 
-func (*EmptyStmt) stmtNode()         {}
+func (*EmptyStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *EmptyStmt) Span() token.Span { return n.S }
 
+// ExprStmt 表示表达式语句节点；S 为源码 Span，用于诊断与定位。
 type ExprStmt struct {
 	E Expr
 	S token.Span
 }
 
-func (*ExprStmt) stmtNode()         {}
+func (*ExprStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *ExprStmt) Span() token.Span { return n.S }
 
+// AssignStmt 表示赋值语句节点 `a, b = x, y`；S 为源码 Span，用于诊断与定位。
 type AssignStmt struct {
 	Targets []Expr
 	Values  []Expr
 	S       token.Span
 }
 
-func (*AssignStmt) stmtNode()         {}
+func (*AssignStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *AssignStmt) Span() token.Span { return n.S }
 
+// LocalAssign 表示局部变量声明语句 `local x: T = v`；S 为源码 Span，用于诊断与定位。
 type LocalAssign struct {
 	Names  []*Ident
 	Attrs  []string // e.g. "const", "close"; "" if none
@@ -46,9 +59,12 @@ type LocalAssign struct {
 	S      token.Span
 }
 
-func (*LocalAssign) stmtNode()         {}
+func (*LocalAssign) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *LocalAssign) Span() token.Span { return n.S }
 
+// LocalFuncDef 表示局部函数定义语句 `local function f() ... end`；S 为源码 Span，用于诊断与定位。
 type LocalFuncDef struct {
 	Name     *Ident
 	Generics []*GenericParam
@@ -57,7 +73,9 @@ type LocalFuncDef struct {
 	S        token.Span
 }
 
-func (*LocalFuncDef) stmtNode()         {}
+func (*LocalFuncDef) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *LocalFuncDef) Span() token.Span { return n.S }
 
 // DeferStmt is `defer <call>` / `errdefer <call>` (soft keywords):// cleanup runs LIFO at function exit — deferred calls on every normal
@@ -69,7 +87,9 @@ type DeferStmt struct {
 	S     token.Span
 }
 
-func (*DeferStmt) stmtNode()          {}
+func (*DeferStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *DeferStmt) Span() token.Span { return n.S }
 
 // ImportStmt is require sugar:
@@ -77,18 +97,22 @@ func (n *DeferStmt) Span() token.Span { return n.S }
 //	import "path"                 (side-effect require)
 //	import Name from "path"       (local binding, any)
 //	import Name: Type from "path" (annotated binding)
+//
 // It desugars to `local Name = require("path")` (bare require for the
 // side-effect form); `import` stays a plain identifier elsewhere.
 type ImportStmt struct {
-	Name *Ident    // nil for side-effect imports
-	Type TypeNode  // optional annotation
+	Name *Ident   // nil for side-effect imports
+	Type TypeNode // optional annotation
 	Path *StringLit
 	S    token.Span
 }
 
-func (*ImportStmt) stmtNode()          {}
+func (*ImportStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *ImportStmt) Span() token.Span { return n.S }
 
+// FuncDefStmt 表示全局/表字段函数定义语句；S 为源码 Span，用于诊断与定位。
 type FuncDefStmt struct {
 	Name     *FuncName
 	Generics []*GenericParam
@@ -96,26 +120,34 @@ type FuncDefStmt struct {
 	S        token.Span
 }
 
-func (*FuncDefStmt) stmtNode()         {}
+func (*FuncDefStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *FuncDefStmt) Span() token.Span { return n.S }
 
 // FuncName is a.b.c or a.b:c
+// FuncName 表示函数定义的目标名（a.b.c 或 a.b:c）；S 为源码 Span，用于诊断与定位。
 type FuncName struct {
 	Prefix []*Ident
 	Method *Ident // non-nil if colon form
 	S      token.Span
 }
 
+// Span returns the source span of this node.
 func (n *FuncName) Span() token.Span { return n.S }
 
+// DoBlock 表示 `do ... end` 语句块节点；S 为源码 Span，用于诊断与定位。
 type DoBlock struct {
 	Block *Block
 	S     token.Span
 }
 
-func (*DoBlock) stmtNode()         {}
+func (*DoBlock) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *DoBlock) Span() token.Span { return n.S }
 
+// IfStmt 表示 if/elseif/else 语句节点；S 为源码 Span，用于诊断与定位。
 type IfStmt struct {
 	Cond    Expr
 	Then    *Block
@@ -124,33 +156,43 @@ type IfStmt struct {
 	S       token.Span
 }
 
-func (*IfStmt) stmtNode()         {}
+func (*IfStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *IfStmt) Span() token.Span { return n.S }
 
+// ElseifClause 表示 if 语句中的 elseif 分支；S 为源码 Span，用于诊断与定位。
 type ElseifClause struct {
 	Cond  Expr
 	Block *Block
 	S     token.Span
 }
 
+// WhileStmt 表示 while 循环语句节点；S 为源码 Span，用于诊断与定位。
 type WhileStmt struct {
 	Cond  Expr
 	Block *Block
 	S     token.Span
 }
 
-func (*WhileStmt) stmtNode()         {}
+func (*WhileStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *WhileStmt) Span() token.Span { return n.S }
 
+// RepeatStmt 表示 repeat/until 循环语句节点；S 为源码 Span，用于诊断与定位。
 type RepeatStmt struct {
 	Block *Block
 	Cond  Expr
 	S     token.Span
 }
 
-func (*RepeatStmt) stmtNode()         {}
+func (*RepeatStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *RepeatStmt) Span() token.Span { return n.S }
 
+// NumericFor 表示数值 for 循环语句节点；S 为源码 Span，用于诊断与定位。
 type NumericFor struct {
 	Var   *Ident
 	VarTy TypeNode
@@ -161,9 +203,12 @@ type NumericFor struct {
 	S     token.Span
 }
 
-func (*NumericFor) stmtNode()         {}
+func (*NumericFor) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *NumericFor) Span() token.Span { return n.S }
 
+// GenericFor 表示泛型 for 循环语句节点；S 为源码 Span，用于诊断与定位。
 type GenericFor struct {
 	Names []*Ident
 	Types []TypeNode
@@ -172,28 +217,39 @@ type GenericFor struct {
 	S     token.Span
 }
 
-func (*GenericFor) stmtNode()         {}
+func (*GenericFor) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *GenericFor) Span() token.Span { return n.S }
 
+// BreakStmt 表示 break 语句节点；S 为源码 Span，用于诊断与定位。
 type BreakStmt struct{ S token.Span }
 
-func (*BreakStmt) stmtNode()         {}
+func (*BreakStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *BreakStmt) Span() token.Span { return n.S }
 
+// GotoStmt 表示 goto 语句节点；S 为源码 Span，用于诊断与定位。
 type GotoStmt struct {
 	Label *Ident
 	S     token.Span
 }
 
-func (*GotoStmt) stmtNode()         {}
+func (*GotoStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *GotoStmt) Span() token.Span { return n.S }
 
+// LabelStmt 表示标签语句节点；S 为源码 Span，用于诊断与定位。
 type LabelStmt struct {
 	Name *Ident
 	S    token.Span
 }
 
-func (*LabelStmt) stmtNode()         {}
+func (*LabelStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *LabelStmt) Span() token.Span { return n.S }
 
 // SpawnStmt is `spawn <call>` (soft keyword): spawns the call as a
@@ -206,7 +262,9 @@ type SpawnStmt struct {
 	S    token.Span
 }
 
-func (*SpawnStmt) stmtNode()         {}
+func (*SpawnStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *SpawnStmt) Span() token.Span { return n.S }
 
 // SelectStmt is Go-style `select { case ... default ... }` over channels:
@@ -233,7 +291,9 @@ type SelectStmt struct {
 	S       token.Span
 }
 
-func (*SelectStmt) stmtNode()         {}
+func (*SelectStmt) stmtNode() {}
+
+// Span returns the source span of this node.
 func (n *SelectStmt) Span() token.Span { return n.S }
 
 // SelectCase is one `case <guard> then <block>` in a select.
@@ -251,4 +311,5 @@ type SelectCase struct {
 	S         token.Span
 }
 
+// Span returns the source span of this node.
 func (n *SelectCase) Span() token.Span { return n.S }

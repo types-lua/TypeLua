@@ -5,6 +5,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：LSP 读 API 全部 nil-safe，索引缺失时返回空而非崩溃；
+// TypeName/DeclSpan/EntryKind 把 typeEntry 的内部字段暴露给语言服务。
+
 // Read API over the position index for the language server.
 
 // ---------- LSP support ----------

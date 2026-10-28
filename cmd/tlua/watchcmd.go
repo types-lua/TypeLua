@@ -24,7 +24,7 @@ const (
 	modeBuild
 )
 
-// cliOverrides are flag values that win over tlua.json on every reload.
+// cliOverrides 是每次重载都覆盖 tlua.json 的标志值。
 type cliOverrides struct {
 	paths        []string
 	outDir       string
@@ -55,7 +55,7 @@ func applyOverrides(cfg *config.Config, ov cliOverrides) {
 	}
 }
 
-// countSessionErrors counts error-severity diagnostics in a session.
+// countSessionErrors 统计会话中的错误级别诊断。
 func countSessionErrors(sess *compiler.Session) int {
 	n := 0
 	for _, d := range sess.Diags() {
@@ -70,9 +70,9 @@ func watchLog(format string, args ...any) {
 	fmt.Printf("[%s] %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
 }
 
-// safeCycle runs fn and converts a panic into a returned value so a single
-// bad cycle (parser/checker/emitter bug, half-written file) can never kill
-// a long-running watch session.
+// safeCycle 运行 fn 并把 panic 转为返回值，使单个坏周期
+// （parser/checker/emitter bug、半写文件）永远不能杀死
+// 长运行的 watch 会话。
 func safeCycle(fn func()) (panicked any) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -83,11 +83,10 @@ func safeCycle(fn func()) (panicked any) {
 	return nil
 }
 
-// pruneStaleOutputs deletes outputs whose source vanished since the last
-// cycle. prev maps absolute source paths to the dst we emitted for them;
-// curSrc holds the current cycle's absolute source set. Only paths ending
-// in .lua (plus their .map sidecar) are ever removed, and unlink failures
-// are reported, never fatal.
+// pruneStaleOutputs 删除自上周期以来源消失的输出。prev 把绝对源路径
+// 映射到我们为其发射的 dst；curSrc 持有当前周期的绝对源集。
+// 只有以 .lua 结尾的路径（及其 .map 伴生）才会被移除，
+// 删除失败报告但不致命。
 func pruneStaleOutputs(prev map[string]string, curSrc map[string]bool) []string {
 	var deleted []string
 	for src, dst := range prev {
@@ -119,10 +118,10 @@ func absPath(p string) string {
 	return filepath.Clean(p)
 }
 
-// reloadCfg re-reads tlua.json so include/exclude/target/outDir edits apply
-// without restarting watch. CLI overrides always win. On any failure the
-// previous (last good) config is kept and the session continues — a
-// half-saved JSON must never kill watch.
+// reloadCfg 重新读取 tlua.json，使 include/exclude/target/outDir 编辑
+// 无需重启 watch 即可生效。CLI 覆盖始终优先。任何失败都保留
+// 前一个（最后好的）配置并继续会话——半保存的 JSON
+// 绝不能杀死 watch。
 func reloadCfg(prev *config.Config, cfgPath string, ov cliOverrides) (*config.Config, string) {
 	path := cfgPath
 	if path == "" {
@@ -188,14 +187,13 @@ func resolveWatchFlags(wf *watchFlags) {
 	wf.debounce = time.Duration(deb) * time.Millisecond
 }
 
-// runWatch is the tsc --watch equivalent: build/check once, then rebuild
-// on every input or config change until interrupted. Diagnostic failures
-// never stop the session; only SIGINT/SIGTERM ends it (exit 0).
+// runWatch 是 tsc --watch 等价：构建/检查一次，然后在每个输入或
+// 配置变化时重建，直到被中断。诊断失败从不停止会话；
+// 只有 SIGINT/SIGTERM 结束它（退出码 0）。
 //
-// Steady-state cycles are incremental: a compiler.Session reuses parsed
-// ASTs and cached check results, reprocessing only watcher-reported
-// changes (plus their require closure). Config changes reset the session
-// for a full rebuild.
+// 稳态周期是增量的：compiler.Session 复用已解析 AST 与缓存的检查结果，
+// 只重新处理 watch 报告的变化（及其 require 闭包）。
+// 配置变化重置会话以完全重建。
 func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverrides, wf watchFlags) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -207,9 +205,8 @@ func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverride
 
 	cycle := func(configChanged bool, changes []watch.Change) {
 		if configChanged {
-			// reloadCfg returns prev on any failure, so a changed pointer
-			// exactly means "reloaded successfully": reset for a full
-			// rebuild, otherwise keep the incremental state.
+			// reloadCfg 在任何失败时返回 prev，因此指针变化恰好意味着
+			// "重新加载成功"：重置以完全重建，否则保持增量状态。
 			if nextCfg, nextPath := reloadCfg(cfg, cfgPath, ov); nextCfg != cfg {
 				cfg, cfgPath = nextCfg, nextPath
 				sess.Reset(cfg)
@@ -224,7 +221,7 @@ func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverride
 			}
 			watchLog("internal error during compilation (watch continues): %v\n%s", r, stack)
 		}
-		// Post-build baseline: edits made mid-cycle are picked up next.
+		// 构建后基线：周期中途的编辑在下次拾取。
 		if snap, err := watch.Collect(cfg); err != nil {
 			watchLog("warning: cannot list files (%v); keeping previous watch set", err)
 		} else {
@@ -232,7 +229,7 @@ func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverride
 		}
 	}
 
-	// Initial compilation (session is empty: full sync).
+	// 初始编译（会话为空：完全同步）。
 	cycle(false, nil)
 	if baseline == nil {
 		if snap, err := watch.Collect(cfg); err == nil {
@@ -269,9 +266,9 @@ func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverride
 	}
 }
 
-// runWatchCycle performs one check/build pass with watch-style reporting.
-// emittedBySrc is updated in place for stale-output tracking. Checking and
-// building go through the session (incremental after the first cycle).
+// runWatchCycle 执行一次带 watch 风格报告的检查/构建。
+// emittedBySrc 原地更新以追踪过时输出。检查与构建
+// 通过会话（第一周期后增量）。
 func runWatchCycle(mode watchMode, cfg *config.Config, sess *compiler.Session, changes []watch.Change, emittedBySrc map[string]string) {
 	if mode == modeCheck {
 		if _, err := sess.Sync(false, changes, false); err != nil {
@@ -304,7 +301,7 @@ func runWatchCycle(mode watchMode, cfg *config.Config, sess *compiler.Session, c
 	} else {
 		fmt.Printf("built %d file(s)\n", len(emitted))
 	}
-	// Refresh src->dst mapping and drop outputs whose source is gone.
+	// 刷新 src->dst 映射并删除源消失的输出。
 	curSrc := map[string]bool{}
 	for _, sf := range sess.Files() {
 		if sf.IsDecl {

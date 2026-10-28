@@ -4,11 +4,14 @@ import (
 	"github.com/typelua/typelua/internal/ast"
 )
 
+// 设计者视角：构造器分析 walker 显式跳过嵌套函数/类体，只统计构造期
+// 直接执行的代码，避免把闭包内的 self 误算。
+
 // AST walkers for constructor analysis (super/self) and infer names.
 
 // ---------- class constructor analysis walkers ----------
-// These skip nested function/class bodies: only code running during
-// construction itself counts for coverage and super() placement.
+// 这些跳过嵌套函数/类体：只有构造过程中实际运行的代码才计入覆盖与
+// super() 位置。
 
 func isSuperCall(e ast.Expr) bool {
 	call, ok := e.(*ast.CallExpr)

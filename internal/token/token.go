@@ -99,49 +99,49 @@ const (
 )
 
 var keywords = map[string]Kind{
-	"and":       And,
-	"break":     Break,
-	"do":        Do,
-	"else":      Else,
-	"elseif":    Elseif,
-	"end":       End,
-	"false":     False,
-	"for":       For,
-	"function":  Function,
-	"goto":      Goto,
-	"if":        If,
-	"in":        In,
-	"local":     Local,
-	"nil":       Nil,
-	"not":       Not,
-	"or":        Or,
-	"repeat":    Repeat,
-	"return":    Return,
-	"then":      Then,
-	"true":      True,
-	"until":     Until,
-	"while":     While,
-	"type":      TypeKw,
-	"interface": InterfaceKw,
-	"enum":      EnumKw,
-	"as":        AsKw,
-	"extends":   ExtendsKw,
-	"export":    ExportKw,
-	"declare":   DeclareKw,
-	"keyof":     KeyofKw,
-	"typeof":    TypeofKw,
-	"is":        IsKw,
-	"readonly":  ReadonlyKw,
-	"class":     ClassKw,
-	"super":     SuperKw,
-	"static":    StaticKw,
-	"private":   PrivateKw,
-	"public":    PublicKw,
-	"protected": ProtectedKw,
-	"abstract":  AbstractKw,
+	"and":        And,
+	"break":      Break,
+	"do":         Do,
+	"else":       Else,
+	"elseif":     Elseif,
+	"end":        End,
+	"false":      False,
+	"for":        For,
+	"function":   Function,
+	"goto":       Goto,
+	"if":         If,
+	"in":         In,
+	"local":      Local,
+	"nil":        Nil,
+	"not":        Not,
+	"or":         Or,
+	"repeat":     Repeat,
+	"return":     Return,
+	"then":       Then,
+	"true":       True,
+	"until":      Until,
+	"while":      While,
+	"type":       TypeKw,
+	"interface":  InterfaceKw,
+	"enum":       EnumKw,
+	"as":         AsKw,
+	"extends":    ExtendsKw,
+	"export":     ExportKw,
+	"declare":    DeclareKw,
+	"keyof":      KeyofKw,
+	"typeof":     TypeofKw,
+	"is":         IsKw,
+	"readonly":   ReadonlyKw,
+	"class":      ClassKw,
+	"super":      SuperKw,
+	"static":     StaticKw,
+	"private":    PrivateKw,
+	"public":     PublicKw,
+	"protected":  ProtectedKw,
+	"abstract":   AbstractKw,
 	"implements": ImplementsKw,
-	"infer":     InferKw,
-	"macro":     MacroKw,
+	"infer":      InferKw,
+	"macro":      MacroKw,
 }
 
 // LookupIdent maps an identifier to a keyword kind, or Ident.
@@ -171,6 +171,7 @@ func (k Kind) IsKeyword() bool {
 	return false
 }
 
+// String 返回 Kind 的文本名称，用于诊断与调试打印；未知 Kind 回退为 "token(n)"。
 func (k Kind) String() string {
 	switch k {
 	case EOF:
@@ -352,6 +353,7 @@ type Pos struct {
 	Column int
 }
 
+// String 把位置格式化为 "行:列"，供诊断信息展示。
 func (p Pos) String() string {
 	return fmt.Sprintf("%d:%d", p.Line, p.Column)
 }
@@ -370,6 +372,7 @@ type Token struct {
 	Span    Span
 }
 
+// String 把 token 渲染为可读形式，用于调试打印与诊断上下文。
 func (t Token) String() string {
 	if t.Literal != "" && t.Kind != Ident && !t.Kind.IsKeyword() {
 		return fmt.Sprintf("%s(%q)", t.Kind, t.Literal)

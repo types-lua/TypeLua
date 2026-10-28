@@ -8,6 +8,60 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 物理布局（checker 单文件单遍历的状态机）：
+//
+//   +---------------- Checker ----------------+
+//   | opt, diags[], file                       |
+//   | scopes[]  -> *Scope (parent chain)        |
+//   | retStack[][]types.Type (函数返回契约)      |
+//   | labelStack[] map[label]span              |
+//   | gotoList[][]gotoRef                     |
+//   | tparamStack[] map[name]*GenericParam     |
+//   | varargStack[] types.Type                |
+//   | inferStack[][]types.Type                |
+//   | loopDepth, typeDepth, depthReported     |
+//   | classStack[] *classCtx                  |
+//   | asyncStack[] bool, spawnDepth            |
+//   | extendsDepth                            |
+//   | Index *SymIndex (LSP, best-effort)       |
+//   +-----------------------------------------+
+//
+// 数据流（一次 CheckFile）：
+//
+//   ast.File
+//     -> expand.ExpandFile (宏展开，前置)
+//     -> newScope(Ambient or fresh) + defineBuiltins
+//     -> checkBlock(Block)
+//        -> collectTypes (登记 typeEntry 到 Scope.types)
+//        -> checkStmt (逐语句)
+//        -> checkReturn (返回契约)
+//     -> moduleType (顶层 return M 的类型)
+//     -> diags + SymIndex
+//
+// 作用域链（父子）：
+//
+//   Ambient (builtins + .d.tl)
+//     └── File top scope
+//           └── block scope (push/pop)
+//                 └── function/method scope
+//
+// 类型解析策略（resolveType -> resolveTypeEntryWithArgs）：
+//
+//   AST TypeNode
+//     -> primitive/builtin 特判
+//     -> GenericParam / substitution 表
+//     -> typeEntry 查找
+//        -> enum: 一次性 buildEnum（缓存 enumType）
+//        -> class: ensureClassDef（shell + patches，支持递归）
+//        -> alias/interface:
+//             generic:  key=args -> cacheInst (inflight shell 防循环)
+//             non-generic: cached (inflight shell 防循环)
+//     -> fillShell 回填递归壳，保持指针稳定
+//
+// 模块协作：
+//   依赖 ast/diag/expand/token/types；被 compiler（CheckFile*）与 lsp（SymIndex）消费。
+//   checker 不改 AST、不生成代码；类型信息仅存符号表/typeEntry。
+
 // Core checker state: options, symbols, scopes, entries, and the CheckFile drivers.
 
 // Options controls strictness (mirrors tsconfig strict flags).
@@ -29,6 +83,9 @@ type Options struct {
 	Ambient *Scope
 }
 
+// DefaultOptions returns the checker options used by the driver when no
+// explicit tsconfig is supplied: strict + strict-nil-checks, implicit any
+// allowed (Lua keeps untyped locals permissive).
 func DefaultOptions() Options {
 	return Options{Strict: true, StrictNilChecks: true, NoImplicitAny: false}
 }
@@ -50,6 +107,9 @@ const (
 	symParam
 )
 
+// Symbol is one value-side binding (variable, function, parameter) recorded
+// in a Scope. Its Type is the semantic type; SameAs chains narrowing shadows
+// back to the definition so references/rename stay unified across scopes.
 type Symbol struct {
 	Name      string
 	Kind      symKind
@@ -111,6 +171,9 @@ type classCtx struct {
 	retDepth      int // len(retStack) at method entry; super only applies at this depth
 }
 
+// Scope is a lexical scope: a parent pointer plus two independent
+// name registries (vars for values, types for type declarations).
+// Lookup walks parents; bindVar installs into the current scope only.
 type Scope struct {
 	parent *Scope
 	vars   map[string]*Symbol
@@ -140,6 +203,10 @@ func (s *Scope) lookupType(name string) *typeEntry {
 }
 
 // Checker holds per-program state (single file for now; multi-file via Program).
+// Checker is the single-pass traversal state machine for one file: scope
+// stack, return/label/goto stacks, generic-parameter stack, class context,
+// async/spawn nesting, and (optionally) the LSP position index. It never
+// mutates the AST; all findings go to diags and the symbol tables.
 type Checker struct {
 	opt    Options
 	diags  []diag.Diagnostic
@@ -232,10 +299,14 @@ type gotoRef struct {
 	span token.Span
 }
 
+// New creates a checker with the given options and empty state. Callers
+// drive it through CheckFile/CheckFileIndexed/CheckFileModule (or
+// BuildAmbient for declaration files).
 func New(opt Options) *Checker {
 	return &Checker{opt: opt}
 }
 
+// Diags returns the diagnostics accumulated during checking (in source order).
 func (c *Checker) Diags() []diag.Diagnostic { return c.diags }
 
 func (c *Checker) errorf(code diag.Code, sp token.Span, format string, args ...any) {

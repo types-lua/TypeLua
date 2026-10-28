@@ -9,6 +9,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：类分两遍——buildClassDef 只算签名（壳 + 继承 + override），
+// checkClassBodies 再检查字段初始化与方法体；壳对象先占位支持递归 self 引用。
+
 // Class definitions: building, inheritance, overrides, visibility.
 
 // ---------- classes ----------

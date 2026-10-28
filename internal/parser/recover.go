@@ -6,6 +6,28 @@ import (
 
 // ---------- recovery ----------
 
+// 错误恢复策略（同步集合）：
+//
+//	Parser 遇到语法错误后不立刻停，而是 synchronize() 吃掉 Token 直到
+//	“语句边界 / 下一条语句起始”，然后继续解析，保证单错不掩盖后文。
+//
+//	同步点（任一即停）：
+//	  End / Else / Elseif / Until / RBrace / ;(吃掉)
+//	  语句起始：local/function/if/while/repeat/for/do/return/break/goto/
+//	            type/interface/enum/class/abstract/export/declare/macro
+//
+//	布局（块内恢复）：
+//	  parseBlock 循环 ──► parseStmt ──► 出错 ──► synchronize() ──► 回到循环
+//	                                    │
+//	                                    └── RBrace/End/Else/... 作哨兵，不越过块边界
+//
+//	表/接口/类成员各有专用 synchronizeTable/Interface/ClassMember，
+//	避免把内层错误扩散到外层块。
+//
+// 为什么 RBrace 加入同步集：`{ ... }` 函数体出错时在体自身的 `}` 停下，
+// 不跳过 `}` 而级联到外层；所有可达 synchronize 的循环均已以 RBrace 终止。
+
+// synchronize 推进到下一个语句边界/起始，实现单错不掩盖后文。
 func (p *Parser) synchronize() {
 	for {
 		k := p.cur().Kind
@@ -36,6 +58,7 @@ func (p *Parser) synchronize() {
 	}
 }
 
+// synchronizeTable 在表字面量内推进到逗号/分号，恢复字段级错误。
 func (p *Parser) synchronizeTable() {
 	depth := 0
 	for {
@@ -60,6 +83,7 @@ func (p *Parser) synchronizeTable() {
 	}
 }
 
+// synchronizeInterface 在 interface/type table 内推进到下一个字段，恢复字段级错误。
 func (p *Parser) synchronizeInterface() {
 	for {
 		k := p.cur().Kind
@@ -78,6 +102,7 @@ func (p *Parser) synchronizeInterface() {
 	}
 }
 
+// synchronizeTableType 复用 synchronizeInterface（类型表与接口表恢复策略一致）。
 func (p *Parser) synchronizeTableType() {
 	p.synchronizeInterface()
 }

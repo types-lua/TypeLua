@@ -6,6 +6,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：索引记录是 best-effort，永远不参与诊断；StructOwner 只追踪
+// 直接变量流，别名/参数/表值不追踪，避免误合并。
+
 // Position index recording for language servers (best-effort, never affects diagnostics).
 
 func (c *Checker) recordUse(span token.Span, s *Symbol) {

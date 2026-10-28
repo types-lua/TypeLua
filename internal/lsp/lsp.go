@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Protocol errors (JSON-RPC).
+// 协议错误（JSON-RPC）。
 const (
 	ErrParse          = -32700
 	ErrInvalidRequest = -32600
@@ -23,11 +23,10 @@ type message struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
-	// Result is always serialized (possibly null): JSON-RPC requires every
-	// response to carry either result or error, and strict clients reject
-	// a response with neither.
-	Result  any             `json:"result"`
-	Error   *respError      `json:"error,omitempty"`
+	// Result 始终序列化（可能为 null）：JSON-RPC 要求每个响应
+	// 都携带 result 或 error，严格客户端拒绝两者皆无的响应。
+	Result any        `json:"result"`
+	Error  *respError `json:"error,omitempty"`
 }
 
 type respError struct {
@@ -35,23 +34,35 @@ type respError struct {
 	Message string `json:"message"`
 }
 
-// Server is a single-threaded LSP session over framed stdio.
+// Server 是基于帧 stdio 的单线程 LSP 会话。
+//
+// 物理布局：
+//
+//	Server
+//	├── in       *bufio.Reader // 输入帧读取
+//	├── out      io.Writer     // 输出帧写入
+//	├── docs     map[string]*document // URI -> 文档状态
+//	├── version  string        // 服务器版本
+//	├── shutdown bool          // 已收到 shutdown
+//	├── exited   bool          // 已收到 exit
+//	└── exitCode int           // 退出码
 type Server struct {
 	in      *bufio.Reader
 	out     io.Writer
 	docs    map[string]*document
 	version string
-	// shutdown tracks the LSP shutdown handshake for the exit code.
+	// shutdown 跟踪 LSP shutdown 握手以决定退出码。
 	shutdown bool
 	exited   bool
 	exitCode int
 }
 
+// New 创建一个 LSP 会话，读帧来自 in，版本号用于 initialize 响应。
 func New(in io.Reader, version string) *Server {
 	return &Server{in: bufio.NewReader(in), docs: map[string]*document{}, version: version}
 }
 
-// Run serves until EOF or `exit`. Returns the process exit code.
+// Run 服务直到 EOF 或 `exit`，返回进程退出码。
 func Run(in io.Reader, out io.Writer, version string) int {
 	s := New(in, version)
 	s.out = out
@@ -62,11 +73,11 @@ func (s *Server) loop() int {
 	for {
 		body, ok := s.readFrame()
 		if !ok {
-			return 1 // EOF or transport failure
+			return 1 // EOF 或传输失败
 		}
 		var msg message
 		if err := json.Unmarshal(body, &msg); err != nil {
-			// Unparseable: cannot route, drop (no id to answer).
+			// 无法解析：无法路由，丢弃（无 id 可应答）。
 			continue
 		}
 		if s.exited {
@@ -79,7 +90,7 @@ func (s *Server) loop() int {
 	}
 }
 
-// readFrame reads one Content-Length framed message.
+// readFrame 读取一条 Content-Length 帧消息。
 func (s *Server) readFrame() ([]byte, bool) {
 	length := -1
 	for {
@@ -120,7 +131,7 @@ func (s *Server) writeFrame(body []byte) {
 
 func (s *Server) respond(id json.RawMessage, result any) {
 	if len(id) == 0 {
-		return // notification: never answer
+		return // 通知：从不应答
 	}
 	body, _ := json.Marshal(message{JSONRPC: "2.0", ID: id, Result: result})
 	s.writeFrame(body)
@@ -136,7 +147,7 @@ func (s *Server) respondError(id json.RawMessage, code int, format string, args 
 
 func (s *Server) dispatch(msg message) {
 	if msg.Method == "" {
-		// Response to our (never sent) request; ignore.
+		// 对我们（从未发送）请求的响应；忽略。
 		return
 	}
 	switch msg.Method {

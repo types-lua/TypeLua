@@ -7,6 +7,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：调用分两遍——先推断泛型（inferInto），再做最终赋值检查，
+// 避免先报错后 refine 造成级联误报。多返回值只在最后一个参数位置展开。
+
 // Calls, method lookup, explicit type arguments, and inference.
 
 // ---------- calls & generics ----------

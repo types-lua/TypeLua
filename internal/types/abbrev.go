@@ -7,9 +7,8 @@ import (
 // Abbrev limits bracket nesting and total length of a type string for
 // human-facing messages (ultra-deep types otherwise flood diagnostics).
 // Structure outside the budget is preserved; cut content becomes "...".
-// Only double quotes suspend bracket counting: messages wrap types in
-// single quotes, which must not hide nesting (apostrophes in prose are
-// harmless for the same reason).
+// 仅双引号会暂停括号计数：消息用单引号包裹类型，因此不得隐藏嵌套
+// （散文中的撇号同理无害）。
 // Normal messages (nesting well under the budget) pass through byte
 // identical, so message-matching tests are unaffected.
 func Abbrev(s string) string {

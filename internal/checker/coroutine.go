@@ -6,6 +6,9 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
+// 设计者视角：coroutine 模块按 Target 裁剪 5.4-only API；running 的第二
+// 返回值在 5.1 为 nil，用联合类型表达版本差异。
+
 // Precise coroutine module (single-threaded cooperative multitasking).
 // Shapes cover 5.1 and 5.4: `close` and `isyieldable` exist only on 5.4+
 // (absent under `--target 5.1`, so uses error as unknown fields), and

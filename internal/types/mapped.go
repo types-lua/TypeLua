@@ -4,23 +4,41 @@ import (
 	"strconv"
 )
 
-// Mapped is `{ [K in Keys]?: V }`. Concrete domains expand eagerly
-// (see evalMapped); anything still generic stays deferred.
-// Homomorphic (non-nil) is the `keyof` base object whose field modifiers
-// are inherited unless overridden by an explicit `?`/`-?`/`readonly`/
-// `-readonly` marker; nil means absolute (markers decide alone).
+// Mapped 是映射类型 `{ [K in Keys]?: V }`。
+//
+// 为什么“具体域急切展开、泛型域延迟”：具体域可枚举为对象字段，延迟域无法
+// 枚举，只能保留 Mapped 形状供后续实例化；这与 TS 的映射类型求值策略一致。
+//
+// Homomorphic（非 nil）是 `keyof` 基对象：其字段修饰符会被继承，除非被显式
+// `?`/`-?`/`readonly`/`-readonly` 覆盖；nil 表示绝对映射（仅标记决定）。
+// 这样 `{ [K in keyof T]: ... }` 才能保留 T 的可选/只读信息。
+//
+// 物理布局：
+//
+//	Mapped
+//	├── Param       string  // 绑定变量名 K
+//	├── Constraint  Type    // K 的取值域
+//	├── Optional    bool    // `?` / `+?`
+//	├── OptMinus    bool    // `-?`
+//	├── Readonly    bool    // `readonly` / `+readonly`
+//	├── RoMinus     bool    // `-readonly`
+//	├── Homomorphic Type    // keyof 基对象（nil=绝对）
+//	└── Value       Type    // 值类型模板（含 K）
 type Mapped struct {
-	Param        string
-	Constraint   Type
-	Optional     bool // `?` or `+?`
-	OptMinus     bool // `-?`
-	Readonly     bool // `readonly` or `+readonly`
-	RoMinus      bool // `-readonly`
-	Homomorphic  Type
-	Value        Type
+	Param       string
+	Constraint  Type
+	Optional    bool // `?` or `+?`
+	OptMinus    bool // `-?`
+	Readonly    bool // `readonly` or `+readonly`
+	RoMinus     bool // `-readonly`
+	Homomorphic Type
+	Value       Type
 }
 
+// Kind 返回 Mapped 的类型分类标签。
 func (t *Mapped) Kind() Kind { return KMapped }
+
+// String 把 Mapped 渲染为规范文本。
 func (t *Mapped) String() string { return t.stringSeen(map[Type]bool{}) }
 func (t *Mapped) stringSeen(seen map[Type]bool) string {
 	q := ""
@@ -38,13 +56,25 @@ func (t *Mapped) stringSeen(seen map[Type]bool) string {
 	return "{ " + ro + "[" + t.Param + " in " + typeString(t.Constraint, seen) + "]" + q + ": " + typeString(t.Value, seen) + " }"
 }
 
-// IndexedAccess is `T[K]`, evaluated when both sides are concrete.
+// IndexedAccess 是索引访问类型 `T[K]`，双方都具体时求值。
+//
+// 为什么保留为类型而非立即求值：泛型上下文里 T/K 未实例化，无法求值；
+// 保持形状让 subst/assign 在实例化后再求值，避免过早丢失信息。
+//
+// 物理布局：
+//
+//	IndexedAccess
+//	├── Obj   Type   // 被索引的对象/数组/元组/映射/类/枚举
+//	└── Index Type   // 索引键
 type IndexedAccess struct {
 	Obj   Type
 	Index Type
 }
 
+// Kind 返回 IndexedAccess 的类型分类标签。
 func (t *IndexedAccess) Kind() Kind { return KIndexedAccess }
+
+// String 把 IndexedAccess 渲染为规范文本。
 func (t *IndexedAccess) String() string { return t.stringSeen(map[Type]bool{}) }
 func (t *IndexedAccess) stringSeen(seen map[Type]bool) string {
 	return typeString(t.Obj, seen) + "[" + typeString(t.Index, seen) + "]"
@@ -286,7 +316,7 @@ func TryEvalMapped(m *Mapped, opt Options) (Type, bool) {
 }
 
 // TryEvalIndexed evaluates `obj[index]` when both sides are concrete.
-// The error string is non-empty for definite mistakes.
+// 错误字符串在确定性错误时非空。
 func TryEvalIndexed(obj, index Type, opt Options) (Type, bool, string) {
 	return evalIndexedAccess(obj, index, opt)
 }

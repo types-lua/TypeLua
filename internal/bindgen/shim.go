@@ -1,16 +1,15 @@
 package bindgen
 
-// Typed-shim generation: the second half of single-source-of-truth.
+// 类型化 shim 生成：单一真相来源的第二半。
 //
-// `Generate` produces the .d.tl contract; `GenerateShim` produces the .tl
-// loader (require ffi + cdef + load + single `as` + return) from the SAME
-// header, so editing the .h and re-running one bindgen command keeps all
-// three artifacts (header, contract, shim) in sync. Callers then just
-// `import C from "mylib"` with zero casts.
+// `Generate` 产生 .d.tl 契约；`GenerateShim` 从同一头文件产生 .tl
+// 加载器（require ffi + cdef + load + 单个 `as` + return），因此编辑 .h
+// 并重跑一次 bindgen 命令即可保持三件产物（头文件、契约、shim）同步。
+// 调用方只需 `import C from "mylib"`，零转换。
 //
-// Total like Generate: any header yields a parseable shim. The embedded
-// cdef block is the guard-stripped source (comments + `#` lines removed);
-// `#ifdef` variants are the author's responsibility at ffi.cdef runtime.
+// 与 Generate 一样总而全：任何头文件都产生可解析的 shim。嵌入的
+// cdef 块是剥离守卫后的源（注释 + `#` 行移除）；
+// `#ifdef` 变体由作者在 ffi.cdef 运行时负责。
 
 import (
 	"fmt"
@@ -18,8 +17,8 @@ import (
 	"strings"
 )
 
-// DefaultSoName derives the sibling shared-library name from a header path:
-// mylib.h -> libmylib.so (an existing lib* stem is kept: libfoo.h -> libfoo.so).
+// DefaultSoName 从头文件路径推导同级共享库名：
+// mylib.h -> libmylib.so（已有 lib* 前缀保留：libfoo.h -> libfoo.so）。
 func DefaultSoName(headerPath string) string {
 	base := filepath.Base(headerPath)
 	for _, ext := range []string{".hpp", ".hxx", ".hh", ".h"} {
@@ -34,16 +33,14 @@ func DefaultSoName(headerPath string) string {
 	return "lib" + base + ".so"
 }
 
-// CdefBody returns the ffi.cdef payload for a header: comments and
-// preprocessor lines stripped, edge blank lines trimmed. Never fails;
-// empty input yields an empty (still valid) body.
+// CdefBody 返回头文件的 ffi.cdef 载荷：注释与预处理行剥离，
+// 边缘空行修剪。从不失败；空输入产生空（仍有效）体。
 func CdefBody(headerSrc string) string {
 	return strings.Trim(stripComments(headerSrc), "\n")
 }
 
-// longString wraps body in a Lua long string, stepping up one level when
-// the body itself contains the closing brackets (practically never in C,
-// but generation must stay total).
+// longString 把 body 包成 Lua 长字符串；当 body 自身含闭合括号时
+// 升一级（C 中几乎不会，但生成必须总而全）。
 func longString(body string) string {
 	if !strings.Contains(body, "]]") {
 		return "[[\n" + body + "\n]]"
@@ -51,11 +48,10 @@ func longString(body string) string {
 	return "[=[\n" + body + "\n]=]"
 }
 
-// GenerateShim renders the typed .tl loader. headerName is display-only
-// (e.g. "mylib.h", used in the regen comment); libName is the ambient
-// contract interface (e.g. "CMyLib"); soName is the sibling library file
-// (e.g. "libmylib.so", see DefaultSoName). Empty libName defaults to CLib;
-// empty soName derives from headerName.
+// GenerateShim 渲染类型化 .tl 加载器。headerName 仅用于显示
+// （如 "mylib.h"，用于重新生成注释）；libName 是 ambient 契约接口
+// （如 "CMyLib"）；soName 是同级库文件（如 "libmylib.so"，见 DefaultSoName）。
+// 空 libName 默认 CLib；空 soName 从 headerName 推导。
 func GenerateShim(headerSrc, headerName, libName, soName string) string {
 	if strings.TrimSpace(libName) == "" {
 		libName = "CLib"

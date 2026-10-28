@@ -8,7 +8,7 @@ import (
 
 // ---------- hygiene: scope-aware renaming ----------
 //
-// Every local binding in the copied body gets a fresh name; references
+// 复制体中的每个局部绑定都获得新名字；引用
 // resolve through save/restore maps, so shadowing (including shadowing a
 // macro parameter) stays coherent: the shadowing binding and exactly its
 // scope's references share one fresh name.
