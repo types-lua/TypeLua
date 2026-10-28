@@ -2,7 +2,7 @@ package token
 
 import "fmt"
 
-// Kind identifies the type of a lexical token.
+// Kind 是 Token 条码：`type(x)` 与 `type Foo=` 皆标 TypeKw，判决留给 parser，词法零分支。
 //
 // 设计者视角：Kind 是 Token 的“身份证号码”——好比仓库里每个货箱的条码，
 // parser 全靠 switch 它来分拣，而不用昂贵的字符串比较。障碍是 Lua 关键字、
@@ -153,7 +153,7 @@ var keywords = map[string]Kind{
 	"macro":      MacroKw,
 }
 
-// LookupIdent maps an identifier to a keyword kind, or Ident.
+// LookupIdent 查表员：`implements`（10 字母最长）到专线槽，单字符与超长直放 Ident，省 map 哈希。
 //
 // 设计者视角：它是词法前台的“查表员”——好比快递分拣员先看面单是否为专线件，
 // 是专线（关键字）走专线槽，否则走普通 Ident 槽。障碍是每个标识符都要过一次
@@ -175,7 +175,7 @@ func LookupIdent(s string) Kind {
 	return Ident
 }
 
-// IsKeyword reports whether k is any keyword.
+// IsKeyword 查岗：`end` 为真、`myVar` 为假，lexer 软关键字回退与 String() 打印皆先问它。
 //
 // 设计者视角：它是“查岗器”——好比问“这人是不是在编人员”，Token.String() 与 parser 的
 // 软关键字回退都要先问它。障碍是关键字集合横跨 Lua 全集与 TypeLua 扩展两拨人，
@@ -195,7 +195,7 @@ func (k Kind) IsKeyword() bool {
 	return false
 }
 
-// String 返回 Kind 的文本名称，用于诊断与调试打印；未知 Kind 回退为 "token(n)"。
+// String 把条码译成人话：诊断 `expected end` 靠它；新 Kind 忘加 case 即漏成 `token(97)` 现形。
 //
 // 设计者视角：它是条码到“人话”的翻译器——好比仓库盘点时把货号念成货名，
 // 诊断里写 `expected end` 而非 `expected 12` 全靠它。障碍是 Kind 是 int，
@@ -378,7 +378,7 @@ func (k Kind) String() string {
 	return fmt.Sprintf("token(%d)", int(k))
 }
 
-// Pos is a byte offset + line/column (1-based line, 1-based column in runes).
+// Pos 是坐标货币：Offset 切片 O(1)（字节），Line/Column 给人看（rune 列，中文不跑偏，如 3:5）。
 //
 // 设计者视角：Pos 是全编译器的“坐标货币”——好比面单上同时印机器码（Offset）与
 // 人读地址（Line/Column）：机器拿 Offset 做 O(1) 切片，编辑器拿行列画线，双方
@@ -393,7 +393,7 @@ type Pos struct {
 	Column int
 }
 
-// String 把位置格式化为 "行:列"，供诊断信息展示。
+// String 印门牌 `3:5`：文件名由 Span 层拼，零值 Pos 即 `0:0` 暴露忘填 Span 者。
 //
 // 设计者视角：它是坐标的“门牌写法”——好比 3:5 即 3 楼 5 号，diag.Diagnostic.String()
 // 拼 file:line:col 全靠它。障碍是 Pos 还有 Offset 与 File，直接打印三者会淹没用户；
@@ -404,7 +404,7 @@ func (p Pos) String() string {
 	return fmt.Sprintf("%d:%d", p.Line, p.Column)
 }
 
-// Span is a half-open [Start, End) range in the source.
+// Span 是面单半开区间：`src[Start.Offset:End.Offset]` 一刀切出原文，EOF 允许零长锚点。
 //
 // 设计者视角：Span 是贴在每个 Token/节点上的“面单”——好比快递单标明取件区间，
 // 半开 [Start, End) 让长度 = End.Offset-Start.Offset，切片 src[Start.Offset:End.Offset]
@@ -419,7 +419,7 @@ type Span struct {
 	File  string
 }
 
-// Token is a single lexical unit.
+// Token 是一件货：Kind 定品类 + Literal 存原文（如 `"0xFF"` 不求值）+ Span 贴面单。
 //
 // 设计者视角：Token 是流水线上的“一件货”——好比 Kind 定品类、Literal 留原样、
 // Span 贴面单三件套，缺一不可。障碍是数字/字符串若在词法层求值，会把类型语义
@@ -433,7 +433,7 @@ type Token struct {
 	Span    Span
 }
 
-// String 把 token 渲染为可读形式，用于调试打印与诊断上下文。
+// String 是货箱展示牌：`..("..")` 带品类，`"end"` 纯引号，无 Literal 退守 Kind 名。
 //
 // 设计者视角：它是货箱的“展示牌”——调试时一眼看出是 `"end"` 还是 `..(%q)`。
 // 规则分三档：非 Ident 非关键字的带 Literal 者印成 Kind("lit")（如 ..("..")）；

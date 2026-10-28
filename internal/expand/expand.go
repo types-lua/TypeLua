@@ -7,19 +7,18 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// 展开器核心：定义收集、语句/表达式驱动。
+// 展开器是印前制版：先收 `macro twice(x) x+x end`，`twice(21)` 复印改名代入成 `21+21`，定义随即擦除。
 //
 // 设计者视角：展开器是“印前制版”——先收宏定义、再复印改名代入、末擦定义，检查器
 // 见到的已是成品。障碍是作用域污染：宏表须与 checker.Scope 分离、只看语法。
 
-// maxExpandDepth 是宏递归展开的深度上限，防止无限递归。
+// maxExpandDepth=64 是宏熔丝：`a→b→a` 互递归到 64 层报 RecursiveMacro 仍产可跑输出。
 //
 // 设计者视角：64 步是“熔断丝”——自递归/互递归（见 enter 栈检）至此报诊断不停机，
 // 保幂等与可跑输出。候选：无限 vs 上限；选上限。排查现场：误报深嵌套先查上限。
 const maxExpandDepth = 64
 
-// macroDef 是收集到的单个宏定义（参数、是否 vararg、体、是否表达式宏）。
-// 它只在展开期存活；类型检查与发射阶段完全不知道宏存在。
+// macroDef 是宏底片：存形参/vararg/体（表达式 `x+x` 或语句块），`isExpr` 错位如语句宏进表达式即报 TL3706。
 //
 // 设计者视角：macroDef 是宏的“底片”——存形参名、vararg 旗、双体（body/block）
 // 与 isExpr 旗，span 供诊断。障碍是语句/表达式宏混用：isExpr 分流，错位报
@@ -35,8 +34,7 @@ type macroDef struct {
 	span      token.Span
 }
 
-// scope 是宏定义的词法作用域：父子链 + 当前块的宏定义表。
-// 与 checker 的 Scope 分离：宏只看语法，不看类型。
+// scope 是宏一室一册：只记宏名（如内层 `twice` 遮外层），与 checker 类型域分家防串味。
 //
 // 设计者视角：scope 是宏的“一室一册”——只记宏名，函数/块进新层（parent 链），
 // 查找自内向外，遮蔽自然成立。障碍是与类型域混用：若合表，类型名会误触宏；故
@@ -58,7 +56,7 @@ func (s *scope) lookup(name string) *macroDef {
 	return nil
 }
 
-// expander 是一次 ExpandFile 调用的遍历状态：诊断、fresh 名计数器、活跃宏栈（递归检测）。
+// expander 是单次展开随身包：diags 攒错，counter 保 `__tl_macro_7__x` 单调，stack 防 `a→b→a` 递归。
 //
 // 设计者视角：expander 是单次展开的“随身包”——diags 攒错，counter 保 fresh 单调，
 // stack 记活跃宏名防递归。障碍是复用：每 ExpandFile 新造，不跨文件带计数。不变量：
@@ -89,8 +87,7 @@ func (e *expander) fresh(base string, avoid map[string]bool) string {
 	}
 }
 
-// ExpandFile 展开 f 中所有宏调用，并擦除定义。
-// 幂等：第二次运行找不到定义，什么都不改。
+// ExpandFile 是总闸：空文件 nil 宽容，一遍收集+展开+擦除，二轮无定义即零改（幂等）。
 //
 // 设计者视角：ExpandFile 是宏的“总闸”——空文件 nil 宽容，一遍 expandBlock 走完
 // 定义收集+语句展开+return 展开，定义随之擦除。障碍是重复展开：二轮无定义即零改，

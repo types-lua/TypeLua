@@ -6,11 +6,7 @@ type Options struct {
 	StrictNilChecks bool
 }
 
-// visit identifies one coinductive subtyping hypothesis by pointer identity.
-// 所有 Type 实现都是指针，因此接口相等即指针相等。使用身份（而非旧的
-// %p:String 渲染）避免每步递归都做完整 String()；不同指针但
-// identical structure simply miss the cache and recompute, which is always
-// sound (hypotheses only ever conclude "true" for cycles).
+// visit 记一次共归纳假设（from,to 指针身份）：`type N={next:N}` 回环即命中返 true，省去每步 String() 序列化。
 //
 // 设计者视角：子类型判定遇到 `type N = { next: N }` 这类递归类型会左右互问、
 // 无限下探，必须用“共归纳假设”拦住回头路：第一次见 (from,to) 先记为 true 再
@@ -27,7 +23,7 @@ type visit struct {
 	to   Type
 }
 
-// IsAssignable reports whether `from` can be assigned to `to`.
+// IsAssignable 是对外闸口：`Cat` 能否赋给 `Animal`、实参能否进形参，全汇于此（每次新建假设集隔离）。
 //
 // 设计者视角：这是全包的对外闸口，好比海关查验——所有赋值、传参、返回、
 // 泛型实参校验最终都汇到这里。它只做一件事：新建空假设集后委托 assignable，
@@ -41,24 +37,10 @@ func IsAssignable(from, to Type, opt Options) bool {
 	return assignable(from, to, opt, map[visit]bool{})
 }
 
-// assignable 是子类型判定的递归内核，seen 承载共归纳假设（见 visit）。
-//
-// 设计者视角：这是全文件最烫的热路径，好比医院分诊台——所有类型对都要按固定
-// 优先级分流，顺序错一位就会误诊。障碍有三：递归类型死循环、联合/交集的
-// 分发顺序、延迟类型（Conditional/Mapped/IndexedAccess）的“算还是放”。
-// 分流总览（顺序即语义，不可随意调换）：
-//
-//	fast path（any/never/unknown/nil/void）
-//	→ 源 union（每员皆可）→ 目标 union（命中其一即可）
-//	→ 目标 intersection（全中）→ 源 intersection（中其一）
-//	→ 延迟类型（能求值则代入重判，否则 permissive true）
-//	→ 字面量/原语/泛型参/枚举/类/通道/数组/映射/元组/函数/对象/Ref
-//
-// 候选：把 union 目标放源 union 之前 vs 之后。选源 union 在前，否则
-// `A|B <: A|B` 会被逐员误判为 false（见注释）。取舍：infer 游离占位符、
-// 延迟类型一律先放行（true），把严格性留给实例化后。不变量：seen 命中即
-// true；nil/void 的 StrictNilChecks 只在 nil 分支生效。排查现场：先看 fast
-// path 是否提前返回，再看 union/intersection 顺序，最后看延迟分支是否误放行。
+// assignable 是分诊台：按固定优先级分流（顺序即语义，错一位即误诊 `A|B <: A|B`）。
+// 序：fast path（any/never/unknown/nil/void）→ 源 union 全过 → 目标 union 中其一
+// → 目标交集全中 → 源交集中其一 → 延迟类型（Conditional/Mapped/IndexedAccess 能算则代入，否则放行 true）。
+// 例：`nil` 能否进 `string` 只看 StrictNilChecks；`{next:N}` 回环靠 seen 拦。排查先看 fast path，再看 union 序。
 func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 	if from == nil || to == nil {
 		return true
@@ -180,7 +162,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return true
 	}
 
-	// Nil / void.
+	// nil/void 格：`nil` 进 `string?` 看 StrictNilChecks，`nil` 进 `void` 恒过（如缺参补 nil）。
 	if from.Kind() == KNil {
 		if to.Kind() == KNil || to.Kind() == KVoid {
 			return true
@@ -200,7 +182,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return to.Kind() == KVoid
 	}
 
-	// Literals.
+	// 字面量：`"red"` 进 `string` 靠 Base，进 `enum Color` 须命中成员（如 `"red"` 对 `Color.Red`）。
 	if fl, ok := from.(*Literal); ok {
 		if tl, ok := to.(*Literal); ok {
 			return fl.Value == tl.Value
@@ -225,13 +207,13 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return false
 	}
 
-	// Primitives & numeric lattice.
+	// 原语格：`integer`/`float` 进 `number` 唯二放行，`string` 进 `number` 拦（如 `x: string=123` 报）。
 	if isPrim(from) && isPrim(to) {
 		return primAssignable(from.(*Primitive), to.(*Primitive))
 	}
 	// Integer/float literals? Already handled as Literal.
 
-	// Generic param target: must satisfy constraint.
+	// 泛型目标：`T extends Animal` 的槽须满足约束（如 `Cat` 进 `T` 先验 `Cat<:Animal`）。
 	if gp, ok := to.(*GenericParam); ok {
 		if gp.Constraint != nil {
 			return assignable(from, gp.Constraint, opt, seen)
@@ -251,7 +233,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return from == to || from.String() == to.String()
 	}
 
-	// Enum.
+	// 枚举：同名才互通（如 `Color` 进 `Color` 过，进 `string` 须全员可进），`"red"` 进 `Color` 命中成员即过。
 	if fe, ok := from.(*Enum); ok {
 		if te, ok := to.(*Enum); ok {
 			return fe.Name == te.Name
@@ -274,7 +256,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return false
 	}
 
-	// Classes (nominal instance types).
+	// 类实例：名义只认族谱（如 `Dog` 进 `Animal` 沿 Base 爬，进 `table` 恒过，结构不足即拦）。
 	if fc, ok := from.(*Class); ok {
 		switch tt := to.(type) {
 		case *Class:
@@ -289,7 +271,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 	if _, ok := to.(*Class); ok {
 		return false
 	}
-	// Class values only alias the same class.
+	// 类值（typeof）：同 Def 才互通（如 `typeof(Dog)` 进 `typeof(Dog)` 过，进 `typeof(Cat)` 拦）。
 	if fv, ok := from.(*ClassValue); ok {
 		if tv, ok := to.(*ClassValue); ok {
 			return fv.Class != nil && tv.Class != nil &&
@@ -302,7 +284,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return false
 	}
 
-	// Chan (invariant: element types must match both ways, modulo any).
+	// 通道不变：`chan<Cat>` 进 `chan<Animal>` 须双向可赋（如单向通即拦，any 例外）。
 	if fc, ok := from.(*Chan); ok {
 		if tc, ok := to.(*Chan); ok {
 			return assignable(fc.Elem, tc.Elem, opt, seen) && assignable(tc.Elem, fc.Elem, opt, seen)
@@ -313,7 +295,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return false
 	}
 
-	// Array.
+	// 数组：`integer[]` 进 `table` 直放，进 `map<integer,T>` 按位验，进对象看 objectAcceptsArray。
 	if fa, ok := from.(*Array); ok {
 		switch tt := to.(type) {
 		case *Array:
@@ -323,7 +305,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		case *Object:
 			return objectAcceptsArray(tt, fa, opt, seen)
 		case *Map:
-			// arrayáci as map<integer, elem>?
+			// 数组当 map<integer, elem> 用（如 `{1,2,3}` 进 `map<integer,string>` 按位校验）。
 			return assignable(Integer, tt.Key, opt, seen) && assignable(fa.Elem, tt.Value, opt, seen)
 		}
 		return false
@@ -344,7 +326,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return false
 	}
 
-	// Map.
+	// 映射：`map<string,integer>` 进 `table` 直放，进对象须索引器覆盖（如全可选才松）。
 	if fm, ok := from.(*Map); ok {
 		switch tt := to.(type) {
 		case *Map:
@@ -371,7 +353,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return false
 	}
 
-	// Tuple.
+	// 元组：`[integer,string]` 定长逐位验，进数组按 elem 并验（如 `[1,"a"]` 进 `any[]`）。
 	if ft, ok := from.(*Tuple); ok {
 		switch tt := to.(type) {
 		case *Tuple:
@@ -402,7 +384,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return false
 	}
 
-	// Functions.
+	// 函数：`(x: Cat) => void` 进 `(x: Animal) => void` 靠参数逆变，进 `function` 原语直放。
 	if ff, ok := from.(*Func); ok {
 		switch tt := to.(type) {
 		case *Func:
@@ -416,7 +398,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return false
 	}
 
-	// Objects.
+	// 对象：`{a=1}` 进 `{a: number}` 逐字段验，进 `map<string,number>` 须全员可进 Value。
 	if fo, ok := from.(*Object); ok {
 		switch tt := to.(type) {
 		case *Object:
@@ -447,7 +429,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 		return false
 	}
 
-	// Ref should have been resolved; compare by name.
+	// Ref 正常已被消解（如泛型占位残留）：按名+实参逐位比（如 `Box<T>` 同名不同参即拦）。
 	if fr, ok := from.(*Ref); ok {
 		if tr, ok := to.(*Ref); ok {
 			if fr.Name != tr.Name || len(fr.Args) != len(tr.Args) {
@@ -469,7 +451,7 @@ func assignable(from, to Type, opt Options, seen map[visit]bool) bool {
 	return from.String() == to.String()
 }
 
-// isPrim 判断 t 是否为原语（*Primitive），供原语格 fast path 分流。
+// isPrim 判原语（*Primitive 才真）：` "red"` 字面量外形像 string 但不是原语，须拦在 primAssignable 外。
 //
 // 设计者视角：原语判定每天被调用数万次，必须是 O(1) 类型断言，不能走
 // Kind switch 或 String()。障碍是 Literal/Enum 外形像原语但不是原语，
@@ -510,7 +492,7 @@ func primAssignable(from, to *Primitive) bool {
 	return false
 }
 
-// classArgsAssignable checks generic arguments covariantly.
+// classArgsAssignable 判泛型实参协变：`Box<Cat>` 能否进 `Box<Animal>` 看 Cat<:Animal，长度先对齐。
 //
 // 设计者视角：泛型类实参取协变（`Box<Cat> <: Box<Animal>` 当 Cat <: Animal），
 // 因为 TypeLua 的类字段多为只读/方法返回协变可 sound；不变只留给 Chan。
@@ -529,8 +511,7 @@ func classArgsAssignable(from, to []Type, opt Options, seen map[visit]bool) bool
 	return true
 }
 
-// classAssignable walks the inheritance chain: a subclass instance is
-// assignable to its ancestors (with compatible type arguments).
+// classAssignable 只认族谱不认长相：`class C extends B` 的实例沿 Base 链上爬，撞同 Def 再比 Args 协变。
 //
 // 设计者视角：名义子类型只认“族谱”不认“长相”：结构再像也不是一家人，族谱
 // 对上才是。障碍是菱形/环形继承会导致 Base 链成环，朴素 while 会打转；
@@ -555,7 +536,7 @@ func classAssignable(from, to *Class, opt Options, seen map[visit]bool) bool {
 	return false
 }
 
-// classObjectView exposes public instance members structurally.
+// classObjectView 脱制服看身材：把 Class 的 public 成员快照为 Object，复用结构判定（如 private 不 leaking）。
 //
 // 设计者视角：类与接口相遇时要“脱下制服看身材”：把 Class 的 public 成员
 // 快照为 *Object，再复用 objectAssignable 的结构化逻辑，避免为 Class-vs-Object
@@ -574,7 +555,7 @@ func classObjectView(c *Class) *Object {
 	return o
 }
 
-// classSatisfiesObject 判断类实例是否满足结构化接口（public 视图复用）。
+// classSatisfiesObject 是摆渡口：`class C` 能否赋给 `interface I{foo(): void}` 只看 public 结构，不看 Def。
 //
 // 设计者视角：这是名义与结构两世界的摆渡口：`class C` 能否赋给 `interface I`
 // 只看 public 成员结构，不看 Def 身份。直接委托 classObjectView+objectAssignable，
@@ -584,7 +565,7 @@ func classSatisfiesObject(from *Class, to *Object, opt Options, seen map[visit]b
 	return objectAssignable(classObjectView(from), to, opt, seen)
 }
 
-// unionOf 把元素切片折为 Union（空即 Never），供 tuple/可变返回复用。
+// unionOf 把多返回并成 Union：`f(): (integer, string)` 缺位补 nil，空切片退化为 Never 防非法空并。
 //
 // 设计者视角：很多位置要“把一堆类型并起来”：元组转数组、函数多返回补 nil。
 // 直接调 NewUnion 即得范式化（展平/去重/排序），空切片退化为 Never 而非空
@@ -597,7 +578,7 @@ func unionOf(elems []Type) Type {
 	return NewUnion(elems)
 }
 
-// objectAcceptsArray reports whether an object type accepts an array value.
+// objectAcceptsArray 判数组能否进对象：`{}` 空对空即过，`{[1]: T}` 须目标无必填且索引器吞下 integer->elem。
 //
 // 设计者视角：Lua 里 `{}` 既是空对象也是空数组，`{[1]: T}` 又可兼作数组视图，
 // 所以数组到对象的判定必须宽容：目标若无必填字段、且索引器接受 integer->elem，
@@ -625,7 +606,7 @@ func objectAcceptsArray(obj *Object, arr *Array, opt Options, seen map[visit]boo
 	return true
 }
 
-// objectAssignable 判定结构化对象的兼容：目标必填皆有、索引器皆被满足。
+// objectAssignable 宽进严出：源多字段无妨（如 `{a=1,b=2}` 进 `{a: number}`），目标必填缺一即拦。
 //
 // 设计者视角：对象是“宽进严出”的结构类型：源多字段无妨，目标必填缺一不可。
 // 障碍有三：空表字面量 `{}` 的特殊放行、源索引器对目标字段的覆盖、目标索引器
@@ -696,7 +677,7 @@ func objectAssignable(from, to *Object, opt Options, seen map[visit]bool) bool {
 	return true
 }
 
-// funcAssignable 判定函数可赋值：参数逆变、返回协变，Lua 语义放宽元数。
+// funcAssignable 判函数：参数逆变（传的须被接住）、返回协变，多传丢弃、少传补 nil（如 `f(a,b)` 调单参函数）。
 //
 // 设计者视角：函数是“最挑剔又最随和”的类型：参数要逆变（调用方传的必须被接住）、
 // 返回要协变（我给的必须够用），但 Lua 多传少传都不炸——多余实参静默丢弃，

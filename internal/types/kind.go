@@ -1,40 +1,10 @@
 package types
 
-// Kind 是 types.Type 的分类标签（discriminant），只回答“这是哪一种类型”，
-// 不携带任何数据；数据与行为都在具体 struct（*Primitive/*Union/...）里。
-//
-// 为什么用 int 枚举而非类型断言/接口：Kind 让穷举 switch 与缓存键稳定，
-// 且避免在热路径上做反射；代价是新增类型时编译器不会强制覆盖所有 switch，
-// 靠测试与审查兜底。
-//
-// 物理布局（Type 与 Kind 的关系）：
-//
-//	Type (interface)                Kind (int 标签)
-//	┌──────────────────┐            ┌──────────┐
-//	│ Kind() Kind      │──returns──►│ KObject  │
-//	│ String() string  │            └──────────┘
-//	└────────┬─────────┘
-//	         │ 动态分派到具体 struct
-//	         ▼
-//	*Primitive{K Kind; Name string}
-//	*Union{Types []Type}            *Intersection{Types []Type}
-//	*Array{Elem Type}               *Map{Key,Value Type}
-//	*Tuple{Elems []Type}            *Func{Params;Returns;...}
-//	*Object{Fields;Indexers}        *Class{Def;Args;Fields;Base}
-//	*ClassValue{Class;Constructor;Statics}
-//	*Literal{Value;Base}            *Enum{Name;Underlying;Members}
-//	*GenericParam{Name;Constraint;Default}
-//	*Ref{Name;Args}                 *InferParam{Name}
-//	*Conditional{Check;Extends;True;False;Distributive}
-//	*Mapped{Param;Constraint;...}   *IndexedAccess{Obj;Index}
-//	*Chan{Elem}
-//
-// 枚举取值按家族分组（数值稳定，供缓存键与诊断）：
-//
-//	基础原语 KAny..KCtype, KFunction
-//	复合/容器 KLiteral, KUnion, KIntersection, KArray, KMap, KTuple, KFunc
-//	对象/名义 KObject, KEnum, KGenericParam, KRef, KClass, KClassValue
-//	高阶类型 KConditional, KInferParam, KMapped, KIndexedAccess, KChan
+// Kind 是 Type 的分类条码：只答“哪一种”（如 `local x: string` 的 string 即 KString），不存数据。
+// 用 int 而非反射：switch 穷举快、缓存键稳；代价是新增类型须手补全部分 switch，靠测试兜底。
+// 布局：Type 接口（Kind()+String()）→ 30 余实现（*Primitive/*Union/*Object/*Class/*Func 等，见下）。
+// 取值按家族排（数值冻结供缓存）：原语 KAny..KFunction → 容器 KLiteral..KFunc
+// → 名义 KObject..KClassValue → 高阶 KConditional..KChan。
 type Kind int
 
 const (
@@ -108,20 +78,13 @@ const (
 	KChan
 )
 
-// Type 是所有语义类型共用的最小契约：分类标签 + 稳定字符串渲染。
-// 字符串渲染用于诊断消息与缓存键，Kind 用于分派；所有聪明逻辑在
-// 使用它们的函数里（子类型、替换、实例化等）。
+// Type 是语义值的最小契约：Kind 分派 + String 渲染（如报错 `expected string, got integer` 与缓存 key 同源）。
 type Type interface {
 	Kind() Kind
 	String() string
 }
 
-// Access 是类成员的可见性（plain object 永远是 public，不使用此字段）。
-//
-// 为什么单独一个类型而非 bool：三态（public/private/protected）需要可扩展的
-// 枚举；用 int 让 switch 穷举与 String() 集中处理。
-//
-// 物理布局：单个 int，0=Public,1=Private,2=Protected。
+// Access 是类成员门禁（普通表恒为 public）：三态须枚举而非 bool，如 `private x: integer` 误从外部读即拦。
 type Access int
 
 const (
@@ -149,20 +112,8 @@ func (a Access) String() string {
 	return "public"
 }
 
-// Field 是对象/接口成员的统一描述：类型、可选、只读、可见性与定义类。
-//
-// 为什么一个 struct 覆盖对象与类：减少类型种类与转换；靠 Owner 与 Access
-// 约定区分——plain object 的 Owner=nil 且 Access=Public，类成员带 Owner
-// 与真实 Access。代价是“谁是类成员”由约定而非类型系统保证。
-//
-// 物理布局：
-//
-//	Field
-//	├── Type     Type        // 成员类型
-//	├── Optional bool        // `?`
-//	├── Readonly bool        // `readonly`
-//	├── Access   Access      // 仅类有意义
-//	└── Owner    *ClassDef   // 定义该成员的类身份；nil=普通对象
+// Field 通吃对象与类成员：`{name?: string}` 的 Optional 与 `readonly x`、`private` 皆存于此；
+// 普通表 Owner=nil 且 Access=Public，类成员带真 Owner（如 Dog 的 name 归 Dog）。
 type Field struct {
 	Type     Type
 	Optional bool
@@ -171,28 +122,13 @@ type Field struct {
 	Owner    *ClassDef // defining class for class members; nil otherwise
 }
 
-// Indexer 是索引签名 `[K]: V`（对象的动态键集合）。
-//
-// 为什么独立于 Field：索引签名没有名字、没有可选/只读语义（由 mapped
-// 标记单独决定），且一个对象可同时有多个不同键类型的签名。
-//
-// 物理布局：Indexer{Key Type; Value Type}
+// Indexer 是动态键签名 `[K]: V`（如 `{[string]: integer}`），与具名字段 Field 分家，一对象可挂多个。
 type Indexer struct {
 	Key   Type
 	Value Type
 }
 
-// Primitive 是无状态/少状态的基础类型：any/unknown/never/void/nil/boolean/
-// number/integer/float/string/table/thread/userdata/cdata/ctype/function 等。
-//
-// 为什么 K 与 Name 分离：K 供分派与缓存，Name 供打印与缓存键；单例变量
-// （Any/Unknown/...）保证指针身份稳定，让 map/set 与 memo key 可用指针。
-//
-// 物理布局：
-//
-//	Primitive
-//	├── K    Kind   // 分类标签
-//	└── Name string // 源码拼写（"number"、"any" 等）
+// Primitive 是基础单例（如全局唯一的 string/number/any）：K 供分派，Name 供打印与缓存键，指针身份恒稳。
 type Primitive struct {
 	K    Kind
 	Name string

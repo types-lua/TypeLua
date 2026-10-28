@@ -8,7 +8,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Lexer turns TypeLua source into tokens.
+// Lexer 是质检分拣员：按块切 Token（如 `...`/`..`/`.` 最长匹配），坏字符记账跳过（如中文变量首字判否）。
 //
 // 设计者视角：Lexer 是编译流水线的“质检分拣员”——好比传送带入口按形状切块、
 // 按种类贴面单（Token），坏字符记一笔诊断后跳过，永不停机。它是游标式单遍扫描：
@@ -231,22 +231,8 @@ func isSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
 }
 
-// Lex scans the entire source.
-//
-// 设计者视角：Lex 是“一卷布一次交货”的全量入口——好比 New 开卷、next 逐件切、
-// EOF 收线，toks 与 diags 双轨交付，parser 拿去即能解析聚合。障碍有两个：
-// 一是首行 `#!`（可执行脚本的 shebang）必须整行吞掉，否则 '#' 会报无效字符；
-// 二是坏输入永不停机，靠 next() 内部的记账+跳过保证每次 next 必有进展。
-//
-//	src
-//	 │ New(filename, src)
-//	 ▼
-//	[跳 shebang] → loop{ next() → toks } → EOF 收线 → toks + diags
-//
-// 取舍是不做流式回调，一次返全量切片，换 parser 可任意回看；大文件内存换简单。
-// 不变量：返回的 toks 必以 EOF 结尾；diags 顺序与源码一致；任意输入不 panic。
-// 排查现场：若首行 `#!/usr/bin/env tlua` 报红，先看 HasPrefix("#!") 是否在 off!=0 时
-// 被跳过；若 Lex 丢了尾部诊断，先确认是否只取了 toks 而忘了 Diags()。
+// Lex 一卷布一次交货：New 开卷→跳首行 `#!/usr/bin/env tlua`→loop next()→EOF 收线，toks+diags 双轨交付。
+// 例：坏字节 `0xFF` 记一笔跳过不停机，`--[[` 未闭合吃到尾，保证任意输入不 panic 且 parser 可回看。
 func Lex(filename, src string) ([]token.Token, []diag.Diagnostic) {
 	l := New(filename, src)
 	var toks []token.Token

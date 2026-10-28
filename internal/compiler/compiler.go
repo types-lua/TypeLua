@@ -16,7 +16,7 @@ import (
 	"github.com/typelua/typelua/internal/sourcemap"
 )
 
-// SourceFile 是一个加载单元（路径、内容、AST、是否声明文件）。
+// SourceFile 是集装箱：Path 定身份，Content 留 source map 源文，IsDecl 标 .d.tl（只查不发，File 可为 nil）。
 //
 // 设计者视角：SourceFile 是流水线的“集装箱”——Path 定身份，Content 留作 source
 // map 源文，File 装 AST，IsDecl 标 *.d.tl（只查不发）。障碍是读取失败：File 可
@@ -38,7 +38,7 @@ type SourceFile struct {
 	IsDecl  bool // *.d.tl
 }
 
-// Program 是编译流水线的总控（类似 tsc Program）。
+// Program 是厂长：Files 按径排序保确定性，Diags 聚全阶段，shorts 藏 manifest 短名映射。
 //
 // 设计者视角：Program 是“厂长办公室”——Cfg 管配置发现，Files 按径排序保确定性，
 // Diags 聚合全阶段，shorts 藏 manifest 短名映射。障碍是并行解析乱序：结果按索
@@ -75,9 +75,7 @@ func NewProgram(cfg *config.Config) *Program {
 	return &Program{Cfg: cfg}
 }
 
-// Load 读取并解析所有文件，收集词法/语法诊断。
-// 文件并行解析（有界 worker 池）；结果按路径排序组装，
-// 因此 Files/Diags 与顺序加载完全一致。
+// Load 进货+分拣：ListFiles 定成员，parallelDo 并行 ParseFile，结果按径回填保序（如乱序即 bug）。
 //
 // 设计者视角：Load 是“进货+分拣”——ListFiles 定成员，parallelDo 并行读+
 // parser.ParseFile 纯解析，末按 list 序组装。障碍是 parser 非线程安全误解：
@@ -125,7 +123,7 @@ func (p *Program) Load() error {
 	return nil
 }
 
-// LoadSources 供测试/内存使用。
+// LoadSources 是内存进货口：无磁盘 IO，供测试/LSP 直灌（如 map 迭代须显式排序保确定）。
 //
 // 设计者视角：LoadSources 是“内存进货口”——无磁盘 IO，直接 ParseFile 入 Files，
 // 供测试与 LSP 复用。障碍是路径排序：map 迭代随机，须显式 sort 保确定性。
@@ -143,8 +141,7 @@ func (p *Program) LoadSources(srcs map[string]string) {
 	}
 }
 
-// Check 按依赖顺序对所有文件运行类型检查（见 require.go）：
-// 每个文件看到其 require 的模块类型，未解析的边退化为 `any`。
+// Check 监理进场：按依赖序喂 RequireTypes/Ambient（如 `require("a.b")` 失联即退化 any），Target 四开关齐抄防版本误报。
 //
 // 设计者视角：Check 是“监理进场”——把 Cfg 开关译为 checker.Options，经
 // shortModules 建短名，再托 checkAll 做 memo DFS。障碍是开关透传遗漏：
@@ -162,7 +159,7 @@ func (p *Program) Check() {
 	p.checkAll(opt)
 }
 
-// HasErrors 报告是否存在错误级别诊断。
+// HasErrors 放行闸：见 Error 即拦，Warn 不拦（如类型 Warn 不阻 Emit）。
 //
 // 设计者视角：HasErrors 是“放行闸”——扫 Diags 见 Error 即 true，警告不拦构建。
 // 障碍是严重级别混淆：Warn 不应阻断 Emit，故只认 Error。不变量：纯读。排查现场：
@@ -176,24 +173,9 @@ func (p *Program) HasErrors() bool {
 	return false
 }
 
-// Emit 把 .lua 输出写入 outDir，返回发射路径。跳过 .d.tl 与 `declare` 主体。
-// 类型-only 声明被发射器擦除；`declare function` 空体在文件级跳过？
-// 为安全起见，每个非声明文件（即使空）都发射，以保持构建形状。
-// 原生资产（*.lua shim、*.so/*.dylib/*.dll/*.a）随后按布局复制，
-// 使 vendored 跨语言绑定无需手动步骤即可运行。
-//
-// 设计者视角：Emit 是“发货+铺路”——先 NeedsModPath 判是否铺 prelude，再
-// collect→compute（并行纯算）→write（串行落盘保错序），末补原生资产。障碍一是
-// 并行写乱序掩盖首错：故算写分离，写恒按序；障碍二是 mtime 抖动致下游重建：
-// writeFileIfChanged 内容比对保稳；障碍三是空文件：仍发货保构建形状对称。
-// 图：jobs(纯) → 并算 → 串写 → 资产。候选：写亦并行 vs 串行；选串行，错序确定。
-// 不变量：跳过仍计 emitted。排查现场：首错不对先查 jobs 序，并发产物缺 prelude
-// 先查 NeedsModPath。
-//
-// 性能：发射计算（AST 渲染 + sourcemap 编码，CPU 重）并行运行；
-// 文件系统写入按文件顺序串行，保持精确的错误/部分输出语义。写入前先
-// 比较内容，未变化的输出保留 mtime（避免下游重建循环）；跳过的路径
-// 仍计为已发射。
+// Emit 发货+铺路：跳过 .d.tl（只查不发），类型声明由发射器擦除，空文件仍发货保形状对称，原生资产随后复制。
+// 流：collect 列清单→compute 并行纯算→write 串行落盘（保首错序）→资产；mtime 内容比对防抖动重建。
+// 例：`a.tl` 空文件亦出 `a.lua` 空壳；`declare class D` 零运行时。排查：首错乱序查 jobs 序，缺 prelude 查 NeedsModPath。
 func (p *Program) Emit() ([]string, error) {
 	withPrelude := NeedsModPath(p)
 	opt := emitter.Options{Target: p.Cfg.Target(), TreeShake: p.Cfg.CompilerOptions.TreeShake}
@@ -211,7 +193,7 @@ func (p *Program) Emit() ([]string, error) {
 	return append(emitted, assets...), nil
 }
 
-// emitJob 是一个文件的输出单元（映射进，渲染字节出）。
+// emitJob 是发货单：sf/dst 定去向，out/mapRaw 装算后字节，wantMap 控映射开关。
 //
 // 设计者视角：emitJob 是“发货单”——sf/dst 定去向，out/mapRaw 装算后字节，
 // wantMap/mapLabel 控映射开关与页脚。障碍是算写分离需中转：jobs 切片传址，
@@ -229,7 +211,7 @@ type emitJob struct {
 	mapLabel string // "--# sourceMappingURL=..." 页脚，追加在 map 写入后
 }
 
-// collectEmitJobs 把非声明文件映射为按程序顺序的输出。
+// collect 列清单：跳 IsDecl，按 OutputForFile 定 dst，`foo.tl`→`foo.lua` 保序。
 //
 // 设计者视角：collect 是“列清单”——跳 IsDecl、经 OutputForFile 定 dst、按需挂
 // map 名与页脚，保序。障碍是相对路径：须相对 RootDir 算 srcRel 供映射源名，
@@ -263,9 +245,7 @@ func collectEmitJobs(cfg *config.Config, files []*SourceFile) []emitJob {
 	return jobs
 }
 
-// computeEmitJobs 并行运行纯渲染阶段：
-// EmitFileWithMap、PrependPrelude 与 sourcemap.Encode 只触及每个文件
-// 新鲜的切片（无共享状态）。
+// compute 并行车间：每 job 独立渲染+铺 prelude+编码 map（SrcFile 回填对齐 dist 布局，失败记 mapErr 交串行报）。
 //
 // 设计者视角：compute 是“并行车间”——每 job 独立渲染+铺 prelude+编码，
 // 无共享故可 parallelDo。障碍是 SrcFile 回填：渲染时 File 名为解析相对名，
@@ -294,10 +274,7 @@ func computeEmitJobs(jobs []emitJob, opt emitter.Options, withPrelude bool) {
 	})
 }
 
-// writeEmitJobs 执行有序写入阶段：mkdir、编码错误检查、map 写入、
-// lua 写入（每个文件，与原顺序发射器相同的故障顺序）。内容比较写入
-// 保持 mtime 稳定；跳过的路径仍计为已发射。用每个目标填充 emittedSet
-// （原生资产碰撞守卫所需）。
+// write 串行出库：mkdir→判 mapErr→写 map→缀页脚→写 lua，首错即返序同旧发射器，emittedSet 防资产碰撞。
 //
 // 设计者视角：write 是“串行出库”——mkdir→判 mapErr→写 map→缀页脚→写 lua，
 // 故障序与旧顺序发射器一致，调用方可比对。障碍是部分写：首错即返，已写不清，
@@ -330,9 +307,7 @@ func writeEmitJobs(jobs []emitJob, emitted []string, emittedSet map[string]bool)
 	return emitted, nil
 }
 
-// writeFileIfChanged 把 data 写入 path；当当前内容字节相同则跳过写入
-// （与 mtime 提升）。报告是否写入。跳过的路径仍计为已发射，
-// 使 watch 过时追踪保持精确。
+// writeFileIfChanged 是 mtime 稳压器：字节等即跳写（如 watch 循环靠 mtime 活，下游频重建先查是否绕过此函数）。
 //
 // 设计者视角：writeFileIfChanged 是 mtime 的“稳压器”——字节等即跳写，省下游
 // 重建。障碍是读赛：文件不存在即写；读到即比，全等方跳。候选：恒写 vs 比对；
@@ -348,7 +323,7 @@ func writeFileIfChanged(path string, data []byte) (bool, error) {
 	return true, nil
 }
 
-// EmitToString 供测试使用。
+// EmitToString 是测试直达梯：跳 prelude/映射/落盘直调 EmitFile（与真实 Emit 差 prelude，另测）。
 //
 // 设计者视角：EmitToString 是测试的“直达梯”——跳过 prelude/映射/落盘，直调
 // EmitFile 判文本。障碍是与真实 Emit 分叉：prelude 差异须另测（见 bootstrap
@@ -366,7 +341,7 @@ func (p *Program) EmitToString() map[string]string {
 	return out
 }
 
-// FormatDiags 渲染诊断为 file:line:col + message，已排序。
+// FormatDiags 稳定视图：拷贝后按文件-行-列排，屏蔽并行乱序（如 CLI/watch/LSP 同视图）。
 //
 // 设计者视角：FormatDiags 是“稳定视图”——拷贝后按文件-行-列排，屏蔽并行与增量
 // 的原始乱序。障碍是原切片须不动：append 空切片拷贝防副作用。候选：调用方排 vs

@@ -8,63 +8,20 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
-// 物理布局（checker 单文件单遍历的状态机）：
-//
-//   +---------------- Checker ----------------+
-//   | opt, diags[], file                       |
-//   | scopes[]  -> *Scope (parent chain)        |
-//   | retStack[][]types.Type (函数返回契约)      |
-//   | labelStack[] map[label]span              |
-//   | gotoList[][]gotoRef                     |
-//   | tparamStack[] map[name]*GenericParam     |
-//   | varargStack[] types.Type                |
-//   | inferStack[][]types.Type                |
-//   | loopDepth, typeDepth, depthReported     |
-//   | classStack[] *classCtx                  |
-//   | asyncStack[] bool, spawnDepth            |
-//   | extendsDepth                            |
-//   | Index *SymIndex (LSP, best-effort)       |
-//   +-----------------------------------------+
-//
-// 数据流（一次 CheckFile）：
-//
-//   ast.File
-//     -> expand.ExpandFile (宏展开，前置)
-//     -> newScope(Ambient or fresh) + defineBuiltins
-//     -> checkBlock(Block)
-//        -> collectTypes (登记 typeEntry 到 Scope.types)
-//        -> checkStmt (逐语句)
-//        -> checkReturn (返回契约)
-//     -> moduleType (顶层 return M 的类型)
-//     -> diags + SymIndex
-//
-// 作用域链（父子）：
-//
-//   Ambient (builtins + .d.tl)
-//     └── File top scope
-//           └── block scope (push/pop)
-//                 └── function/method scope
-//
-// 类型解析策略（resolveType -> resolveTypeEntryWithArgs）：
-//
-//   AST TypeNode
-//     -> primitive/builtin 特判
-//     -> GenericParam / substitution 表
-//     -> typeEntry 查找
-//        -> enum: 一次性 buildEnum（缓存 enumType）
-//        -> class: ensureClassDef（shell + patches，支持递归）
-//        -> alias/interface:
-//             generic:  key=args -> cacheInst (inflight shell 防循环)
-//             non-generic: cached (inflight shell 防循环)
-//     -> fillShell 回填递归壳，保持指针稳定
-//
-// 模块协作：
-//   依赖 ast/diag/expand/token/types；被 compiler（CheckFile*）与 lsp（SymIndex）消费。
-//   checker 不改 AST、不生成代码；类型信息仅存符号表/typeEntry。
+// 物理布局（单文件单遍历状态机，一次 CheckFile 走完）：
+//   scopes 栈 + retStack 返回契约 + label/goto 跳转表 + tparam/vararg 泛型栈
+//   + classStack/asyncStack 类与异步 + Index（LSP 只读副本）。
+// 数据流：ast.File → ExpandFile 宏展开 → newScope(Ambient 或 fresh) → checkBlock
+//   → collectTypes 登记 → checkStmt 逐句 → checkReturn → moduleType 取顶层 return M。
+// 例：`local P: Person = {name="阿强"}` 在 checkBlock 里登记 P、逐字段校验，错填 any 续查。
+// 类型解析：TypeNode → 原语特判 → 泛型表 → typeEntry（enum 一次 buildEnum 缓存；
+// class 用 shell+回填撑住递归；泛型 alias/interface 按 args 拼 key 缓存，inflight 壳防环）。
+// 协作：只读 AST、不产码，类型全进符号表，供 compiler/lsp 消费。
+// 排查：nil 误报先看 Strict 组合（见 toTypes），递归成员悬空先查壳回填。
 
-// Core checker state: options, symbols, scopes, entries, and the CheckFile drivers.
+// Checker 是单文件单遍历的状态机：配项、符号、作用域栈与 CheckFile 驱动。
 
-// Options controls strictness (mirrors tsconfig strict flags).
+// Options 是严格度开关（对标 tsconfig strict）：管 nil 与隐式 any。
 //
 // 设计者视角：Options 是检查器的“总闸刀”，好比施工图的抗震等级章——Strict
 // 一开即 StrictNilChecks 强制为真（见 toTypes），NoImplicitAny 则管住无标注
@@ -113,7 +70,7 @@ func (o Options) toTypes() types.Options {
 	return types.Options{StrictNilChecks: strictNil}
 }
 
-// Symbol kinds.
+// symKind 区分值绑定的三种出身：变量/函数/参数。
 type symKind int
 
 const (
@@ -122,9 +79,7 @@ const (
 	symParam
 )
 
-// Symbol is one value-side binding (variable, function, parameter) recorded
-// in a Scope. Its Type is the semantic type; SameAs chains narrowing shadows
-// back to the definition so references/rename stay unified across scopes.
+// Symbol 是值名的一次落户口：`local x = 1` 登记 x 的语义类型，窄化影子经 SameAs 链回原定义。
 //
 // 设计者视角：Symbol 是值命名空间的一张“户口卡”，好比监理台账上的一行——
 // Type 记语义类型，SameAs 把窄化影子（见 narrow.go）链回原定义，保证引用/
@@ -170,8 +125,7 @@ type typeEntry struct {
 	inflight map[string]*types.Object
 }
 
-// TypeEntry is the exported alias of typeEntry for language servers:
-// occurrences compare by pointer without needing construction.
+// TypeEntry 是 typeEntry 的导出别名：LSP 比指针认身份（如两个同名 Dog 只认声明点）。
 //
 // 设计者视角：TypeEntry 是类型声明的“身份证指针”——LSP 比较身份只比指针，
 // 不比名字（重名遮蔽下名字不可靠）。障碍是 typeEntry 未导出而 LSP 要用：
@@ -181,8 +135,7 @@ type typeEntry struct {
 // 的指针是否为声明点。
 type TypeEntry = typeEntry
 
-// classBuild is the checked definition form of a class (generic placeholders
-// intact so call-site inference keeps working).
+// classBuild 是类的一遍签名快照：`class Box<T>` 的 T 原样保留，供每次引用再 Substitute。
 //
 // 设计者视角：classBuild 是类的一遍产物——“签名快照”，泛型占位符原样保留，
 // 好比模具而非成品：每次 Point<T> 引用时再 Substitute 出实例。障碍是类体内
@@ -196,7 +149,7 @@ type classBuild struct {
 	sigs map[*ast.ClassMember]*classMemberSig
 }
 
-// classCtx tracks the enclosing class while checking method bodies.
+// classCtx 记住“正在查哪个类的方法体”，管 self/super 与 static 合法性。
 //
 // 设计者视角：classCtx 是方法体检查时的“施工围挡”——记当前类 Def、定义态
 // inst、基类 base/baseVal，以及 static/ctor 标记。障碍是 self/super 的合法性
@@ -215,9 +168,7 @@ type classCtx struct {
 	retDepth      int // len(retStack) at method entry; super only applies at this depth
 }
 
-// Scope is a lexical scope: a parent pointer plus two independent
-// name registries (vars for values, types for type declarations).
-// Lookup walks parents; bindVar installs into the current scope only.
+// Scope 是词法层：parent 上链 + vars/types 两本册（值名与类型名分家，`local Foo` 与 `type Foo` 可共存）。
 //
 // 设计者视角：Scope 是词法作用域的“一室两册”——vars 管值名、types 管类型名，
 // 互不串味（local Foo 与 type Foo 可共存），parent 链向上查。障碍是类型与值
@@ -257,11 +208,7 @@ func (s *Scope) lookupType(name string) *typeEntry {
 	return nil
 }
 
-// Checker holds per-program state (single file for now; multi-file via Program).
-// Checker is the single-pass traversal state machine for one file: scope
-// stack, return/label/goto stacks, generic-parameter stack, class context,
-// async/spawn nesting, and (optionally) the LSP position index. It never
-// mutates the AST; all findings go to diags and the symbol tables.
+// Checker 是一次一文件的遍历状态机：管作用域/返回/跳转/泛型/类/异步栈，只读 AST，结论全进 diags 与符号表。
 //
 // 设计者视角：Checker 是单文件单遍历的“状态机驾驶舱”，好比监理的随身夹——
 // scopes 记词法层、retStack 记函数返回契约、labelStack/gotoList 记跳转、
@@ -310,7 +257,7 @@ type Checker struct {
 	Index *SymIndex
 }
 
-// SymUse is one identifier occurrence: a use, or (IsDef) its definition.
+// SymUse 记一次标识符露面：IsDef 为真即定义，否则为使用（如 `x = x + 1` 记两笔）。
 //
 // 设计者视角：SymUse 是 LSP 的“考勤打卡条”——每个标识符出现记一笔，IsDef
 // 区分定义与使用，Entry/Member 区分类型名与成员。障碍是值/类型双命名空间：
@@ -329,12 +276,7 @@ type SymUse struct {
 	Member *MemberRef
 }
 
-// MemberRef identifies one member occurrence of a nominal owner
-// (class, interface, or enum). Owner compares by pointer within one
-// index run; rename-safe since renaming never replaces the entry.
-// StructOwner covers anonymous object literals: the root variable holding
-// the literal (same-variable direct flows only; aliases untracked).
-// Exactly one of Owner/StructOwner is set.
+// MemberRef 记一次成员露面：名义成员认 Owner 指针（如 `d.name`），匿名表字面量认 StructOwner 根变量；两者恰其一。
 //
 // 设计者视角：MemberRef 是成员的“房产证”——名义成员（类/接口/枚举）认 Owner
 // 指针（Entry 身份），匿名表字面量认 StructOwner（根变量）。障碍是索引器解出的
@@ -350,7 +292,7 @@ type MemberRef struct {
 	StructOwner *Symbol
 }
 
-// ScopeSpan pairs a live scope with the block span that owns it.
+// ScopeSpan 把一层 Scope 钉到拥有它的块 Span 上，供补全按偏移找最深层。
 //
 // 设计者视角：ScopeSpan 是作用域的“户型图钉”——Sc 记符号表，Span 记其语块
 // 范围，供 ScopeAt 按字节偏移找最深层（补全/悬停先定位层）。障碍是块与层
@@ -363,8 +305,7 @@ type ScopeSpan struct {
 	Span token.Span
 }
 
-// SymIndex is the checker's position database for language servers.
-// Recording is best-effort and never affects diagnostics.
+// SymIndex 是给 LSP 的只读副本库：best-effort 记录，永不影响诊断（如开补全不改报错）。
 //
 // 设计者视角：SymIndex 是给 LSP 的“只读副本库”——Uses 记每次打卡，Scopes 记
 // 每层范围。障碍是检查与语言服务抢状态：若记录影响诊断，一次补全会改下次报错。
@@ -376,7 +317,7 @@ type SymIndex struct {
 	Scopes []ScopeSpan
 }
 
-// symRoot follows SameAs links to the definition symbol.
+// symRoot 顺 SameAs 链一路找到定义点（如三次窄化影子回同一 `local x`）。
 //
 // 设计者视角：symRoot 是影子链的“寻根绳”——窄化/重定义产生的影子 Symbol 经
 // SameAs 一路回溯到定义点，引用与重命名才不散。障碍是链可能多跳（多次窄化
@@ -395,9 +336,7 @@ type gotoRef struct {
 	span token.Span
 }
 
-// New creates a checker with the given options and empty state. Callers
-// drive it through CheckFile/CheckFileIndexed/CheckFileModule (or
-// BuildAmbient for declaration files).
+// New 只装 Options 发白纸：栈全空，创后须走 CheckFile* 驱动（声明文件走 BuildAmbient）。
 //
 // 设计者视角：New 只做“发白纸”——装 Options，其余栈全空，scopes/diags 由各
 // 驱动入口自建（checkFileModule/BuildAmbient）。障碍是 Ambient 复用：若在此
@@ -408,7 +347,7 @@ func New(opt Options) *Checker {
 	return &Checker{opt: opt}
 }
 
-// Diags returns the diagnostics accumulated during checking (in source order).
+// Diags 按源序交出整改单（含宏展开前置诊断在前）。
 //
 // 设计者视角：Diags 是“整改单出窗口”——检查中 errorf 按遍历序追加，此处原样
 // 交出。障碍是宏展开前置也会产诊断（见 expand.ExpandFile），必须先于检查诊断
@@ -424,8 +363,7 @@ func (c *Checker) cur() *Scope { return c.scopes[len(c.scopes)-1] }
 func (c *Checker) push()       { c.scopes = append(c.scopes, newScope(c.cur())) }
 func (c *Checker) pop()        { c.scopes = c.scopes[:len(c.scopes)-1] }
 
-// bindVar installs a binding, linking redefinitions so reference queries
-// (references/rename) unify the whole chain. Builtin shadows stay detached.
+// bindVar 落户口：同层重定义经 SameAs 链起旧户（如 `local print = print` 的内置旧户不断链防污染全局引用）。
 //
 // 设计者视角：bindVar 是值册的“落户口”——同层重定义经 SameAs 链起旧户，新户
 // 仍覆盖 vars[name] 保证查找见新。障碍是内置函数本地化（local print=...）：
@@ -441,7 +379,7 @@ func (c *Checker) bindVar(name string, sym *Symbol) *Symbol {
 	return sym
 }
 
-// CheckFile type-checks a parsed file. Returns diagnostics.
+// CheckFile 薄封装：只要诊断不要索引（如 CI 门禁），内部转调 CheckFileIndexed 再丢索引。
 //
 // 设计者视角：CheckFile 是最薄的“便民窗口”——只要诊断不要索引，内部委托
 // CheckFileIndexed 并丢掉索引。障碍是调用方误以为无索引更快：实则索引恒
@@ -453,8 +391,7 @@ func CheckFile(f *ast.File, opt Options) []diag.Diagnostic {
 	return diags
 }
 
-// CheckFileIndexed type-checks and additionally returns the position index
-// used by language servers. The index is always populated.
+// CheckFileIndexed 是 LSP 主入口：诊断与索引一次遍历双收，索引恒非空。
 //
 // 设计者视角：CheckFileIndexed 是“LSP 主入口”——诊断与索引一次遍历双收，索引
 // 恒有值（Index 在 checkFileModule 内即分配）。障碍是有人想关索引省内存：
@@ -465,9 +402,7 @@ func CheckFileIndexed(f *ast.File, opt Options) ([]diag.Diagnostic, *SymIndex) {
 	return diags, idx
 }
 
-// CheckFileModule checks like CheckFileIndexed and additionally reports
-// the module's own return type (a top-level `return M` identifier looked
-// up in the surviving top scope, else Any).
+// CheckFileModule 多交一块：顶层 `return M` 里 M 的类型（非 Ident 如 `return {}` 一律 Any）。
 //
 // 设计者视角：CheckFileModule 是跨文件的“交接单”——除诊索引外，再报模块出口
 // 类型（顶层 return M 查顶层残留层）。障碍是 return 可为任意表达式：只认
@@ -497,8 +432,7 @@ func checkFileModule(f *ast.File, opt Options) ([]diag.Diagnostic, *SymIndex, ty
 	return c.diags, c.Index, c.moduleType(f)
 }
 
-// moduleType reports the type of the file's top-level `return M`
-// identifier (looked up in the surviving top scope), else Any.
+// moduleType 只认块末 `return M` 的 Ident（如 `return M` 查残留顶层，`do return M end` 不认）。
 //
 // 设计者视角：moduleType 是模块出口的“点名册”——只在存活顶层层里找 return
 // 首表达式若为 Ident 的绑定。障碍是检查中途层已弹栈：必须用“残留顶层”（c.cur()

@@ -8,19 +8,9 @@ import (
 
 // ---------- assignment / expr statements ----------
 
-// 表达式子系统物理布局（Pratt + 后缀链）：
-//
-//	parseExprStmtOrAssign
-//	  ├── parseExpr ──► parseExprPrec(precNone+1)
-//	  │                    ├── parseUnary  (前缀 ! # ~ - await)
-//	  │                    │     └── parseSuffix
-//	  │                    │           ├── parsePrimary  (字面量/标识符/括号/表/函数)
-//	  │                    │           └── 后缀链：. [] : < () {} string  as  !  >>  (泛型试探)
-//	  │                    └── 二元循环：binPrec 查表取优先级/结合性
-//	  └── 赋值分支：多 LHS 逗号收集 + '=' + parseExprList
-//
-// 试探解析：`f<T>(args)` / `obj:m<T>(args)` 用 saveCursor + 诊断长度回退，
-// 泛型参数必须后接 '(' 才提交，否则按比较处理。
+// 表达式管线：parseExprStmtOrAssign 先吃首个 parseExpr，再看 `,`/`=` 分流赋值或调用；
+// 二元由 parseExprPrec 爬楼（binPrec 查表），一元经 parseUnary，前缀后缀在 parseSuffix 串珠。
+// 例：`f<T>(x)` 试探泛型须后接 `(` 才提交，否则按 `f<T` 比较回退（saveCursor+诊断截断零副作用）。
 
 // parseExprStmtOrAssign 解析表达式语句或赋值：先收首表达式，再按 ',' 与 '=' 分流。
 //
@@ -127,7 +117,7 @@ func (p *Parser) parseIdent() *ast.Ident {
 	return &ast.Ident{Name: t.Literal, S: t.Span}
 }
 
-// Soft keywords can be used as identifiers in value positions (e.g. `type(x)` calls builtin).
+// isSoftKw 是软关键字花名册：`type(x)` 的 type 在值位仍是名字，声明位才是关键字。
 //
 // 设计者视角：isSoftKw 是软关键字的“花名册”——词法层把 type/interface/class 等统一标成
 // 关键字 Kind，parser 按位置决定它是声明还是名字。障碍是 Lua 超集必须兼容 `type(x)`
@@ -166,8 +156,7 @@ func (p *Parser) parseIdentAllowSoft() *ast.Ident {
 	return nil
 }
 
-// isTypeDeclStart reports whether `type/interface/enum/class` at current pos starts a declaration
-// (as opposed to a value use like `type(x)`).
+// isTypeDeclStart 判 `type` 开头是声明还是调用：`type Foo=` 看后一 Token 为 Ident 即声明，`type(` 即值用。
 //
 // 设计者视角：它是声明与值的“分水岭”——同样 `type` 开头，`type Foo = ...` 是声明，
 // `type(x)` 是调用；判定只看后一个 Token 是否为 Ident（声明必有名字），`type(`/`type =`
@@ -190,7 +179,7 @@ func (p *Parser) isTypeDeclStart() bool {
 
 // ---------- expressions (Pratt) ----------
 
-// precNone 等是 Pratt 表达式的优先级阶梯（Or < And < Cmp < 位运算 < Shift < Concat < Add < Mul < Unary < Pow）。
+// precNone 等是 Pratt 楼层表：Or 最矮、Pow 最高，故 `-2^2` 判成 `-(2^2)`，`a..b..c` 右结合。
 //
 // 设计者视角：这组常量是二元运算的“楼层表”——parseExprPrec 爬楼，同层左结合逐层吃，
 // 右结合（`..` 与 `^`）不涨 minPrec 以便右递归。障碍是 Lua 的 `^` 右结合、`..` 右结合
@@ -213,7 +202,7 @@ const (
 	precPow
 )
 
-// binPrec 查二元运算符的优先级与右结合标志，非二元符回 (0,false)。
+// binPrec 是价目表：`..`/`^` 标右结合，其余左结合；回 (0,false) 即“不是二元位，循环停”。
 //
 // 设计者视角：binPrec 是 Pratt 循环的“价目表”——调用方只问“这符号几楼、电梯朝哪”，
 // 不关心符号拼写。障碍是比较符有六兄弟（< > <= >= == ~=），位运算有四档；取舍是
@@ -253,7 +242,7 @@ func binPrec(k token.Kind) (int, bool) {
 	return prec, right
 }
 
-// parseExpr 解析完整表达式（Pratt 入口，minPrec 为最低层）。
+// parseExpr 是要值的正门：全文件右值/条件/实参/表值都走此门（即 precNone+1 档）。
 //
 // 设计者视角：parseExpr 是表达式世界的“正门”——全文件凡要一个值（右值、条件、实参、
 // 表值）都走此门，门内即 parseExprPrec(precNone+1)。取舍是薄转发而非 inline，让
@@ -340,7 +329,7 @@ func (p *Parser) parseUnary() ast.Expr {
 	return p.parseSuffix()
 }
 
-// parseSuffix 解析后缀链：`.field`/`[k]`/`:m<T>()`/`f<T>()`/`()`/`as T`/`!`，是表达式最长的尾巴。
+// parseSuffix 串珠：`a.b[k]:m<T>() as T!` 一次循环串完；`f<T>(x)` 无 `(` 即按比较回退，`a!` 遇 `!=` 让路。
 //
 // 设计者视角：parseSuffix 是 Primary 后的“串珠机”——parsePrimary 造出珠头，
 // for 循环逐颗串后缀，直到当前 Token 不再像后缀即停。障碍有三：
@@ -435,7 +424,7 @@ func (p *Parser) parseSuffix() ast.Expr {
 	}
 }
 
-// parseCallArgs 解析调用实参三种形态：`(a,b)` / `{table}` / `"str"`，皆归一为 []ast.Expr。
+// parseCallArgs 收纳 Lua 糖调用：`f(a,b)`/`f{}`/`f"hi"` 皆归一为 []ast.Expr，后两者包单实参。
 //
 // 设计者视角：parseCallArgs 是 Lua 糖调用的“收纳盒”——`f{...}` 与 `f"..."` 在 Lua 里
 // 都是单实参调用，此处分别包成 TableLit/StringLit 再装片，checker 只见统一切片。

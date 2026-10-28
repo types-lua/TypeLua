@@ -10,22 +10,10 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
-// 设计者视角：类型实例化三段式——先占位（inflight shell），再填充
-//（build），最后回填壳保持指针稳定；maxTypeDepth 防止无限展开。
+// 实例化三段式：先按实参 key 查缓存， miss 则 inflight 占位（nil），建成后 fillShell 回填保指针稳。
+// 例：`type N = {next: N}` 靠壳撑住自指；`L<L<T>>` 自喂养到 64 层熔断报 TypeRecursionLimit 后返 Any（每 entry 只报一次）。
 
-// Type-entry instantiation with memoization and recursive shells.
-//
-// 设计者视角：实例化是“三段占位法”——泛型按实参键（typesKey）memo，非泛型按 cached，
-// 递归先给 inflight 壳（nil 占位→sh 共享），建成后 fillShell 回填保指针稳；
-// 自喂养展开（L<L<T>>）靠 maxTypeDepth（64）+depthReported（每 entry 单报）截流。
-// 障碍是互递归与无限展：前者壳解，后者深截。图：
-//
-//	查缓存?中 → inflight?壳 → 占位nil → build → fillShell回填 → 入缓存
-//
-// 取舍：键为 String 拼（可读），深截放行 Any。排查现场：递归悬空先查壳回填，
-// 无限展先查 typeDepth 计数。
-
-// maxTypeDepth caps generic instantiation nesting (see typeDepth).
+// maxTypeDepth=64 是自喂养展开的熔断丝（如 `L<L<…>>` 叠到 65 层即拦）。
 //
 // 设计者视角：maxTypeDepth=64 是自喂养展开的“熔断丝”——正常嵌套远不及此，
 // `L<L<T>>` 式无限长键到此即熔（报 TypeRecursionLimit 后返 Any）。与 inflight
@@ -33,7 +21,7 @@ import (
 // 排查现场：深嵌误熔先查是否自喂养键膨胀。
 const maxTypeDepth = 64
 
-// resolveTypeEntryWithArgs instantiates an entry (enum/class/alias/interface) with memo and shells.
+// resolveTypeEntryWithArgs 按实参实例化 enum/class/alias/interface（如 `Box<Cat>` 走泛型壳，`Box` 无参走定义态）。
 //
 // 设计者视角：见上三段法——enum（无参，resolving 防环，一次 buildEnum 缓存）、
 // class（定义态 once，placeholders 保留，调点 Substitute）、泛型别名/接口（配 sub、
@@ -173,10 +161,7 @@ func (c *Checker) resolveTypeEntryWithArgs(e *typeEntry, args []types.Type, useS
 	return res
 }
 
-// fillShell completes a recursive build: if a cycle created a shell for key
-// during the build, the finished object is copied into it (preserving the
-// shared pointer) and the shell is returned. Direct self-aliases
-// (`type A = A`) and non-object results keep the TL3106 error.
+// fillShell 是递归的交房：建中若有人领了壳（如 `type N={next:N}` 的 N），把成品字段拷入壳并返壳；`type A=A` 报 TL3106。
 //
 // 设计者视角：fillShell 是壳的“交房”——建中若有人领了壳（inflight[key]=sh），
 // 建成即把成品字段/索引器拷入壳并返壳（指针稳，递归引用不断）；无壳即返成品。
@@ -206,7 +191,7 @@ func (c *Checker) fillShell(e *typeEntry, key string, res types.Type, useSpan to
 	return sh
 }
 
-// typesKey builds a memo key from instantiation args (String join).
+// typesKey 把实参 String 以 `|` 拼成货号（如 `Box<Cat>` 的 key 即 `Cat`），跨实例同构共享。
 //
 // 设计者视角：typesKey 是实例缓存的“货号”——实参 String 以 `|` 拼。障碍是 `|` 碰
 // 撞（类型名含 `|` 极罕）：可读优先于完美。候选：指针拼 vs 文本拼；选文本（跨实例
@@ -219,7 +204,7 @@ func typesKey(args []types.Type) string {
 	return strings.Join(ps, "|")
 }
 
-// buildInterface builds an object from an interface decl (extends merge plus fields).
+// buildInterface 把 `interface I extends Base {x: integer}` 合成 Object：先并入 Base 字段再逐字段查重。
 //
 // 设计者视角：buildInterface 是接口的“合板”——先合 extends 基（Object 字段+索引器
 // 并入，any 跳，非对象报 InterfaceExtendsNonObject），再逐字段解（方法简写已为
@@ -254,7 +239,7 @@ func (c *Checker) buildInterface(n *ast.InterfaceDecl, sub map[string]types.Type
 	return obj
 }
 
-// buildEnum builds an enum type with literal members and duplicate checks.
+// buildEnum 把 `enum Color {Red, Green=5}` 铸成字面量集合：无值自增（Red=0），值串判重，底类型取并。
 //
 // 设计者视角：buildEnum 是枚举的“铸币”——无值即自增整数（ mixed 串后禁自增），
 // 串/数/布/负数字面各铸（数字 `.eEpP` 辨浮整），值串判重（DuplicateEnumValue），

@@ -8,24 +8,12 @@ import (
 	"github.com/typelua/typelua/internal/sourcemap"
 )
 
-// 发射器核心状态、文件驱动与带 source map 的块输出。
+// 发射器核心：文件驱动、块输出带 source map（语句粒度、rune 列）。
 
-// Options 是发射选项。
+// Options 是方言旋钮：Target 定 5.4/5.1，TreeShake 撕零引用纯局部函数。
 //
-// 设计者视角：Options 是发射器的“方言旋钮盘”，好比印刷机的纸张档——Target
-// 决定吐 5.4 还是 5.1 方言（见 EmitFileWithMap 的 <const>/<close> 剥离），
-// TreeShake 决定是否先请 shake 把零引用纯局部函数撕掉。障碍是并发检测与
-// 死代码的竞速：若先判 NeedsConcurrency 再 shake，死代码里的 await 会误触
-// 调度器前导；故顺序铁律为 shake→检测→发射。候选：把方言判断散落各处 vs
-// 集中在 Options；选集中，stmt.go 只查 opt.Target。不变量：Options 只读，
-// 发射中途不改。排查现场：5.1 产物出现 <const> 先查 Target 是否透传，调度器
-// 前导无故出现先查 TreeShake 是否误关。
-//
-// 物理布局：
-//
-//	Options
-//	├── Target     string // "5.4" (默认) 或 "5.1"
-//	└── TreeShake  bool   // 是否删除零引用纯局部函数
+// 设计者视角：序铁律 shake→检测→发射——如死代码 `local f=function() await g() end` 未先撕，
+// 即误触 `__tl_run` 前导；5.1 产物冒 `<const>` 先查 Target 是否透传。Options 只读，stmt.go 只查 Target。
 type Options struct {
 	// Target 为 "5.4"（默认）或 "5.1"；5.1 下剥离 `<const>`/`<close>`。
 	Target string
@@ -35,7 +23,7 @@ type Options struct {
 	TreeShake bool
 }
 
-// DefaultOptions 返回默认发射选项：目标 Lua 5.4，不做 tree-shaking。
+// DefaultOptions 是出厂刻度：Lua 5.4 全开、零删除（删函数会让 source map 断线，故默认 false）。
 //
 // 设计者视角：DefaultOptions 是“出厂刻度”——5.4 能力全开、零删除，保证初次
 // 体验与手写 Lua 一致。障碍是激进默认（默认 shake）会吓到调试者：删掉的函数
@@ -44,7 +32,7 @@ type Options struct {
 // TreeShake 是否被置 true。
 func DefaultOptions() Options { return Options{Target: "5.4"} }
 
-// EmitFile 把已解析文件渲染为 Lua 源码（类型擦除）。
+// EmitFile 是快捷窗口：`local x: integer = 1` 擦成 `local x = 1`，不要映射时走此门（恒收集、按需编码）。
 //
 // 设计者视角：EmitFile 是“快捷窗口”——不要映射时走此门，内部委托
 // EmitFileWithMap 并丢掉映射，开销近似为零（映射本就顺手收集）。障碍是有人
@@ -56,24 +44,9 @@ func EmitFile(f *ast.File, opt Options) string {
 	return out
 }
 
-// EmitFileWithMap 渲染 Lua 源码及 source-map 条目（语句粒度、rune 列）。
-// 条目始终收集；仅当调用方需要映射时才编码（开销近似为零）。
-// 使用协作并发（spawn/await/select/通道）的文件获得调度器前导与
-// `__tl_run(function() ... end)` 代码块包装（可重入，故被 require 的
-// 模块继承调用方的任务）。
-//
-// 设计者视角：EmitFileWithMap 是发射器的“总装线”，三段工序不可调序：
-// shake（可选去死代码）→ NeedsConcurrency 探针 → 分叉发射。障碍一是并发包装
-// 与 return 的打架：chunk 顶层 `return M` 必须变成 `return __tl_run(...)`
-// 而非丢返回值，故 hasRet 分两路拼串；障碍二是空指针：f/Block 可为 nil，
-// pushDeferFrame/emitBlock 均须 nil 宽容。候选：并发包装另起文件 vs 行内
-// if；选行内，保持单遍。图：
-//
-//	AST → [shake?] → 并发? → 前导+__tl_run 包裹 / 裸块 → buf+mappings
-//
-// 不变量：输出恒以换行结尾（无则补）；mappings 的 Gen 行列与 buf 同步推进
-// （见 write）。排查现场：并发文件缺前导先查 NeedsConcurrency 是否漏报，
-// return 丢失先查 hasRet 分支，行号漂移先查 line/col 是否被绕过 write 篡改。
+// EmitFileWithMap 是总装线：[shake?]→并发探针→分叉发射，含 `spawn/await` 的文件包 `__tl_run` 前导。
+// 例：顶层 `return M` 包成 `return __tl_run(function() … end)` 不丢返回值；f/Block 可为 nil 须宽容。
+// 排查：缺前导查 NeedsConcurrency 漏报，丢 return 查 hasRet 分支，行号漂看 write 行列账本。
 func EmitFileWithMap(f *ast.File, opt Options) (string, []sourcemap.Mapping) {
 	if opt.TreeShake && f != nil {
 		shake.ShakeFile(f)

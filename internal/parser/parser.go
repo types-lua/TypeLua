@@ -7,33 +7,11 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Parser 是递归下降 + Pratt 表达式的语法分析器，带错误恢复。
-//
-// 物理布局（游标与缓冲）：
-//
-//	Parser
-//	├── toks: []token.Token    // 词法产出的 Token 流，只读，从不原地修改
-//	├── pos: int               // toks 的读取游标
-//	├── pending: []token.Token // consumeGt 拆分 >> / >= 产生的待消费队列
-//	├── file: string           // 源文件名（诊断地址）
-//	├── diags: []diag.Diagnostic // 累积诊断，单错不掩盖后文
-//	├── extendsDepth: int      // >0 表示正在解析 extends 子句（infer 用）
-//	├── inMacroBody: int       // >0 表示正在解析宏体
-//	└── depth: int             // 当前嵌套深度，超限触发 depthBailout
-//
-// 游标推进规则：cur() 先看 pending，再看 toks[pos]；next() 同样优先 pending。
-// consumeGt 拆分时把余下部分追加到 pending，绝不改 toks，保证试探解析
-// 可通过 saveCursor/restoreCursor 零副作用回退。
-//
-// 为什么把 pos 与 pending 分开：>> 与 >= 在泛型里必须拆成两个 '>'/'='，
-// 若原地改 toks 会破坏试探解析的快照恢复；pending 队列让拆分可撤销。
-//
-// 设计者视角：Parser 好比流水线上的装配工，toks 是只读料架（lexer 供料，永不返工），
-// pos 是手的位置，pending 是手心临时多拿的零件（consumeGt 拆出的 '>'/'='）。
-// 障碍是泛型与比较共用 '<'/'>'：`F<A>=v` 在词法层是一个 Ge Token，语义层却要
-// 拆成 '>' + '='；若原地改料架，试探失败就拼不回去。取舍是 pending 优先、料架兜底，
-// 让 saveCursor/restoreCursor 只需复制小队列即零副作用。不变量：toks 只增游标不改内容。
-// 排查现场：若泛型解析后游标错一位，先看 pending 是否在 restore 时被别名复用（必须复制）。
+// Parser 是递归下降 + Pratt 装配工：toks 只读料架（lexer 供料），pos 是手位，pending 是手心多拿的拆分件。
+// 例：`F<A>=v` 在词法层是一个 Ge，语义层须拆成 `>`+`=`；若原地改 toks，试探失败拼不回去。
+// 故 consumeGt 只往 pending 追加，cur()/next() 优先 pending，saveCursor/restoreCursor 复制小队列即零副作用回退。
+// 另有 extendsDepth（infer 用）、inMacroBody（宏体）、depth（超 256 层熔断，见 depthBailout）。
+// 排查：泛型后游标错一位，先查 restore 是否复用了 pending 别名；`a>=v` 误拆先查 consumeGt 分流。
 type Parser struct {
 	toks         []token.Token
 	pos          int
@@ -45,8 +23,7 @@ type Parser struct {
 	depth        int // current nesting depth (blocks, primaries, primary types)
 }
 
-// maxParseDepth 限制嵌套深度，防止对抗输入（如 10 万层括号）耗尽 goroutine 栈。
-// 超限只报一次 TL2015 并产出空 AST，避免恢复产物洪水。
+// maxParseDepth=256 是递归下降的安全绳：正常嵌套不过十几层，10 万层括号的恶意输入到此熔断，只报一次 TL2015。
 //
 // 设计者视角：这好比给递归下降系上安全绳——正常代码嵌套不过十几层，
 // 256 是“慷慨又安全”的阈值（栈帧小，256 层远未到危险线；恶意输入却动辄上万层）。
@@ -83,11 +60,7 @@ func (p *Parser) enterDepth(sp token.Span) bool {
 // grep `enterDepth` 看 defer 是否成对。
 func (p *Parser) leaveDepth() { p.depth-- }
 
-// ParseFile 对 src 做词法+语法分析，返回 AST 与诊断。
-//
-// 契约：对任意输入不 panic（深度超限转为诊断）；返回节点 Span 单调可定位；
-// 诊断包含词法阶段的 ldiags 与语法阶段的 diags，顺序为产生顺序。
-// 入口先 Lex，再 parseFileBlock；depthBailout 在此被捕获并转为空块。
+// ParseFile 是总闸：Lex 切 Token（含 shebang 跳过）→ parseFileBlock 装 AST，任意字节不 panic，空文件也给 EOF 坐标。
 //
 // 设计者视角：ParseFile 是全流水线的“总闸”——它是唯一对外承诺“任意字节都不 panic”
 // 的入口，lexer 先把源码切成 Token（词法错先收进 ldiags），再由 Parser 装配 AST。
@@ -108,8 +81,7 @@ func ParseFile(filename, src string) (*ast.File, []diag.Diagnostic) {
 	return &ast.File{Name: filename, Block: block, EOF: eofSpan}, p.diags
 }
 
-// depthBailout 用于深度超限的 panic 中转：文件病态嵌套时，一个 TL2015
-// 加空 AST 胜过恢复产物洪水。
+// depthBailout 是专用烟雾弹：空 struct 零分配，recover 见非本类型必重抛，防吞业务 panic。
 //
 // 设计者视角：它是一枚专用“烟雾弹”——空 struct 零分配，只为与用户代码的意外
 // panic 相区分（recover 见到非 depthBailout 必重抛，绝不吞业务 panic）。
@@ -118,7 +90,7 @@ func ParseFile(filename, src string) (*ast.File, []diag.Diagnostic) {
 // 诊断里。排查现场：若 recover 后仍 panic，先确认抛的是否是本类型。
 type depthBailout struct{}
 
-// parseFileBlock 解析顶层块，把深度超限转为空块余量。
+// parseFileBlock 是防爆舱：正常直通 parseBlock，超深则兜出空 Block 保 *ast.File 非空。
 //
 // 设计者视角：它是 ParseFile 的“防爆舱”——正常时直通 parseBlock，爆炸（depthBailout）
 // 时兜出一个带文件名的空 Block，保证 *ast.File 结构完整、Span 可定位。障碍是
