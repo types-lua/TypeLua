@@ -6,25 +6,12 @@ import (
 
 // 设计者视角：构造器分析 walker 显式跳过嵌套函数/类体，只统计构造期
 // 直接执行的代码，避免把闭包内的 self 误算。
-
-// AST walkers for constructor analysis (super/self) and infer names.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// 设计者视角：walker 是构造器分析的“三探针”——super 存在（blockHas/stmtHas/exprHas）、
+// 设计者视角：walker 是构造器分析的“三探针”——super 存在详见实现，排查看 Span。
 // self 赋值/使用（collectSelfAssigns/stmtUsesSelf 系）、infer 名收集。每系皆跳过
 // 嵌套函数/类体（闭包内代码非构造期直行，误算会把回调内 self 当初始化）。障碍是
-// 新语句形易漏分支：漏即分析缺（super 漏报/字段误报）。取舍：手写递归（显式跳
-// FuncLit）。图：
-//
-//	Block → Stmt → Expr 三层透视，遇 FuncLit 即止
-//
-// 排查现场：super 在回调内被算先查是否忘止嵌套。
-
-// ---------- class constructor analysis walkers ----------
-// 这些跳过嵌套函数/类体：只有构造过程中实际运行的代码才计入覆盖与
-// super() 位置。
-
-// isSuperCall reports a bare `super(...)` call (constructor ignition shape).
-//
+// …（略，详见实现；排查先看 Span/诊断）
 // 设计者视角：isSuperCall 只认裸 Ident `super` 的 Call（`super:method` 另属方法系）。
 // 形认（快），义（是否派生构造内）由调用方判。排查现场：super:method 误入此处先查
 // Call vs MethodCall 分流。
@@ -37,7 +24,7 @@ func isSuperCall(e ast.Expr) bool {
 	return ok && id.Name == "super"
 }
 
-// blockHasSuperCall reports any super call in a block (deep, nesting-aware).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：blockHasSuperCall 是存在性“地毯搜”——语句+返回双覆，嵌套函数内止步
 // （exprHas 遇 FuncLit 不入）。派生构造必须调 super 的存在判据即此。排查现场：
@@ -62,7 +49,7 @@ func blockHasSuperCall(b *ast.Block) bool {
 }
 
 // topLevelSuperIndex finds a direct `super(...)` statement in a constructor
-// body for self-before-super ordering. -1 when nested only.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：topLevelSuperIndex 只看顶层语句的裸 `super(...)`（ExprStmt 直子），
 // 嵌套（if/do 内）不算——self-before-super 只管顶层序（嵌套内 self 另难精判）。
@@ -80,9 +67,9 @@ func topLevelSuperIndex(b *ast.Block) int {
 	return -1
 }
 
-// stmtHasSuperCall reports super in one statement (deep, function-nesting stops).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// 设计者视角：语句级分流—— control 块透视（if/while/for/do），赋值/局部验值，
+// 设计者视角：语句级分流—— control 块透视详见实现，排查看 Span。
 // 余者假（return/goto/label 不含）。FuncLit 由 exprHas 止。排查现场：新语句形漏
 // super 先补此分支。
 func stmtHasSuperCall(st ast.Stmt) bool {
@@ -138,7 +125,7 @@ func stmtHasSuperCall(st ast.Stmt) bool {
 	return false
 }
 
-// exprHasSuperCall reports super in one expression (FuncLit stops recursion).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：表达式级透视——调用/方法/二目/表/ cast/await 递归，字面/变量止，
 // FuncLit 恒止（闭包非构造期）。与 stmtUsesSelf 系对偶（彼查 self，此查 super）。
@@ -311,7 +298,7 @@ func stmtUsesSelf(st ast.Stmt) bool {
 	return false
 }
 
-// blockUsesSelf reports textual self use in a block (returns included).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：块级 self 存在判——语句逐个，返回亦验。供 stmtUsesSelf 的块透视。
 // 排查现场同上。
@@ -334,7 +321,7 @@ func blockUsesSelf(b *ast.Block) bool {
 	return false
 }
 
-// exprUsesSelf reports textual self use in an expression (FuncLit stops).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：表达式级 self 嗅探——Ident `self` 即中，余递归，FuncLit 止。
 // 排查现场：回调内 self 被算/不算皆由此止步位定。
@@ -392,7 +379,7 @@ func exprUsesSelf(e ast.Expr) bool {
 }
 
 // collectInferNames gathers `infer U` names in an extends clause.
-// Nested conditionals bind their own scope and are not descended into.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：collectInferNames 收真支待绑的 infer 名——union/交叉/数组/可选/括号/
 // 元组/表/函数/具名参/ keyof/映射值/索引双端递归，嵌套条件止（自有域）。映射只收
@@ -454,14 +441,14 @@ func collectInferNames(n ast.TypeNode, into map[string]bool) map[string]bool {
 	case *ast.KeyofType:
 		collectInferNames(t.Elem, into)
 	case *ast.MappedType:
-		// Value-position infers bind in the true branch; constraint
-		// infers would have nothing to bind against, skip them.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 推断，排查先看 Span/诊断。
 		collectInferNames(t.Value, into)
 	case *ast.IndexedAccessType:
 		collectInferNames(t.Obj, into)
 		collectInferNames(t.Index, into)
 	case *ast.ConditionalType:
-		// Own scope; skip.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	}
 	return into
 }

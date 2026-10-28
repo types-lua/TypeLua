@@ -48,12 +48,8 @@ func (p *Parser) parseFuncBody(isMethod bool) *ast.FuncLit {
 	return &ast.FuncLit{Params: params, HasVarArg: hasVA, VarArgName: vaName, VarArgType: vaTy, ReturnType: retTy, Body: body, IsMethod: isMethod, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
-// parseFuncBlock parses one function body in either shape: a brace block
-// `{ ... }` (no `end`, pure sugar) or a classic block closed by `end`.
-// 两种形态的 AST 完全相同，因此检查、发射与工具链只看到规范形式。
-//
-// 设计者视角：parseFuncBlock 是函数体的“双开门”——`{...}` 糖门与 `...end` 木门通向
-// 同一客厅（*ast.Block），checker/emitter 只认客厅不认门。障碍是恢复语义不同：
+// parseFuncBlock 是函数体双开门：`{…}` 糖门与 `…end` 木门通同一客厅如 `{…}`/`…end`，排查看 Span。
+// 同一客厅详见实现，排查看 Span。
 // 糖体错了同步到 `}`，经典体错了同步到 `end`；本函数把分叉收敛在入口，parseBlock
 // 复用同一套循环，synchronize 的 RBrace/End 双哨兵恰好各保一门。取舍：AST 不留
 // 痕（无 IsBrace 标记），换工具链零分支；代价是格式化回写无法还原原门。
@@ -116,7 +112,7 @@ func (p *Parser) parseParams() ([]*ast.Param, bool, *ast.Ident, ast.TypeNode) {
 			break
 		}
 		p.next()
-		// Trailing `, ...` allowed.
+		// 尾逗号后 `, …` 亦容，如 `f(a, …)`。
 		if p.at(token.DotDotDot) {
 			continue
 		}

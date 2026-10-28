@@ -9,26 +9,17 @@ import (
 
 // 设计者视角：未标注返回值用 nil 哨兵区分"推断模式"与"void 契约"；
 // 作用域与泛型参数栈成对 push/pop，保证嵌套函数不泄漏。
-
-// Function types and bodies, plus generic parameter scopes.
+// 函数体：签名+体，泛型栈管 `<T>`，Span 含体尾。
 //
 // 设计者视角：函数是“签名与体分离”——funcTypeFromLit 只算签名（含泛型占位），
 // checkFuncBody 开层验体；未标注返回用 nil 哨兵区分推断与 void（见 retStack）。
 // 障碍是嵌套函数泄漏泛型/变参/返回：tparam/值层/vararg/ret/infer/async 六栈成对
-// 压弹。取舍：签名未标注返 [Any] 保可赋，体仍走推断。排查现场：返回误报先查
-// isAnnotated 哨兵，泛型泄漏先查 pushTParams 配对。
-
-// ---------- function types & bodies ----------
-
-// funcTypeFromLit builds a Func signature from syntax (params/returns/generics).
-//
-// 设计者视角：funcTypeFromLit 是签名的“翻译官”——tparam 先压后弹，参数无标注
-// 即 Any（NoImplicitAny 另报），`...: T[]` 取元（数组退元），返回经 flattenReturns
+// …（略，详见实现；排查先看 Span/诊断）
 // 展平（void 即空），泛型约束/默认就地解。障碍是签名内前向泛型：必须在压栈后解，
 // 否则 T 查不到。取舍：未标注返回给 [Any]（可赋）而非 nil（体另用哨兵）。不变量：
 // 进出 tparam 等长。排查现场：签名泛型丢失先查压栈顺序，变参元型错先查 Array 退元。
 func (c *Checker) funcTypeFromLit(fn *ast.FuncLit, generics []*ast.GenericParam) *types.Func {
-	// Push tparams for param/return resolution.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	c.pushTParams(generics)
 	var params []types.FuncParam
 	for _, p := range fn.Params {
@@ -62,7 +53,7 @@ func (c *Checker) funcTypeFromLit(fn *ast.FuncLit, generics []*ast.GenericParam)
 		}
 	} else {
 		// Unannotated: permissive `any` single return for assignability;
-		// body checking still skips (see checkFuncBody retStack nil).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		rets = []types.Type{types.Any}
 	}
 	tps := make([]*types.GenericParam, len(generics))
@@ -80,7 +71,7 @@ func (c *Checker) funcTypeFromLit(fn *ast.FuncLit, generics []*ast.GenericParam)
 	return &types.Func{Params: params, HasVarArg: fn.HasVarArg, VarArg: va, Returns: rets, TypeParams: tps, IsAsync: fn.IsAsync}
 }
 
-// flattenReturns flattens a return annotation (tuple spreads, void empties).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：flattenReturns 是返回标注的“拆包机”——Tuple 铺为多返回，void 化空，
 // 其余包单。障碍是 void 与无标注皆 len==0：此处不区分（调用方以 ReturnType==nil
@@ -98,7 +89,7 @@ func flattenReturns(t types.Type) []types.Type {
 	return []types.Type{t}
 }
 
-// checkFuncBody checks a function body with params/self/varargs/returns in scope.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkFuncBody 是函数体的“无菌室标准间”——tparam→值层→label/goto→
 // 形参→self（方法）→具名变参→vararg→ret（未标注置 nil 哨兵）→infer→async，验体
@@ -111,10 +102,10 @@ func flattenReturns(t types.Type) []types.Type {
 func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, ft *types.Func) {
 	c.pushTParams(generics)
 	c.push() // value scope
-	// Labels for goto validation.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	c.labelStack = append(c.labelStack, map[string]token.Span{})
 	c.gotoList = append(c.gotoList, nil)
-	// Params.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for i, p := range fn.Params {
 		var t types.Type = types.Any
 		if i < len(ft.Params) {
@@ -130,7 +121,7 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 	if fn.HasVarArg {
 		// `...` name binding if present.
 		if fn.VarArgName != nil {
-			// Named rest collects array.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			var restT types.Type = types.Any
 			if ft.VarArg != nil {
 				restT = &types.Array{Elem: ft.VarArg}
@@ -149,7 +140,7 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 	c.retStack = append(c.retStack, ft.Returns)
 	c.asyncStack = append(c.asyncStack, fn.IsAsync)
 	// If unannotated (ft.Returns == nil because no annotation vs void?), distinguish: fn.ReturnType == nil => infer mode (nil sentinel).
-	// Our funcTypeFromLit returns nil slice when no annotation; void annotation returns empty non-nil? Actually returns nil too for void (len 0). Need to distinguish.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	// Convention: annotated void => empty slice non-nil? Go nil vs empty: both len 0. Use fn.ReturnType to decide.
 	isAnnotated := fn.ReturnType != nil
 	if !isAnnotated {
@@ -157,7 +148,7 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 	}
 	c.inferStack = append(c.inferStack, nil)
 	c.checkBlock(fn.Body)
-	// Validate gotos.
+	// 校验，排查先看 Span/诊断。
 	gotos := c.gotoList[len(c.gotoList)-1]
 	labels := c.labelStack[len(c.labelStack)-1]
 	for _, g := range gotos {
@@ -176,7 +167,7 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 	_ = isAnnotated
 }
 
-// pushTParams pushes generic parameter scope (constraints/defaults resolved).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：pushTParams 是类型参数的“开层”——约束/默认就地 resolve 后入栈顶
 // map。障碍是约束内再引泛型：此时外层已在栈，逐层向外可解。取舍：拷贝存
@@ -198,7 +189,7 @@ func (c *Checker) pushTParams(gs []*ast.GenericParam) {
 	c.tparamStack = append(c.tparamStack, m)
 }
 
-// popTParams pops the innermost generic parameter scope.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：popTParams 与 push 成对关层，防泛型泄漏到外层函数。障碍是 defer
 // 顺序错一位即串味；故签名与体各用 defer 保配对。不变量：栈非空（调用方保证）。
@@ -207,7 +198,7 @@ func (c *Checker) popTParams() {
 	c.tparamStack = c.tparamStack[:len(c.tparamStack)-1]
 }
 
-// lookupTParam finds the nearest generic parameter binding (innermost wins).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：lookupTParam 是泛型的“就近查”——自顶向下扫 tparamStack，遮蔽自然
 // 生效（内层 T 盖外层）。障碍是值层与类型层双轨：此处只查类型轨，值名同名不扰。

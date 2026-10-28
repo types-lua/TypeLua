@@ -4,13 +4,10 @@ import (
 	"strings"
 )
 
-// Abbrev limits bracket nesting and total length of a type string for
-// human-facing messages (ultra-deep types otherwise flood diagnostics).
-// Structure outside the budget is preserved; cut content becomes "...".
 // 仅双引号会暂停括号计数：消息用单引号包裹类型，因此不得隐藏嵌套
 // （散文中的撇号同理无害）。
-// Normal messages (nesting well under the budget) pass through byte
-// identical, so message-matching tests are unaffected.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：诊断消息里类型字符串可能深达数千层（泛型实例化链），直接打印
 // 会把报错与日志冲垮。候选方案有三：截断整体字符串、限制递归深度、按括号
@@ -24,7 +21,7 @@ func Abbrev(s string) string {
 	const maxLen = 1500
 	var sb strings.Builder
 	depth := 0
-	// skipTo[i] is the depth to return to before resuming output.
+	// Abbrev如 `f(1)`，排查看 Span。
 	skipping := false
 	skipDepth := 0
 	inStr := byte(0)
@@ -57,12 +54,12 @@ func Abbrev(s string) string {
 				sb.WriteString("...")
 				skipping = true
 				skipDepth = depth - 1
-				// Swallow the opener itself.
+				// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				continue
 			}
 		case '}', ']', ')':
 			if skipping && depth-1 == skipDepth {
-				// Closed back to the cut level: resume after it.
+				// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				depth--
 				skipping = false
 				continue

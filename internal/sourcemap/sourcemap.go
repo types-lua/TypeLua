@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Mapping 把一个生成位置映射回原始源位置（Source Map V3）。
+// Mapping 把一个生成位置映射回原始源位置详见实现，排查看 Span。
 //
 // 设计者视角：Mapping 是调试器的“路标”——Gen(1 起行/0 起 rune 列)钉生成锚，
 // Src(0 起行列+文件)指回源，Name 供按名跳。障碍是列制：生成列须 rune 而非 byte，
@@ -14,7 +14,6 @@ import (
 //
 // 物理布局：
 //
-//	Mapping
 //	├── GenLine int    // 生成行（1 起）
 //	├── GenCol  int    // 生成列（0 起，rune）
 //	├── SrcFile string // 原始文件

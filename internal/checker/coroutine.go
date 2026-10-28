@@ -8,21 +8,12 @@ import (
 
 // 设计者视角：coroutine 模块按 Target 裁剪 5.4-only API；running 的第二
 // 返回值在 5.1 为 nil，用联合类型表达版本差异。
-
-// Precise coroutine module (single-threaded cooperative multitasking).
+// coroutine 双轨精确件：5.4 独有 close，running 次值或 nil。
 // Shapes cover 5.1 and 5.4: `close` and `isyieldable` exist only on 5.4+
 // (absent under `--target 5.1`, so uses error as unknown fields), and
 // `running` reports its second value as `boolean | nil` (nil on 5.1).
 //
-// 设计者视角：coroutine 是“版本双轨”的精确模块——5.1/5.4 差异只在 close/
-// isyieldable 有无与 running 第二值是否为 nil。障碍是条件 require 永不误报：
-// 类型恒可用（见 ffi 注释同理），缺失 API 靠“无字段即报错”自然表达版本门禁。
-// 候选：两套表 vs 一套+条件；选一套+条件，复用同一 Object 构造。status 用字面量
-// 并集以便窄化（== "dead" 可收窄）。取舍：resume/yield 取宽松 any（协程传值动态）。
-// 不变量：Target=="5.1" 时无 close/isyieldable。排查现场：5.1 下 close 未报先查
-// Target 是否透传至此。
-
-// fnField wraps a Func as an Object field (coroutine/ffi table builder).
+// …（略，详见实现；排查先看 Span/诊断）
 //
 // 设计者视角：fnField 是表构造的“装盒器”——Func 值须包成 Field 才进 Object。
 // 薄封装省重复字面量。排查现场：方法缺失先查是否忘包此层。
@@ -30,7 +21,7 @@ func fnField(ft *types.Func) types.Field {
 	return types.Field{Type: ft}
 }
 
-// strLitUnion builds a string-literal union (e.g. coroutine status).
+// fnField 装盒见实现，排查先看 Span/诊断。
 //
 // 设计者视角：strLitUnion 把程序生命周期的四个字面拼成并集，供 =="dead" 窄化
 // （见 narrowLitOfType）。障碍是字面须带引号拼写：用 strconv.Quote 保源拼写，
@@ -44,7 +35,7 @@ func strLitUnion(lits ...string) types.Type {
 	return types.NewUnion(ms)
 }
 
-// coroutineModule builds the precise coroutine table type (target-gated).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：coroutineModule 是上段双轨的“装配线”——按 Target 决定是否装
 // close/isyieldable，其余字段恒装。create/resume/yield/wrap 取宽松（动态传值），
@@ -56,45 +47,45 @@ func (c *Checker) coroutineModule() types.Type {
 	anyT := types.Any
 	anyFunc := &types.Func{HasVarArg: true, VarArg: anyT, Returns: []types.Type{anyT}}
 	fields := map[string]types.Field{}
-	// create(f): thread. Any function shape accepted (narrowed on use).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	fields["create"] = fnField(&types.Func{
 		Params:  []types.FuncParam{{Name: "f", Type: anyFunc}},
 		Returns: []types.Type{types.Thread},
 	})
-	// resume(co, ...): (boolean, any). Extra yielded values past
-	// position 2 read as nil (same truncation class as pcall).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	fields["resume"] = fnField(&types.Func{
 		Params:    []types.FuncParam{{Name: "co", Type: types.Thread}},
 		HasVarArg: true,
 		VarArg:    anyT,
 		Returns:   []types.Type{types.Boolean, anyT},
 	})
-	// yield(...): any (whatever the resumer passes back).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	fields["yield"] = fnField(&types.Func{
 		HasVarArg: true,
 		VarArg:    anyT,
 		Returns:   []types.Type{anyT},
 	})
-	// wrap(f): function with an equally permissive shape.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	fields["wrap"] = fnField(&types.Func{
 		Params:  []types.FuncParam{{Name: "f", Type: anyFunc}},
 		Returns: []types.Type{anyFunc},
 	})
-	// status(co): lifecycle literal union (narrows with == / ~=).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	fields["status"] = fnField(&types.Func{
 		Params:  []types.FuncParam{{Name: "co", Type: types.Thread}},
 		Returns: []types.Type{strLitUnion("running", "suspended", "normal", "dead")},
 	})
-	// running(): (thread, boolean|nil); ismain is nil on 5.1.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	fields["running"] = fnField(&types.Func{
 		Returns: []types.Type{types.Thread, types.NewUnion([]types.Type{types.Boolean, types.Nil})},
 	})
 	if c.opt.Target != "5.1" {
-		// close(co): 5.4+ only (kills a suspended coroutine).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		fields["close"] = fnField(&types.Func{
 			Params: []types.FuncParam{{Name: "co", Type: types.Thread}},
 		})
-		// isyieldable(): 5.4+ only.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		fields["isyieldable"] = fnField(&types.Func{
 			Returns: []types.Type{types.Boolean},
 		})

@@ -11,7 +11,6 @@ import (
 //
 // 物理布局：
 //
-//	GenericParam
 //	├── Name       string  // 参数名
 //	├── Constraint Type    // 上界（nil 表示无约束）
 //	└── Default    Type    // 默认类型（nil 表示无默认）
@@ -30,7 +29,7 @@ func (t *GenericParam) Kind() Kind { return KGenericParam }
 
 // String 把 GenericParam 渲染为规范文本。
 //
-// 设计者视角：打印时仅展示约束（`T extends C`），默认值不打印，避免签名冗长；
+// 设计者视角：打印时仅展示约束如 `T extends C`，排查看 Span。
 // 约束为 nil 时只打印名字。排查现场：若默认值需要诊断，检查此分支是否遗漏。
 func (t *GenericParam) String() string { return t.stringSeen(map[Type]bool{}) }
 
@@ -53,7 +52,6 @@ func (t *GenericParam) stringSeen(seen map[Type]bool) string {
 //
 // 物理布局：
 //
-//	Ref
 //	├── Name string   // 类型名
 //	└── Args []Type   // 类型实参（可空）
 type Ref struct {
@@ -91,11 +89,10 @@ func (t *Ref) stringSeen(seen map[Type]bool) string {
 // InferParam 是条件类型 `extends` 子句中的 `infer U` 占位符。
 //
 // 为什么只活在 extends：infer 的语义是“在匹配模式时捕获类型”，离开该上下文
-// 就失去绑定来源；检查器在别处见到它会报错，求值器对它保持宽容（permissive）。
+// 就失去绑定来源；检查器在别处见到它会报错，求值器对它保持宽容详见实现，排查看 Span。
 //
 // 物理布局：
 //
-//	InferParam
 //	└── Name string   // 推断出的类型参数名
 type InferParam struct {
 	Name string

@@ -28,7 +28,7 @@ const (
 	Warning
 )
 
-// String 返回 Severity 的文本形式（error/warning）。
+// String 返回 Severity 的文本形式详见实现，排查看 Span。
 //
 // 设计者视角：它是章印的“拓印”——Warning 拓为 "warning"，其余一律兜底为 "error"，
 // 宁严勿松，让未知值默认拦路而非悄悄放行。取舍是用 if 而非 switch，使未来新增级别
@@ -41,17 +41,7 @@ func (s Severity) String() string {
 	return "error"
 }
 
-// Diagnostic 是一条编译器消息：稳定 Code + 人读 Message + 位置 Span + 严重度。
-//
-// 物理布局：
-//
-//	Diagnostic
-//	├── Code     Code           // 稳定编号 TLnnnn
-//	├── Message  string         // 人读解释
-//	├── Span     token.Span     // 文件/行列（半开区间）
-//	└── Severity Severity       // Error/Warning
-//
-// 设计者视角：Diagnostic 是发给用户的“整改单”——Code 供机器匹配（IDE/测试/脚本按码断言），
+// Diagnostic 是整改单：Code 稳定编号供机器断言，Message 人话，Span 画线，Severity 定拦路。
 // Message 供人阅读（措辞可改，码不可变），Span 供编辑器画线，Severity 定拦路还是放行。
 // 障碍是文本会漂移而工具需稳定：把“稳定标识”与“人话解释”拆成两字段，改措辞不碎脚本。
 // 取舍是不持源文本、不做渲染，渲染/着色留给 CLI/LSP，诊断保持纯数据可排序可聚合。

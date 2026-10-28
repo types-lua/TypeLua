@@ -5,25 +5,7 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
-// 设计者视角：require 解析分两层——RequiredModules 静态收集路径供驱动，
-// requirePathType 在检查时查 RequireTypes 映射；ffi 特例在检查侧短路。
-
-// Cross-file require support: the driver (compiler.Program) resolves
-// dotted require paths to files, checks them in dependency order, and
-// feeds each file the module types of its requirements through
-// Options.RequireTypes. Unresolved requirements stay `any`.
-//
-// 设计者视角：跨文件是“驱动排序、检查取货”——RequiredModules 静态收路径（供驱动
-// 拓扑），requirePathType 检查时按 RequireTypes 取模块型（无货即 any），ffi
-// 短路精确模块。障碍是 require 被局部遮蔽：形似而非 builtin，此时两端皆按 any
-// （不取货不收录？收录仍收，取货放行，见 isShadowedRequire）。图：
-//
-//	收录(RequiredModules) → 驱动排序检查 → 取货(requirePathType)
-//
-// 取舍：未解一律 any（经典模式）。排查现场：跨文件取 any 先查驱动是否喂 RequireTypes。
-
-// isShadowedRequire reports whether a local shadows the require builtin.
-//
+// require 两层：RequiredModules 预收 `require("a.b")`/import 径供驱动排序，requirePathType 查 RequireTypes 映射，解不出跳过不报。
 // 设计者视角：isShadowedRequire 是取货的“防假闸”——require 名被局部占即影子，
 // 此时 require 调用走普通函数义（不取模块型）。查值册 IsBuiltin 判。排查现场：
 // 跨文件类型丢失先查是否局部误名 require。
@@ -34,10 +16,10 @@ func isShadowedRequire(c *Checker) bool {
 	return false
 }
 
-// unquoteModulePath strips one layer of Lua quotes from a require path
-// literal (best-effort; escapes are rare in module paths).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// 设计者视角：unquoteModulePath 是模块径的“脱壳”——双/单引去壳，长串不认（false）。
+// 设计者视角：unquoteModulePath 是模块径的“脱壳”——双/单引去壳，长串不认详见实现，排查看 Span。
 // 经 parseStringLiteral（转义罕见，best-effort）。失败即弃（收录/取货皆跳）。
 // 排查现场：require 路径收不上先查是否为长串或拼接（仅字面可收）。
 
@@ -57,9 +39,9 @@ func unquoteModulePath(sl *ast.StringLit) (string, bool) {
 	return name, true
 }
 
-// requirePathType resolves a require path literal through RequireTypes
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // (Any when unresolved or shadowed). `require("ffi")` is special-cased to
-// the precise LuaJIT FFI module so cross-language C-ABI bindings typecheck
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // without a cast on the require itself (callers still `as` their CLib).
 //
 // 设计者视角：requirePathType 是取货的“货架”——先短路 ffi（未遮蔽即精确模块，
@@ -84,10 +66,7 @@ func (c *Checker) requirePathType(lit *ast.StringLit) types.Type {
 	return types.Any
 }
 
-// RequiredModules lists dotted require paths in a file, first-seen order:
-// `require("lit")` calls (any function position, shadowed or not) and
-// import statement paths. Best-effort: unresolvable spellings are skipped,
-// never reported (checking stays total).
+// 采买单收 `require("lit")`（任意位，遮蔽亦收）与 import 径，动态径解不出即跳。
 //
 // 设计者视角：RequiredModules 是驱动的“采买单”——全文件 walk 收 `require("字面")`
 // （任意函数位，遮蔽亦收）与 import 径，首见序、去重。障碍是动态径（拼接/变量）：
@@ -102,7 +81,7 @@ func RequiredModules(f *ast.File) []string {
 	return w.out
 }
 
-// requireWalker is the static collector state (seen-set plus ordered output).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：requireWalker 是采买单的“账本”——seen 防重，out 保首见序。无诊断，
 // 纯 walk。排查现场：顺序错乱先查是否复用同一 walker 跑多文件。
@@ -111,7 +90,7 @@ type requireWalker struct {
 	out  []string
 }
 
-// add records one module path once (first-seen wins, unresolvable skipped).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：add 是账本的“记一笔”——解不出或已见即弃，否则入 out。幂等。排查现场：
 // 重复径多记先查 seen 是否每文件新账本。
@@ -124,7 +103,7 @@ func (w *requireWalker) add(sl *ast.StringLit) {
 	w.out = append(w.out, name)
 }
 
-// block walks a block for require/import paths (statements plus return).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：block/expr/stmt 三件是 walk 的“地毯式”——语句 switch 全覆盖（含
 // 类体/宏体/select/spawn/defer），表达式递归（含调用内 require 形）。障碍是新
@@ -144,7 +123,7 @@ func (w *requireWalker) block(b *ast.Block) {
 	}
 }
 
-// stmt walks one statement for embedded require paths.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：见 block 注释——语句级分流，缺分支即漏收。排查现场同上。
 func (w *requireWalker) stmt(st ast.Stmt) {

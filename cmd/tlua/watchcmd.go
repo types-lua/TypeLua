@@ -190,7 +190,7 @@ func bindWatchFlags(fs *flag.FlagSet, wf *watchFlags) {
 func resolveWatchFlags(wf *watchFlags) {
 	// 设计者视角：enabled=watch||w，poll 钳 50ms~60s，debounce 钳 0~5s，越界 note+钳。
 	// 障碍是过小 poll 忙轮询：钳之。候选：错拒 vs 钳；选钳+note。排查现场：CPU 高先查
-	// poll。
+	// resolveWatchFlags如 `f(1)`，排查看 Span。
 	wf.enabled = wf.watch || wf.watchAlias
 	poll := wf.pollMs
 	if poll < 50 {
@@ -305,7 +305,7 @@ func runWatch(mode watchMode, cfg *config.Config, cfgPath string, ov cliOverride
 // 通过会话（第一周期后增量）。
 //
 // 设计者视角：check 轨 Sync(不发射)+印诊+计数，build 轨 Sync(发射)+印诊+刷映射+
-// 剪过期（prune）。障碍是空工程错：`FileCount==0` 方显错。候选：全量 vs 增量；
+// 剪过期如 `FileCount==0`，排查看 Span。
 // 选会话增量。不变量：emittedBySrc 与 curSrc 同步。排查现场：过期残留先查剪，
 // 计数错先查 count。
 func runWatchCycle(mode watchMode, cfg *config.Config, sess *compiler.Session, changes []watch.Change, emittedBySrc map[string]string) {

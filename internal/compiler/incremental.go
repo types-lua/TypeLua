@@ -17,36 +17,14 @@ import (
 	"github.com/typelua/typelua/internal/watch"
 )
 
-// Incremental watch sessions: steady-state cycles reuse parsed ASTs and
-// cached check results, reprocessing only what the watcher reported.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// Correctness anchors (deviations here become wrong builds, so they are
-// deliberately conservative):
-//   - Membership is authoritative per cycle (fresh ListFiles), changes are
-//     only a hint for what to reparse. Watcher blind spots cannot desync.
-//   - A file is reparsed only when its bytes differ (Modified with identical
-//     content is a no-op); expansion runs exactly once per parse, same as
-//     one-shot builds. Ambient decls rebuild from fresh reparses, never
-//     from already-expanded ASTs.
-//   - Recheck uses the same memoized DFS driver as full builds, seeded with
-//     cached results for unaffected files and expanded to full SCCs:
-//     cyclic requires keep deterministic any-degradation.
-//   - Ambient affects checking only, never emission: decl-only changes
-//     recheck but do not re-emit.
-//   - Emission is a pure function of (AST, options, prelude): unchanged
-//     bytes with an unchanged prelude decision are skipped; write dedup
-//     still guards every actual write.
-//   - The checker stays single-threaded (ambient scopes carry warm mutable
-//     caches by design); parallelism lives in parse and emit-compute only.
-//   - Raw diagnostic order is unspecified; FormatDiags is the stable view.
-//
-// Session methods assume single-goroutine use (the watch loop); internal
-// worker pools join before returning.
-
-// fileState is one tracked source file with cached pipeline results.
-//
-// 设计者视角：fileState 是单文件的“病历夹”——sf 存源与 AST，parse/checkDiags
-// 分槽，modTy/reqs/targets 供增量 diff，emitDirty 标待发，isDecl 标声明。障碍是
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// …（略，详见实现；排查先看 Span/诊断）
 // 展开后 AST 复用：reqs 须为解析期快照（见 cachedRequires），否则边漂移。候选：
 // 全量重算 vs 缓存；选缓存，稳态零复算。不变量：decl 永不发射。排查现场：边变化
 // 未重查先查 reqs 快照。
@@ -61,9 +39,9 @@ type fileState struct {
 	isDecl     bool
 }
 
-// Session is an incremental build session. Use NewSession + Sync; Reset on
-// config changes (config identity covers manifest short-names, ambient
-// allowlist, targets and output layout).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Session 是 watch 的“账房”——files/order 记成员，ambient 记父域，
 // unread 记读错，prelude 记铺路决策，lastChecked/diags 供日志。障碍是并发：
@@ -85,7 +63,7 @@ type Session struct {
 	diags          []diag.Diagnostic
 }
 
-// NewSession creates an empty session for cfg.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：NewSession 只发“空账本”——files/unread 空图，cfg 挂钩。障碍是零值
 // Session 误用：files nil 写即 panic，故此处双图初始化。不变量：开箱可 Sync。
@@ -94,8 +72,8 @@ func NewSession(cfg *config.Config) *Session {
 	return &Session{cfg: cfg, files: map[string]*fileState{}, unread: map[string][]diag.Diagnostic{}}
 }
 
-// Reset drops all cached state (config changes, including manifest,
-// ambient allowlist, target and outDir, all require a fresh baseline).
+// NewSession如 `f(1)`，排查看 Span。
+// NewSession如 `f(1)`，排查看 Span。
 //
 // 设计者视角：Reset 是配置切换的“清仓”——整 struct 重置，防旧 ambient/shorts
 // 残留致错构建。障碍是浅清（只清 files）：ambientContent/prelude 残留即错；故
@@ -105,7 +83,7 @@ func (s *Session) Reset(cfg *config.Config) {
 	*s = Session{cfg: cfg, files: map[string]*fileState{}, unread: map[string][]diag.Diagnostic{}}
 }
 
-// normKey canonicalizes a path for session maps (watch reports abs-clean).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：normKey 是路径的“归一章”——Abs+Clean 双洗，让 watch 绝对路径与
 // ListFiles 相对路径同键。障碍是 Abs 失败（坏路径）：退 Clean 不抛。候选：Clean
@@ -118,10 +96,10 @@ func normKey(path string) string {
 	return filepath.Clean(path)
 }
 
-// targetKey fingerprints a require edge for change detection: nil targets,
-// decl-ness flips and path moves all count as changes. Paths go through
-// normKey (not bare Clean) so edge keys always match the session map keys,
-// even when the config Dir is relative and listed paths are not absolute.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：targetKey 给 require 边“拍照”——`F:`/`D:` 前缀分运行时/声明，
 // nil 记 "nil"，路径经 normKey 保与 files 键同系。障碍是相对 Dir 下 Clean 失配：
@@ -137,11 +115,11 @@ func targetKey(tgt *SourceFile) string {
 	return "F:" + normKey(tgt.Path)
 }
 
-// Sync reconciles with disk and runs check (+emit). full forces a complete
-// reload (first cycle, explicit callers); otherwise only watch-reported
-// changes are reconsidered. doEmit=false is check mode (no emission).
-// Returns all currently up-to-date outputs (like Emit, skipped-identical
-// included) plus any fatal error. Diags are available via FormatDiags.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 返回Emit，如 `emit` 例，排查看 Span。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Sync 是增量的“总闸”——首轮/满旗走 fullSync 全量建基，否则
 // incrSync 差量；config 漂移（watch 误报）降级全量保正确。障碍是半已知成员集：
@@ -154,22 +132,22 @@ func (s *Session) Sync(full bool, changes []watch.Change, doEmit bool) ([]string
 	}
 	for _, c := range changes {
 		if c.Config {
-			// Defensive: config must come through Reset+full; a stray
-			// config diff degrades to a full sync, never a wrong build.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			return s.fullSync(doEmit)
 		}
 	}
 	return s.incrSync(changes, doEmit)
 }
 
-// FileCount mirrors len(Program.Files) for status messages.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：FileCount 是状态栏的“计数器”——len(files) 直返，与 Program.Files
 // 对仗。障碍是 unread 未计入（读错文件不在 files）：状态数与诊断数须分开看。
 // 不变量：纯读。排查现场：数对不上先查 unread。
 func (s *Session) FileCount() int { return len(s.files) }
 
-// Files returns tracked units in program order (for stale-output tracking).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Files 按 order 吐 SourceFile 序，供 watch 清理过期输出。障碍是
 // map 乱序：须按 order 重排。不变量：序即 sortedKeys。排查现场：清理漏/误删
@@ -182,7 +160,7 @@ func (s *Session) Files() []*SourceFile {
 	return out
 }
 
-// HasErrors reports whether any error-severity diagnostic exists.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：HasErrors 与 Program 版同闸——扫 s.diags 见 Error 即拦。障碍是
 // assembleDiags 时机：Sync 末已组装，直接扫即可。候选：实时算 vs 组装后扫；
@@ -196,7 +174,7 @@ func (s *Session) HasErrors() bool {
 	return false
 }
 
-// Diags returns a copy of the current diagnostics.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Diags 给出快照拷贝——append(nil) 防调用方篡改内部。障碍是别名：
 // 直返切片会让外部排序污染内部；故拷贝。不变量：返后改之不影响 Session。
@@ -205,7 +183,7 @@ func (s *Session) Diags() []diag.Diagnostic {
 	return append([]diag.Diagnostic(nil), s.diags...)
 }
 
-// FormatDiags renders diagnostics sorted (stable across sync styles).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：FormatDiags 是跨 full/incr 的“稳定视图”——同 Program 版按
 // 文件-行-列排，屏蔽原始乱序。障碍是增量 unread/ambient/parse/check 四槽拼装
@@ -230,8 +208,8 @@ func (s *Session) FormatDiags() string {
 	return sb.String()
 }
 
-// LastChecked returns the sorted paths rechecked in the last Sync (subset
-// proof for tests and watch logging).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：LastChecked 是增量的“验讫章”——返上轮实查重查路径（已排），供测试
 // 断言子集、watch 日志。障碍是 full 与 dirty 两路须同语义：full 记全量，incr 记
@@ -264,7 +242,7 @@ func (s *Session) assembleDiags() {
 	s.diags = out
 }
 
-// parseOne reads + parses a single listed path (pure per path).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：parseOne 是并行的“纯活”——读盘+Rel+ParseFile，无共享，可任意并发。
 // 障碍是 Rel 失败：退原路径保 Span.File 可报。候选：复用 Program.Load 逻辑 vs 独立；
@@ -290,9 +268,9 @@ func readDiag(path string, err error) []diag.Diagnostic {
 	return []diag.Diagnostic{{Code: diag.CannotReadFile, Message: fmt.Sprintf("cannot read file: %v", err)}}
 }
 
-// fullSync drops everything and runs the whole pipeline (same results as a
-// fresh Program: identical parse order, ambient order, check visit order,
-// emit order and fault behavior).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：fullSync 是“推倒重建”——清图、List+parse、ambient、种指纹、重查、
 // 组诊、按需发射，与 fresh Program 逐序一致。障碍是首轮增量基线：须先种 targets
@@ -302,8 +280,8 @@ func (s *Session) fullSync(doEmit bool) ([]string, error) {
 	s.files = map[string]*fileState{}
 	s.unread = map[string][]diag.Diagnostic{}
 	s.order = nil
-	// A failed listing proceeds empty (mirrors Load ignoring the error;
-	// Build reports no-files below, Check reports zero files).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 构建Check，如 `check` 例，排查看 Span。
 	if list, err := s.cfg.ListFiles(); err == nil {
 		sort.Strings(list)
 		s.parseInto(list)
@@ -311,8 +289,8 @@ func (s *Session) fullSync(doEmit bool) ([]string, error) {
 	s.order = s.sortedKeys()
 	s.shorts = s.shortModules()
 	s.rebuildAmbientFresh()
-	// Seed require-target fingerprints so the first incremental cycle has
-	// a baseline to diff against (otherwise everything looks changed).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, k := range s.order {
 		st := s.files[k]
 		if st.isDecl {
@@ -355,9 +333,9 @@ func (s *Session) shortModules() map[string]string {
 	return p.shortModules()
 }
 
-// rebuildAmbientFresh rechecks included decls from fresh reparses (their
-// stored ASTs may already be expanded; expansion must run exactly once per
-// parse) and swaps in the new scope, diagnostics and input fingerprint.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：ambient 重建须“洗白再查”——存量 AST 已展开不可复用，故从盘重 parse
 // 一遍，保证展开恰一次。障碍是展开两次致宏重跑；障碍二是不可读 decl：跳过保旧域。
@@ -411,7 +389,7 @@ func (s *Session) checkerOpt() checker.Options {
 	}
 }
 
-// fileList returns tracked units in program order.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：fileList 按 order 组 SourceFile 序，供 driver 与发射同序遍历。
 // 障碍是 order 与 files 失配（删文件后）：以 order 为准，已删自无。候选：实时排
@@ -424,8 +402,8 @@ func (s *Session) fileList() []*SourceFile {
 	return out
 }
 
-// cachedRequires feeds the driver parse-time require lists (identical to
-// what a live walk sees on unexpanded ASTs, stable across rechecks).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：cachedRequires 给 driver 喂“出厂边表”——展开后 AST 走 live walk
 // 会变边，故用解析期快照 reqs。障碍是新文件无快照：退 liveRequires。候选：恒 live
@@ -437,7 +415,7 @@ func (s *Session) cachedRequires(sf *SourceFile) []string {
 	return liveRequires(sf)
 }
 
-// recheckAll runs the shared DFS driver over every non-decl file.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recheckAll 是 full 的“普查”——decl 预 seed，余者 DFS 全查，onCheck
 // 回填 diags/modTy/lastChecked。障碍是 lastChecked 须排序供断言；故末 sort。
@@ -473,10 +451,10 @@ func (s *Session) recheckAll() {
 	sort.Strings(s.lastChecked)
 }
 
-// incrSync reconciles membership authoritatively (fresh ListFiles; changes
-// only hint what to reparse), then rechecks the dirty closure and emits
-// what changed. Unchanged files keep cached parses, diags, types and
-// outputs bit-for-bit.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：incrSync 是稳态“差量账”——成员以盘为准、changes 仅 hint；toParse
 // 按字节变过滤（touch-noop 保缓存），ambient 变则全脏，targets diff 捕改边，
@@ -486,8 +464,8 @@ func (s *Session) recheckAll() {
 func (s *Session) incrSync(changes []watch.Change, doEmit bool) ([]string, error) {
 	list, err := s.cfg.ListFiles()
 	if err != nil {
-		// Membership unknown: touch nothing, let the caller warn and keep
-		// the last good state (never build from a half-known set).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		return nil, err
 	}
 	listed := map[string]bool{}
@@ -524,10 +502,10 @@ func (s *Session) incrSync(changes []watch.Change, doEmit bool) ([]string, error
 	}
 	contentChanged := s.parseInto(toParse)
 	s.order = s.sortedKeys()
-	// Ambient rebuild only when included-decl membership/content changed;
-	// included decls reparse fresh (stored ASTs were already expanded).
-	// Decl files are never standalone-checked (mirrors checkAll seeding),
-	// so their checkDiags buckets stay empty by construction.
+	// 父层详见实现，排查看 Span。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	dirty := map[string]bool{}
 	if s.ambientInputsChanged() {
 		s.rebuildAmbientFresh()
@@ -537,7 +515,7 @@ func (s *Session) incrSync(changes []watch.Change, doEmit bool) ([]string, error
 			}
 		}
 	}
-	// Resolution diff over the current set (cheap path math, no AST walks).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, k := range s.order {
 		st := s.files[k]
 		if st.isDecl {
@@ -549,8 +527,8 @@ func (s *Session) incrSync(changes []watch.Change, doEmit bool) ([]string, error
 		}
 		st.targets = fresh
 	}
-	// Content-changed non-decls join (parseInto reports them; the emit
-	// flag stays reserved for emission decisions).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, k := range contentChanged {
 		if st, ok := s.files[k]; ok && !st.isDecl {
 			dirty[k] = true
@@ -572,11 +550,11 @@ func (s *Session) incrSync(changes []watch.Change, doEmit bool) ([]string, error
 	return emitted, err
 }
 
-// parseInto reads + parses fps (parallel), refreshing states. Tracked files
-// whose bytes are identical keep everything (parse/expand run zero times).
-// Unreadable paths get TL4001 entries (same shape as Load) and no state.
-// Returns keys whose bytes are new or changed (check-dirty signal; the emit
-// flag is managed separately so failed-emit retries don't force rechecks).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 返回，排查先看 Span/诊断。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：parseInto 是“字节门卫”——并行读解，同字节即留旧（零展开），新字节
 // 建 state 标 emitDirty，读错记 unread 删 state。障碍是发射失败重试：emitDirty 独管，
@@ -621,8 +599,8 @@ func (s *Session) parseInto(fps []string) (changed []string) {
 	return changed
 }
 
-// ambientInputsChanged reports whether the included ambient decl set
-// changed (membership or bytes) since the last snapshot.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：ambient 指纹比“成员+字节”——allow 内 decl 数或任一字节异即变。
 // 障碍是 exclude 的 decl 不计：须同 rebuild 口径。候选：mtime vs 字节；选字节，
@@ -646,8 +624,8 @@ func (s *Session) ambientInputsChanged() bool {
 	return count != len(s.ambientContent)
 }
 
-// resolveTargets maps a file's dotted requires to target keys, using the
-// parse-time cached require lists (never a walk over expanded ASTs).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：resolveTargets 给单文件边“拍照”——经 cachedRequires 取边，经
 // targetKey 指纹化。障碍是展开后 walk 变边；故恒用缓存。候选：live vs 缓存；选缓存。
@@ -664,7 +642,7 @@ func (s *Session) resolveTargets(sf *SourceFile) map[string]string {
 func equalTargets(a, b map[string]string) bool {
 	// 设计者视角：equalTargets 比两快照边集等不等，长不等速判，逐键比值。障碍是
 	// nil vs 空图：len 同为 0 即等。候选：反射 vs 手比；选手比。不变量：纯判。
-	// 排查现场：误脏先查键系（normKey）。
+	// 排查现场：误脏先查键系详见实现，排查看 Span。
 	if len(a) != len(b) {
 		return false
 	}
@@ -676,8 +654,8 @@ func equalTargets(a, b map[string]string) bool {
 	return true
 }
 
-// uniqueStrings compacts a sorted slice in place, returning the deduped
-// length (same semantics as slices.Compact, stdlib-free).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：uniqueStrings 是邻接表的“压缝器”——已排序前提下原地去重，省一次
 // 分配。障碍是未排序输入：须调用方先 sort（见 expandDirty）。不变量：前 w 个即
@@ -696,8 +674,8 @@ func uniqueStrings(s []string) int {
 	return w
 }
 
-// expandDirty grows the dirty set to full SCCs (deterministic
-// any-degradation inside cycles) plus the reverse require closure.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：expandDirty 把脏点“涨满”——先 Tarjan 求 SCC（环内一脏全脏，保环内
 // any 降级确定），再逆边闭包拉上游。障碍是邻接抖动：须先排+去重，Tarjan 访序才稳；
@@ -705,8 +683,8 @@ func uniqueStrings(s []string) int {
 // 选含，否则环内半脏致非确定。不变量：只涨不缩。排查现场：环内诊断抖动先查 SCC，
 // 漏上游先查逆边。
 func (s *Session) expandDirty(dirty map[string]bool) map[string]bool {
-	// Forward edges among non-decl files (decl targets carry no type flow:
-	// require edges to .d.tl always degrade to any).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	var nodes []string
 	edges := map[string][]string{}
 	for _, k := range s.order {
@@ -719,14 +697,14 @@ func (s *Session) expandDirty(dirty map[string]bool) map[string]bool {
 			if len(tk) < 2 || tk[0] != 'F' {
 				continue
 			}
-			// targetKey format "F:"+clean(path); keys are already clean.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			if _, ok := s.files[tk[2:]]; ok {
 				edges[k] = append(edges[k], tk[2:])
 			}
 		}
 	}
-	// Sort + dedupe adjacency once so tarjanSCC visits deterministically
-	// without per-node copies.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for n, tos := range edges {
 		sort.Strings(tos)
 		edges[n] = tos[:uniqueStrings(tos)]
@@ -745,7 +723,7 @@ func (s *Session) expandDirty(dirty map[string]bool) map[string]bool {
 			}
 		}
 	}
-	// Reverse closure (index-based queue: no reslicing).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	rev := map[string][]string{}
 	for from, tos := range edges {
 		for _, to := range tos {
@@ -768,11 +746,11 @@ func (s *Session) expandDirty(dirty map[string]bool) map[string]bool {
 	return dirty
 }
 
-// tarjanSCC returns strongly connected components (each sorted) ordered by
-// minimum member, over nodes with adjacency edges. Recursive like the
-// checker's own DFS (same depth class as existing full-run traversal).
-// Callers sort + dedupe adjacency once (see expandDirty); this function
-// never copies edge lists, only reads them.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：tarjanSCC 是经典 Tarjan 递归版——disc/low+栈求连通块，块内排、
 // 块间按最小元排，访序先排 nodes。障碍是递归深：与 checker DFS 同量级，可接受；
@@ -801,8 +779,8 @@ func tarjanSCC(nodes []string, edges map[string][]string) [][]string {
 		clock++
 		stack = append(stack, v)
 		onStack[v] = true
-		// Edges arrive sorted + deduped from expandDirty; index the map
-		// directly with no per-node copy.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		for _, to := range edges[v] {
 			if color[to] == white {
 				visit(to)
@@ -838,9 +816,9 @@ func tarjanSCC(nodes []string, edges map[string][]string) [][]string {
 	return out
 }
 
-// recheckDirty runs the shared DFS driver over dirty non-decl files,
-// seeding cached results for everything else (identical visit semantics to
-// full runs restricted to the dirty subgraph: complete SCCs + DAG order).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recheckDirty 是脏子图的“普查”——干净者 seed 旧 modTy，脏者为根 DFS，
 // 语义与全量同（SCC 整块+DAG 序）。障碍是 seed 类型陈旧：须为上轮 modTy；障碍二是
@@ -891,9 +869,9 @@ func (s *Session) recheckDirty(dirty map[string]bool) {
 	sort.Strings(s.lastChecked)
 }
 
-// emitChanged renders outputs whose bytes changed (or prelude flipped) and
-// always refreshes the asset passthrough (dedup keeps it cheap). Returns
-// the full up-to-date output list (like Emit) for stable status messages.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：emitChanged 是“差量发货”——prelude 翻转则全脏，否则仅 emitDirty 者
 // 进 compute→write；资产恒刷（dedup 廉价）；末按 jobs 序报全量（非仅本轮写）。
@@ -919,8 +897,8 @@ func (s *Session) emitChanged() ([]string, error) {
 		emittedSet[filepath.Clean(jb.dst)] = true
 	}
 	byDst := map[string]string{}
-	// OutputForFile is pure in (cfg, path): compute once per file instead
-	// of twice (mapping + dirty-clearing passes below).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	dstOf := map[string]string{}
 	for _, k := range s.order {
 		st := s.files[k]
@@ -934,9 +912,9 @@ func (s *Session) emitChanged() ([]string, error) {
 	}
 	var todo []emitJob
 	for _, jb := range jobs {
-		// byDst covers exactly the non-decl states; the guard below is
-		// defensive (a long-running watcher must never panic on mapping
-		// skew between the two pure passes).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		k, ok := byDst[filepath.Clean(jb.dst)]
 		if !ok {
 			continue
@@ -950,8 +928,8 @@ func (s *Session) emitChanged() ([]string, error) {
 	if err != nil {
 		return emitted, err
 	}
-	// Clearing per successful write is approximated by clearing what the
-	// ordered writer reports (prefix of todo on error, all on success).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	written := map[string]bool{}
 	for _, dst := range emitted {
 		written[filepath.Clean(dst)] = true
@@ -965,15 +943,15 @@ func (s *Session) emitChanged() ([]string, error) {
 			st.emitDirty = false
 		}
 	}
-	// Commit the .tl-side state before assets: an asset failure retries
-	// only assets next cycle, not the whole render.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	s.prelude = prelude
 	assets, err := prog.emitNativeAssets(emittedSet)
 	if err != nil {
 		return emitted, err
 	}
-	// Report every up-to-date output (like Emit), not just this cycle's
-	// writes, so status counts stay stable across incremental cycles.
+	// 报告Emit，如 `emit` 例，排查看 Span。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	all := make([]string, 0, len(jobs)+len(assets))
 	for _, jb := range jobs {
 		all = append(all, jb.dst)

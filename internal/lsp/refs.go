@@ -9,7 +9,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// References and rename across value, type, and member namespaces.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：引用三轨——值按 Root 聚，类型按 Entry 指针聚，成员按 Owner/名聚
 // （结构成员按 StructOwner）。重命名三轨各产 edits，类/枚举值-型孪生联动，硬关键字
@@ -44,7 +44,7 @@ func (d *document) occurrencesOf(root *checker.Symbol) []checker.SymUse {
 	return out
 }
 
-// memberMatch reports whether o is an occurrence of the same member.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：名义成员比 Owner 指针（名不可靠），结构成员比 StructOwner 指针
 // （别名不追，见 checker）。障碍是 nil Owner：退结构比。候选：名比 vs 指针；
@@ -56,7 +56,7 @@ func memberMatch(o *checker.SymUse, m *checker.MemberRef) bool {
 	if m.Owner != nil || o.Member.Owner != nil {
 		return o.Member.Owner == m.Owner
 	}
-	// Structural members unify by variable root (aliases untracked).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	return o.Member.StructOwner == m.StructOwner && m.StructOwner != nil
 }
 
@@ -75,7 +75,7 @@ func (d *document) memberOccurrences(m *checker.MemberRef) []checker.SymUse {
 	return out
 }
 
-// memberDefSpan finds the recorded definition span of a member.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：首个 IsDef 且 match 者即定义位。障碍是索引器解出字段无定义：返
 // false 上游回 nil。排查现场：成员跳转空先查记录。
@@ -91,7 +91,7 @@ func (d *document) memberDefSpan(m *checker.MemberRef) (token.Span, bool) {
 	return token.Span{}, false
 }
 
-// typeOccurrences lists declaration + uses of a type entry.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：按 Entry 指针聚（名不可靠，遮蔽下重名多）。障碍是指针同一性：同声明
 // 恒同指针（见 checker）。排查现场：类型引用分裂先查指针。
@@ -108,11 +108,11 @@ func (d *document) typeOccurrences(e *checker.TypeEntry) []checker.SymUse {
 	return out
 }
 
-// twinValueRoot finds the value symbol twinning a type declaration
-// (class/enum names live in both namespaces); nil for pure types.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：类/枚举双栖——同名值符与类型条目孪生，首个 IsDef+Entry+Sym 者即 twin。
-// 障碍是纯类型（alias/interface）无 twin：返 nil。候选：名查 vs 记录扫；选记录扫准。
+// 障碍是纯类型详见实现，排查看 Span。
 // 不变量：纯类型恒 nil。排查现场：重命名半边先查 twin。
 func (d *document) twinValueRoot(e *checker.TypeEntry) *checker.Symbol {
 	if d.index == nil || e == nil {
@@ -160,7 +160,7 @@ func (s *Server) references(raw json.RawMessage) any {
 			if !p.Context.IncludeDeclaration && o.IsDef {
 				continue
 			}
-			// The value twin shares the declaration span; don't list twice.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			if o.Span.Start.Offset == decl.Start.Offset && o.Span.End.Offset == decl.End.Offset {
 				continue
 			}
@@ -221,9 +221,9 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 	if u == nil {
 		return nil, ErrInvalidParams, "no renameable symbol here"
 	}
-	// Member path: class/interface/enum members rename within the owner.
-	// Structural members (anonymous literals) list for references but
-	// refuse rename: aliases would silently miss occurrences.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if u.Member != nil {
 		if u.Member.Owner == nil {
 			return nil, ErrInvalidParams, "cannot rename structural members (aliases untracked)"
@@ -244,8 +244,8 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 		}
 		return map[string]any{"changes": map[string]any{doc.uri: items}}, 0, ""
 	}
-	// Type path: declaration plus all type uses; a class/enum value twin
-	// renames along so neither namespace is left behind.
+	// 类型详见实现，排查看 Span。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if u.Entry != nil {
 		return s.renameType(doc, u.Entry, p.NewName)
 	}
@@ -255,7 +255,7 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 	if u.Sym.IsBuiltin {
 		return nil, ErrInvalidParams, "cannot rename a builtin"
 	}
-	// A class/enum value renames through its twin type declaration.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if doc.index != nil {
 		off := doc.offsetAt(p.Position.Line, p.Position.Character)
 		if sc := doc.index.ScopeAt(off); sc != nil {
@@ -291,8 +291,8 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 	return map[string]any{"changes": map[string]any{doc.uri: items}}, 0, ""
 }
 
-// renameType renames a type declaration with all its uses; a class/enum
-// value twin renames along (same name, other namespace).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：类型改名聚声明+全用+孪生值轨（见 twinValueRoot），seen 按起 offset
 // 去重，末排序。障碍是孪生声明同 span 重复：seen 消之。候选：分两次改 vs 一次联动；

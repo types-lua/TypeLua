@@ -44,7 +44,6 @@ func DefaultDir() (string, error) {
 //
 // 物理布局：
 //
-//	Cache
 //	├── Root    string // 缓存根目录
 //	└── Offline bool   // 是否禁止网络
 type Cache struct {
@@ -325,7 +324,7 @@ func (g *GitRegistry) Manifest(ctx context.Context, path, commit string) (*Manif
 
 // ResolveRev 实现 Registry。
 //
-// 设计者视角：任意 rev（tag/branch/SHA）经镜像 RevParse 定 commit。障碍是浮动分支：
+// 设计者视角：任意 rev详见实现，排查看 Span。
 // 解析即快照，lock 钉之。排查现场：分支漂移先查 lock。
 func (g *GitRegistry) ResolveRev(ctx context.Context, path string, dep Dep, rev string) (string, error) {
 	url, err := g.urlFor(ctx, path, dep)

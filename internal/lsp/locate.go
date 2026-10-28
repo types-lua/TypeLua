@@ -6,7 +6,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Shared request plumbing: document lookup and symbol occurrence search.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：问答三件套——docAt 解 URI 取档，useAt 取最内 occurrence（含词尾
 // 回退），defSpanOf 取定义位（记录优先、符号兜底）。障碍是光标停词后：须 off-1
@@ -36,8 +36,8 @@ func (s *Server) docAt(raw json.RawMessage) (*document, lspPos, bool) {
 	return doc, p.Position, true
 }
 
-// useAt finds the innermost symbol use containing the position (with an
-// end-of-token fallback, since cursors often rest after the last char).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：见上总注——最小 span 胜（嵌套取内），未中则 off-1 再探。障碍是大文件
 // 线扫：Uses 全量，够快。排查现场：点词尾无响应先查回退。
@@ -69,7 +69,7 @@ func (d *document) useAt(pos lspPos) *checker.SymUse {
 	return best
 }
 
-// defSpanOf prefers a recorded definition occurrence, else the symbol span.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：定义位优先用记录的 IsDef occurrence（源坐标真），无则兜底符号 span。
 // 障碍是影子 Root：须按 Root 比。排查现场：跳转偏先查记录缺失。

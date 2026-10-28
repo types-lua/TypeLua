@@ -6,9 +6,9 @@ import (
 	"github.com/typelua/typelua/internal/ast"
 )
 
-// Cooperative CSP runtime (Go-style, single-threaded scheduler).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// Model: tasks are coroutines on one ready queue; channels/mutexes/
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // waitgroups/timers park tasks and wake them. `async`/`await` erase (plain
 // functions; blocking runtime calls yield by themselves), `spawn <call>`
 // becomes `__tl_spawn(function() <call> end)`, `select` becomes an
@@ -16,7 +16,7 @@ import (
 //
 // prelude 兼容 5.1（无 goto、无 //、无位运算、无 <const>）且幂等
 // （`if not __tl_run`），因此多文件程序可各自携带。用户 API 全局：
-// makeChan、sleep、timeout、WaitGroup、Mutex。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // Everything else uses the `__tl_` prefix (reserved, see SPEC §12).
 const concurrentPrelude = `if not __tl_run then
   __tl_ready = {}
@@ -623,7 +623,7 @@ const concurrentPrelude = `if not __tl_run then
 end
 `
 
-// asyncFunc is true when fn is an async literal (for future use).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：emitSpawn 是 spawn 的“一句话翻译”——`spawn f()` 化作
 // `__tl_spawn(function() f() end)`，任务入就绪队列。障碍是参数求值时机：
@@ -690,7 +690,7 @@ func (e *emitter) emitSelect(n *ast.SelectStmt) {
 		" = __tl_select(__tl_specs_" + tag + ", " + hasDef + ")")
 	e.nl()
 	// `repeat ... until true` gives `break` inside a case Go-like
-	// semantics: it leaves the select, not an enclosing loop (a nested
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	// loop inside the case still owns its own `break`).
 	e.pad()
 	e.write("repeat")
@@ -730,7 +730,7 @@ func (e *emitter) emitSelect(n *ast.SelectStmt) {
 	e.pad()
 	if n.Default != nil {
 		if first {
-			// Only default: no condition needed, but keep shape uniform.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			e.write("    if true then")
 			e.nl()
 		} else {
@@ -750,8 +750,8 @@ func (e *emitter) emitSelect(n *ast.SelectStmt) {
 	e.nl()
 }
 
-// NeedsConcurrency reports whether a file uses cooperative concurrency:
-// spawn/await/select nodes, or the channel/timer/sync user globals.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：NeedsConcurrency 是调度器前导的“点火开关”——一文件任一并发痕迹
 // （spawn/await/select 或 makeChan/sleep/timeout/WaitGroup/Mutex 名）即整文件
@@ -885,7 +885,7 @@ func (w *concWalker) stmt(st ast.Stmt) {
 
 func (w *concWalker) expr(x ast.Expr) {
 	// 设计者视角：expr 在表达式林里找三簇火星——AwaitExpr、裸全局
-	// （makeChan/sleep/timeout/WaitGroup/Mutex）、Call 形 `sleep()` 等。障碍是
+	// 如 `sleep()`，排查看 Span。
 	// 局部遮蔽：`local sleep = 1` 也会被误点火；取舍为宁误报（多前导无害）不漏报。
 	// 候选：符号解析精确判 vs 名判；选名判，发射器无符号表。不变量：nil 直接返。
 	// 排查现场：前导无故出现先查是否有同名局部变量，await 漏报先查 AwaitExpr 分支。

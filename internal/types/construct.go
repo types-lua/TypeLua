@@ -6,7 +6,7 @@ import (
 
 // ---------- constructors ----------
 
-// NewUnion flattens nested unions, removes duplicates and never, handles any/unknown.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Union 是类型系统的"或"，但若每次构造都保留嵌套与重复，子类型
 // 判定与缓存键会因同一类型多种文本形式而失效。候选：惰性范式化（每次判定时
@@ -30,7 +30,7 @@ func NewUnion(types []Type) Type {
 		}
 		flat = append(flat, t)
 	}
-	// any absorbs everything; unknown absorbs (except any).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, t := range flat {
 		if t.Kind() == KAny {
 			return Any
@@ -41,7 +41,7 @@ func NewUnion(types []Type) Type {
 			return Unknown
 		}
 	}
-	// Dedup by string.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	seen := map[string]bool{}
 	var out []Type
 	for _, t := range flat {
@@ -57,15 +57,15 @@ func NewUnion(types []Type) Type {
 	if len(out) == 1 {
 		return out[0]
 	}
-	// Canonical order for stable messages.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return &Union{Types: out}
 }
 
-// NewIntersection flattens; never absorbs; any is identity.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：交集与并集对偶——any 是交集的单位元（any & X = X），never 是
-// 吸收元（never & X = never），因此构造时 any 去除、never 直接返回 never。
+// 吸收元详见实现，排查看 Span。
 // 与 Union 的差异：Union 的 any 吸收全部（any | X = any），Intersection 的 any
 // 是单位元。候选：保留 any 作成员 vs 去除；选去除，避免 `any & Foo` 打印
 // 冗余且破坏范式化。不变量：空输入退化为 unknown（交集的零元），单成员
@@ -107,11 +107,11 @@ func NewIntersection(types []Type) Type {
 	return &Intersection{Types: out}
 }
 
-// RemoveNil returns T without nil, and whether nil was present.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：nil 的联合成员在类型窄化/函数返回分析中常需剥离（如把
 // `Foo | nil` 拆成 `Foo` + "可能为 nil" 标志）。候选：原地修改 Union vs
-// 构造新 Union；选构造新 Union（NewUnion），保持输入不可变并复用范式化。
+// 构造新 Union；选构造新 Union详见实现，排查看 Span。
 // 单类型非联合：是 nil 则退化为 never（空类型），否则原样返回。返回 bool
 // 让调用方知道是否剥离过 nil，避免重复处理。排查现场：若剥离后类型意外
 // 变 never，检查输入是否仅含 nil。
@@ -138,7 +138,7 @@ func RemoveNil(t Type) (Type, bool) {
 	return NewUnion(rest), true
 }
 
-// ContainsNil reports whether nil is in the type.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：nil 检测必须同时覆盖裸 nil 与联合成员中的 nil，因为 TypeLua
 // 把可空类型表示为 `T | nil`。候选：递归遍历 vs 仅查 Union 成员；选后者，

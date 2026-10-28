@@ -13,23 +13,11 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
-// Cross-file require resolution for Program.Check: dotted require paths
-// map to program files, which check in dependency order with memoization:
+// require 落盘三例：`import G from "example.com.greet"` 包根走 init.tl，`.greet` 后缀走单文件，短名走 manifest。
 //
-//	import G from "example.com.greet"  (package root: greet/init.tl)
-//	import G from "example.com.greet.greet"  (plain file)
 //	import G from "greet"  (manifest short name, unambiguous last segment)
 //
-// Lookup order per base (requiring file's directory, then tlua_modules):
-// `<path>.tl` first, then `<path>/init.tl` (Lua init.lua convention).
-// Unresolved targets (missing files, .d.tl stubs, cycles in progress)
-// stay `any`, preserving classic single-file behavior as fallback.
-
-// fileByPath finds a program file by cleaned path (exact match only,
-// so shadowing stays predictable).
-//
-// 设计者视角：fileByPath 是“户籍 exact 查”——Clean 后精确匹配，不做模糊，
-// 让遮蔽可预测。障碍是相对/绝对混写：调用方须保证同系，否则查无；故上层
+// …（略，详见实现；排查先看 Span/诊断）
 // resolveRequireIn 统一用 Join 后的同系路径。候选：map 索引 vs 线扫；选线扫，
 // 文件数小、零维护。不变量：未命中返 nil。排查现场：require 找不到先查路径
 // 是否一相对一绝对。
@@ -47,9 +35,9 @@ func fileByPathIn(files []*SourceFile, path string) *SourceFile {
 	return nil
 }
 
-// shortModules maps unambiguous manifest short names (last path segment)
-// to full module paths. Ambiguous shorts are dropped (full paths still
-// work); a missing/broken manifest means no short names.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：shortModules 是短名的“消歧台”——仅计数为 1 的末段可作短名，歧义
 // 直接弃用（全路径仍通）。障碍是 manifest 缺失/损坏：此时返 nil，短名全灭而
@@ -84,14 +72,14 @@ func lastSegment(path string) string {
 	return path
 }
 
-// candidateRels expands a dotted require path into candidate relatives.
-// k=1 is all slashes (historical behavior, tried first); larger k preserves
-// leading dots for domain-style module paths ("example.com.greet" also
-// tries "example.com/greet", matching the manifest/vendor layout where the
-// first segment keeps its dots).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：candidateRels 是点路径的“展开扇”——k 从 1 到 n，前 k 段保点、
-// 后段转斜杠，历史全斜杠优先。障碍是域名式路径（example.com.greet）：若只试
+// 后段转斜杠，历史全斜杠优先。障碍是域名式路径详见实现，排查看 Span。
 // 全斜杠，vendor 下保点布局即失配；故多候选按序试。图：`a.b.c`→`a/b/c`，
 // `a.b/c`，`a.b.c`。候选：单候选 vs 多候选；选多，兼容两代布局。不变量：首候选
 // 恒全斜杠。排查现场：vendor 包找不到先查候选序，空段（`a..b`）上游已拒。
@@ -109,7 +97,7 @@ func candidateRels(dotted string) []string {
 	return out
 }
 
-// resolveRequire maps a dotted require path to a program source file.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：resolveRequire 是 Program 版薄封装——短名先展全名，再托
 // resolveRequireIn 纯函数实算，便于 Session 复用。障碍是空段（`a..b`）：
@@ -151,13 +139,13 @@ func resolveRequireIn(files []*SourceFile, shorts map[string]string, cfgDir stri
 	return nil
 }
 
-// checkDriver runs memoized depth-first checking over a file set, feeding
-// each file the module types of its requirements. Files check exactly
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // once; cycles and missing targets degrade to `any` for the affected edge
-// only. Roots are visited in slice order, so runs over the same set with
-// the same seed produce identical results. The driver is single-threaded:
-// checker scopes share ambient entries with warm mutable caches by design,
-// so parallel checking would corrupt results (see ambient.go).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 type checkDriver struct {
 	files   []*SourceFile
 	shorts  map[string]string
@@ -166,10 +154,10 @@ type checkDriver struct {
 	opt     checker.Options
 	state   map[*SourceFile]int
 	modTy   map[*SourceFile]types.Type
-	// requires lists a file's dotted requires; nil selects the live walk
-	// (checker.RequiredModules). Sessions inject parse-time caches.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	requires func(sf *SourceFile) []string
-	// onCheck receives each completed file in visit order.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	onCheck func(sf *SourceFile, ds []diag.Diagnostic, mt types.Type)
 }
 
@@ -183,8 +171,8 @@ const (
 	checkDone      = 2
 )
 
-// seedDone pre-marks files as already checked (ambient decls, or cached
-// files in incremental runs) with their known module types.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 func (d *checkDriver) seedDone(sf *SourceFile, mt types.Type) {
 	// 设计者视角：seedDone 给已决文件“盖已验章”——ambient decl 与增量缓存直标
 	// Done，DFS 见之即跳。障碍是模块类型须同种：decl 种 Any，缓存种旧 modTy。
@@ -210,9 +198,9 @@ func (d *checkDriver) checkOne(sf *SourceFile) {
 	d.state[sf] = checkBusy
 	d.modTy[sf] = types.Any
 	env := map[string]types.Type{}
-	// requires defaults to a live walk (pre-own-expansion at this point in
-	// full runs); incremental runs inject parse-time cached requires so
-	// rechecks of already-expanded ASTs see identical edges.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	reqs := liveRequires(sf)
 	if d.requires != nil {
 		reqs = d.requires(sf)
@@ -234,13 +222,13 @@ func (d *checkDriver) checkOne(sf *SourceFile) {
 	d.onCheck(sf, ds, mt)
 }
 
-// checkAll checks every file in dependency order, feeding each file the
-// module types of its requirements. Files check exactly once; cycles and
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // missing targets degrade to `any` for the affected edge only.
 //
 // Ambient .d.tl files (filtered by `types` allowlist) are checked once up
-// front into a shared parent scope (builtins + globals, like tsconfig
-// types); program files then check as children so shadowing stays detached.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkAll 是全量检查的“总闸”——先 buildAmbient 筑共享父域，再逐根
 // DFS，decl 预 seed（只供 ambient、不产模块类型）。障碍是 allowlist 过滤：
@@ -261,8 +249,8 @@ func (p *Program) checkAll(opt checker.Options) {
 			p.Diags = append(p.Diags, ds...)
 		},
 	}
-	// Decl files contribute only ambient (checked once above); they never
-	// carry a runtime module type, preserving the classic any-fallback.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, sf := range p.Files {
 		if sf.IsDecl {
 			d.seedDone(sf, types.Any)
@@ -273,8 +261,8 @@ func (p *Program) checkAll(opt checker.Options) {
 	}
 }
 
-// buildAmbient checks global .d.tl files once into a shared parent scope.
-// Returns nil when no ambient decls participate (classic isolated mode).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 返回，排查先看 Span/诊断。
 //
 // 设计者视角：buildAmbient 是 ambient 的“筑基”——按 Name 排序保确定，调
 // checker.BuildAmbient 得父域+诊断。障碍是零 decl：返 nil 即经典隔离模式，

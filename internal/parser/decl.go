@@ -42,7 +42,7 @@ func (p *Parser) parseExport() ast.Stmt {
 	}
 	if p.at(token.TypeKw) || p.at(token.InterfaceKw) || p.at(token.EnumKw) {
 		d := p.parseTypeDecl(true, false)
-		// Fix span to include export.
+		// Span 前移含 export，如 `export type T = number` 高亮含章。
 		sp := d.Span()
 		sp.Start = start.Span.Start
 		switch n := d.(type) {
@@ -56,7 +56,7 @@ func (p *Parser) parseExport() ast.Stmt {
 		return d
 	}
 	if p.at(token.Function) {
-		// export function foo() ... end  (sugar for global)
+		// `export function foo() end` 即全局糖。
 		p.next()
 		name := p.parseFuncName()
 		fn := p.parseFuncBody(name != nil && name.Method != nil)
@@ -64,11 +64,11 @@ func (p *Parser) parseExport() ast.Stmt {
 		return &ast.FuncDefStmt{Name: name, Func: fn, S: sp}
 	}
 	if p.isAsyncFuncStart() {
-		// export async function foo() ... end (same as global async).
+		// `export async function` 同全局异步。
 		return p.parseAsyncGlobal()
 	}
 	if p.at(token.Local) {
-		// export local ... : mark exported where applicable.
+		// `export local f = …` 透传 Exported 旗。
 		st := p.parseLocal()
 		if lf, ok := st.(*ast.LocalFuncDef); ok {
 			lf.Exported = true
@@ -91,13 +91,13 @@ func (p *Parser) parseExport() ast.Stmt {
 // 设计者视角：parseDeclare 是类型世界的“报关单”——只收无运行时发射的声明，
 // function 形态只收签名（params+`->`/`: `返回，无 body，Body 置空块占位），身后无 end。
 // 障碍是泛型 `<T>` 与调用括号的粘连：试探成功且后接 '(' 才认泛型，否则回退当比较。
-// 取舍：declare class 的字段初值在 parseClassMember 内判死刑（ParseDeclareFieldInit），
+// 取舍：declare class 的字段初值在 parseClassMember 内判死刑详见实现，排查看 Span。
 // 而非此处一刀切，让错误锚在字段而非 declare。候选曾是复用 parseGlobalFunc 再掏空 body，
 // 但签名与体解析交织，单列签名路更不易把 `end` 误吃。不变量：返回节点 Declared 恒真。
 // 排查现场：若 declare function 吞了下句，先看 LParen expect 失败后的游标。
 func (p *Parser) parseDeclare() ast.Stmt {
 	start := p.next()
-	// declare only applies to type-space decls (no runtime emit).
+	// declare 只收类型空间（零运行时发射），如 `declare class C {}`。
 	if p.at(token.ClassKw) || (p.at(token.AbstractKw) && p.peek(1).Kind == token.ClassKw) {
 		d := p.parseClassDecl(false, true, false)
 		if cd, ok := d.(*ast.ClassDecl); ok {
@@ -122,10 +122,10 @@ func (p *Parser) parseDeclare() ast.Stmt {
 		return d
 	}
 	if p.at(token.Function) {
-		// declare function foo(a: T): R  (no body)
+		// `declare function foo(a: T): R` 只要签名无体。
 		p.next()
 		name := p.parseFuncName()
-		// Optional generics.
+		// 可选泛型 `<T>`，后无 `(` 即回退。
 		var generics []*ast.GenericParam
 		if p.at(token.Lt) {
 			save := p.saveCursor()
@@ -138,7 +138,7 @@ func (p *Parser) parseDeclare() ast.Stmt {
 				p.diags = p.diags[:nd]
 			}
 		}
-		// Parse signature only: (params) [-> ret], no body.
+		// 只收签名 `(params)[-> R]`，身后无 end。
 		if _, ok := p.expect(token.LParen, "'('"); !ok {
 			return &ast.EmptyStmt{S: start.Span}
 		}
@@ -165,15 +165,7 @@ func (p *Parser) parseDeclare() ast.Stmt {
 	return &ast.EmptyStmt{S: start.Span}
 }
 
-// parseMacroDef parses:
-//
-//	macro Name(p1, p2) = expr            (expression macro)
-//	macro Name(p1, p2) do stmts end      (statement macro)
-//
-// 尾部的 `...` 收集额外调用实参（变参 macro）。
-// Parameters are strict identifiers; `self`/`super` are reserved.
-//
-// 设计者视角：parseMacroDef 是宏的“招工表”——名后括号内只收严格 Ident（软关键字不许混入），
+// parseMacroDef 收两种宏：`macro N(p) = expr` 表达式宏，`macro N(p) do stmts end` 语句宏，尾 `...` 为变参。
 // `self`/`super` 预留判死刑，重名 param 判死刑，`...` 必居末（否则 ParseMacroVarargLast）。
 // 双形态分流：`=` 后 parseExpr 即表达式宏；`do` 后 inMacroBody++ 包 parseBlock（体内裸 Ident
 // 可作语句占位，见 parseExprStmtOrAssign），`end` 封口，Ret 非空即 ParseMacroBodyReturn。
@@ -218,7 +210,7 @@ func (p *Parser) parseMacroDef() ast.Stmt {
 		}
 	}
 	p.expect(token.RParen, "')'")
-	// Duplicate parameter names shadow confusingly; reject outright.
+	// 重名形参如 `macro M(a,a)` 当场记账。
 	seen := map[string]bool{}
 	for _, n := range params {
 		if seen[n.Name] {
@@ -353,17 +345,8 @@ func (p *Parser) parseTypeDecl(exported, declared bool) ast.Stmt {
 	return nil
 }
 
-// parseClassDecl parses:
-//
-//	[abstract] class Name<T> [extends Base] [implements I, ...] { members }
-//
-// Members are fields (`[mods] name[: T] [= init]`), methods
-// (`[mods] name<T>(params)[: R | -> R] body end`) and at most one
-// `constructor(params) body end`. In `declare` classes and on `abstract`
-// members there is no body.
-//
-// 设计者视角：parseClassDecl 是类的“审批大厅”——abstract 章、名、泛型、extends 单继承、
-// implements 多实现、`{` 后成员循环（parseClassMember+synchronizeClassMember），
+// parseClassDecl 收 `[abstract] class N<T> [extends B] [implements I,…] {成员}`，字段/方法/唯一 constructor，declare/abstract 无体。
+// implements 多实现、`{` 后成员循环如 `{`，排查看 Span。
 // `}` 封口，exported/declared/isLocal 三旗透传。障碍是 extends/implements 后的类型逗号列
 // 与成员循环的逗号分隔同形：前者在 `{` 前收，后者在 `{` 后收，以 LBrace 为界绝不混。
 // 取舍：成员错只跳一格（同步后 continue），整类不作废；`{` 缺席即同步回 Empty，不硬搭空类。
@@ -434,7 +417,7 @@ func (p *Parser) parseClassDecl(exported, declared, isLocal bool) ast.Stmt {
 //
 // 设计者视角：parseClassMember 是成员的“安检+分诊”——前后两处 async 嗅探（`async name(`/`<`
 // 且同行） guards `async: string` 字段不被误收；vis/static/readonly/abstract 循环收章，
-// 重复章即时记账（DuplicateVisibility/Modifier）。分诊：后接 `(`/`<` 即方法路
+// 重复章即时记账如 `(`/`<`，排查看 Span。
 // （泛型试探+params+返回+declare/abstract 无体 vs parseFuncBlock 有体，缺体在 `,`/`;`/`}`
 // 前即 MethodBodyMissing）；否则字段路（`[:T] [=init]`，无 type 无 init 即 FieldNeedsTypeOrInit
 // 补 any，abstract 字段即 OnlyMethodsAbstract）。障碍有三：ctor 不许 async/不许返回注记、
@@ -443,9 +426,7 @@ func (p *Parser) parseClassDecl(exported, declared, isLocal bool) ast.Stmt {
 // 排查现场：若 `static async fetch()` 的 async 丢失，先看第二嗅探（修饰后）是否生效。
 func (p *Parser) parseClassMember(declared bool) *ast.ClassMember {
 	start := p.cur()
-	// Leading `async` modifier for methods (`async greet() ... end`):
-	// only when followed by a member name + `(`/`<` (else it is a field
-	// named `async`, e.g. `async: string`).
+	// 前置 `async greet()` 须后跟名+`(`/`<`，否则 `async: string` 即字段。
 	isAsync := false
 	if p.cur().Kind == token.Ident && p.cur().Literal == "async" &&
 		(p.peek(1).Kind == token.Ident || isSoftKw(p.peek(1).Kind)) &&
@@ -518,7 +499,7 @@ loop:
 		p.errorf(diag.ParseInvalidCtorSignature, name.Span(), "constructor must not be 'async'")
 		isAsync = false
 	}
-	// Method or constructor: `name<T>(params)`.
+	// 方法/构造 `名<T>(params)`，如 `get<T>(k: T)`。
 	if p.at(token.LParen) || p.at(token.Lt) {
 		var generics []*ast.GenericParam
 		if p.at(token.Lt) {
@@ -640,7 +621,7 @@ func (p *Parser) parseInterfaceField() *ast.InterfaceField {
 	}
 	name := p.parseIdentAllowSoft()
 	if name == nil {
-		// Support method shorthand with string keys? No.
+		// 字符串键方法糖不支持，此处只收 Ident 名。
 		return nil
 	}
 	optional := false
@@ -648,9 +629,9 @@ func (p *Parser) parseInterfaceField() *ast.InterfaceField {
 		p.next()
 		optional = true
 	}
-	// Method shorthand: name<T>(params) [: ret | -> ret]
+	// 方法糖 `名<T>(params)[: R|-> R]`，如 `get<T>(k: T): T`。
 	if p.at(token.LParen) || p.at(token.Lt) {
-		// Generic methods: keep generics for explicit type arguments.
+		// 泛型方法 `<T>` 留给显式实参。
 		var mgen []*ast.GenericParam
 		if p.at(token.Lt) {
 			save := p.saveCursor()

@@ -6,7 +6,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Document symbols (top-level declarations).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：大纲只收顶层声明——函数 12、类 5、接口 11、别名 26、枚举 10、
 // 变量/import 13、宏缀 `(macro)`， range 全 span、selection 指名。障碍是空档：

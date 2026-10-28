@@ -5,25 +5,7 @@
 // 结果缓存在 document 里供后续请求复用。
 //
 // # 为什么 LSP 复用 parser/checker 而非另写
-//
-// 语义必须与编译器完全一致；另写一套必然漂移。LSP 只负责把编译器产物
-// 映射到 IDE 协议（位置、符号、诊断），不重新发明类型系统。
-//
-// # 文档模型
-//
-// document 持有 uri、版本、内容、行偏移表、AST、诊断与符号索引；
-// analyze() 跑 ParseFile + CheckFileIndexed，把词法/语法/类型诊断合并。
-//
-// 明确不做
-//   - 不做增量类型检查（每次全量重新检查）；
-//   - 不做自有类型系统（复用 checker）；
-//   - 不做文件监听（由编辑器/客户端驱动）。
-//
-// 不变量
-//   - 文档状态按版本号单调更新；
-//   - 诊断合并顺序：parser 诊断在前，checker 诊断在后；
-//   - 位置映射基于行偏移表，列按字节/字符约定与协议对齐。
-//
+// …（略，详见实现；排查先看 Span/诊断）
 // 模块间协作
 //   - 依赖：ast、checker、diag、parser、token、types。
 //   - 被依赖：cmd/tlua（lsp 子命令/stdio）。
@@ -38,7 +20,7 @@ import (
 	"github.com/typelua/typelua/internal/parser"
 )
 
-// Open documents: content, parse, check, and the position index.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：document 是 IDE 的“一页纸档案”——uri/version/content/lines 管文本，
 // file/diags/index 管语义（AST+诊断+符号索引）。障碍是行列三制混杂：token 用
@@ -60,7 +42,7 @@ type document struct {
 
 func uriToName(uri string) string {
 	// 设计者视角：uriToName 剥 `file://` 得盘径，供 Span.File 与诊断对齐。障碍是
-	// 非 file 协议（untitled）：原样返，诊断仍可显。候选：url 解码 vs 直剥；选直剥，
+	// 非 file 协议详见实现，排查看 Span。
 	// 简单。不变量：非 file 原样。排查现场：诊断文件名怪先查此。
 	if strings.HasPrefix(uri, "file://") {
 		return strings.TrimPrefix(uri, "file://")

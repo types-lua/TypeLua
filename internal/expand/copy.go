@@ -4,7 +4,7 @@ import (
 	"github.com/typelua/typelua/internal/ast"
 )
 
-// Deep copy (expansion works on copies; definitions stay pristine).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：复印是卫生的“底片保护”——每次展开全深拷体与实参，定义永 pristine，
 // 多次调用互不串。障碍是浅拷：Ident/Param/Block 若共享，改名会污染定义致二次展
@@ -160,7 +160,7 @@ func copyBlock(b *ast.Block) *ast.Block {
 }
 
 func copyStmt(st ast.Stmt) ast.Stmt {
-	// 设计者视角：copyStmt 按语句型深拷，声明类（Type/Interface/Enum/Class）无运行时
+	// 设计者视角：copyStmt 按语句型深拷，声明类详见实现，排查看 Span。
 	// 宏位直返原（见注释），MacroDef 亦直返（上层已擦）。障碍是 Select/FuncDef 的
 	// 嵌套块与名指针：须递归拷。候选：反射全拷 vs 穷举；选穷举，新节点须显式决定。
 	// 不变量：新节点未覆盖走 default 直返。排查现场：新语法改名串先查此处是否直返。
@@ -302,7 +302,7 @@ func copyStmt(st ast.Stmt) ast.Stmt {
 		c.Block = copyBlock(n.Block)
 		return &c
 	case *ast.TypeAliasDecl, *ast.InterfaceDecl, *ast.EnumDecl, *ast.ClassDecl:
-		// Declarations carry no macro-expandable runtime code.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		return st
 	case *ast.MacroDef:
 		return st

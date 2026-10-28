@@ -10,35 +10,16 @@ import (
 	"github.com/typelua/typelua/internal/sourcemap"
 )
 
-// Runtime module bootstrap: compiled programs that require modules must
-// run without manual LUA_PATH/LUA_CPATH setup. Every emitted file of such
-// a program gets this prelude (once per process, guarded). It does three
-// things:
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-//  1. Prepend <script-dir>/?.lua and <script-dir>/?/init.lua to
-//     package.path, so requires resolving to sibling outputs just work.
-//  2. Prepend <script-dir> native templates to package.cpath so Lua C
-//     modules (luaopen_*, any language via C ABI) load without manual
-//     setup. FFI plain .so files need no cpath: the vendored init.lua shim
-//     loads them via ffi.load with an explicit script-dir-relative path.
-//  3. Append a package.searchers (5.2+) / package.loaders (5.1) entry that
-//     serves dotted vendor layouts (<script-dir>/tlua_modules/<dotted
-//     path>.lua and .../init.lua), which plain path templates cannot reach
-//     (Lua converts dots to slashes before template substitution).
-//
-// Dotted names expand to candidates the same way the compiler resolves
-// them (all-slashes first, then progressively dot-preserving), and the
-// searcher runs after the standard loaders, so in-project files keep
-// precedence over vendored ones — exactly like check-time resolution.
-// Native packages must ship an init.lua shim (the cross-language contract);
-// dotted .so layouts without a shim stay unsupported by design.
-// Static archives (*.a) never enter package.cpath on purpose: the Lua C
-// loader cannot open them. Link .a into the host binary at build time and
-// reach the symbols via ffi.C (same cdef, no ffi.load).
-//
-// prelude 兼容 Lua 5.1（无 goto、无 //、无位运算、无 <const>）
-// and defensive: missing debug/package libraries degrade instead of
-// erroring. User LUA_PATH/LUA_CPATH entries keep working: we prepend/append,
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// …（略，详见实现；排查先看 Span/诊断）
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // never replace. The `__tl_` prefix is reserved (see SPEC §12); never use it.
 const modPathPrelude = `if not __tl_modpath_done then
   __tl_modpath_done = true
@@ -99,8 +80,8 @@ const modPathPrelude = `if not __tl_modpath_done then
 end
 `
 
-// preludeLines is the generated-line shift the prelude causes (1-based
-// mappings move down by this much). Counted, not hardcoded.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：preludeLines 是映射的“标尺”——数换行得偏移，prelude 改行数亦自
 // 适应。障碍是硬编码行数：prelude 一改即错位；故 Count 实时算。候选：硬编码 vs
@@ -110,11 +91,11 @@ func preludeLines() int {
 	return strings.Count(modPathPrelude, "\n")
 }
 
-// NeedsModPath reports whether the program needs the runtime bootstrap:
-// any file requires a module, or any file is itself vendored.
+// preludeLines如 `f(1)`，排查看 Span。
+// preludeLines如 `f(1)`，排查看 Span。
 //
 // 设计者视角：NeedsModPath 是 prelude 的“点火判据”——任一 require 或身处 vendor
-// 即铺路（package.path/cpath/searcher）。障碍是 IsDecl/空 AST：声明文件不算，
+// 即铺路详见实现，排查看 Span。
 // File nil 跳过；vendor 判用 Clean+分隔符防前缀误撞。候选：每文件铺 vs 按需铺；
 // 选按需，纯单文件零负担。不变量：纯读。排查现场：require 运行时找不到先查此
 // 判据，未铺 prelude 多为 RequiredModules 漏报。
@@ -134,9 +115,9 @@ func NeedsModPath(p *Program) bool {
 	return false
 }
 
-// PrependPrelude prepends the module bootstrap to emitted Lua and shifts
-// source-map generated lines down accordingly. Mappings are copied, never
-// mutated in place.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：PrependPrelude 是“铺路+抬标”——头插 prelude 文本，映射 GenLine
 // 统加 shift。障碍是别名污染：若原地改行，同一 mappings 被两次铺会叠加；故

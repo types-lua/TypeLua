@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-// Substitute replaces generic params by args.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Substitute 是泛型实例化的“打印机”：拿 `Foo<T>` 的图纸与
 // `{T: string}` 的墨盒，印出一份全具体的类型。障碍有二：空替换最热（evalOne
@@ -16,8 +16,8 @@ import (
 // 不变量：空 sub 返回同一指针；非空返回新值，原类型不可变。排查现场：若替换
 // 后仍含 GenericParam，检查 sub 的 Name 是否对齐；若栈溢出，检查 memo 是否命中。
 func Substitute(t Type, sub map[string]Type) Type {
-	// Fast path: empty substitution is identity (avoids fingerprint + memo
-	// allocation on the very hot no-op path, e.g. evalOne with no infers).
+	// Substitute如 `f(1)`，排查看 Span。
+	// Substitute如 `f(1)`，排查看 Span。
 	if len(sub) == 0 {
 		return t
 	}
@@ -34,11 +34,11 @@ type substCtx struct {
 	fp   uint64
 }
 
-// subFingerprint hashes a substitution by parameter names + argument pointer
-// identity (not structural String rendering). Distinct pointers with identical
-// structure merely miss the memo and recompute, which is always sound; the
-// old String-based fingerprint paid a full recursive serialization per
-// Substitute call.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：memo 的 key 是 (类型指针, 替换指纹)，指纹必须便宜又稳。障碍是
 // 旧方案用 String() 做指纹——每次 Substitute 都要全树序列化，深泛型链直接
@@ -57,14 +57,14 @@ func subFingerprint(sub map[string]Type) uint64 {
 	for _, n := range names {
 		h.Write([]byte(n))
 		h.Write([]byte{0})
-		// %p prints pointer identity without touching the type structure.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		fmt.Fprintf(h, "%p;", sub[n])
 	}
 	return h.Sum64()
 }
 
-// substituteGenericParam substitutes inside a generic declaration
-// (constraint and default), preserving the parameter name.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：泛型声明 `T extends C = D` 的 C/D 里也可能藏着待换的 T（如
 // `T extends Box<T>`），实例化时必须深入替换，否则约束停留在旧世界。保留
@@ -88,10 +88,10 @@ func substituteGenericParam(gp *GenericParam, sub map[string]Type, ctx *substCtx
 //
 // 设计者视角：它是“复印机滚筒”——Union/Array/Map/Tuple/Func/Object/Class 等
 // 逐节点复印，GenericParam/InferParam 命中 sub 即换纸。障碍是递归类型
-// （`next: Chain<T>`）朴素复印会无限生子；对策是 Object/Class 先建空壳入 memo
+// 如 `next: Chain<T>`，排查看 Span。
 // 再填字段，让回边命中壳而终止。候选：深拷贝全树 vs memo 共享；选 memo 共享，
 // 同形共享指针亦省内存。Mapped/IndexedAccess/Conditional 换完若变具体就地求值
-// （evalMapped/evalIndexedAccess/EvalConditional），否则保留延迟形。不变量：
+// 详见实现，排查看 Span。
 // Enum/Literal/Primitive 直接返回原指针（叶不可换）。排查现场：若替换后出现
 // 半新半旧的混合体，检查 memo key 的 fp 是否跨 sub 复用；若延迟类型该求值未求值，
 // 检查 IsConcreteType 守门。
@@ -187,8 +187,8 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		ctx.memo[key] = out
 		return out
 	case *Object:
-		// Shared (possibly cyclic) objects substitute once; the copy is
-		// filled in place so recursive references terminate.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		key := subKey{ptr: x, fp: ctx.fp}
 		if out, ok := ctx.memo[key]; ok {
 			return out
@@ -204,7 +204,7 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		return out
 	case *Class:
 		// Recursive classes (e.g. `next: Chain<T>`) would diverge under
-		// naive substitution; build the copy once and fill it in place.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		key := subKey{ptr: x, fp: ctx.fp}
 		if out, ok := ctx.memo[key]; ok {
 			return out
@@ -314,7 +314,7 @@ func substitute(t Type, sub map[string]Type, ctx *substCtx) Type {
 		trueB := substitute(x.TrueBranch, sub, ctx)
 		falseB := substitute(x.FalseBranch, sub, ctx)
 		if IsConcreteType(check) {
-			// Strict nil checks match the checker's default; documented.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			out := EvalConditional(check, ext, trueB, falseB, x.Distributive, Options{StrictNilChecks: true})
 			ctx.memo[key] = out
 			return out

@@ -7,26 +7,8 @@ import (
 
 // ---------- cursor helpers ----------
 
-// savedCursor 捕获试探解析的完整 Token 流位置：索引 pos 加上 consumeGt
-// 拆分产生的 pending 余量。pending 队列被复制，避免后续拆分别名快照。
-//
-// 游标物理布局（单槽 + 待消费队列）：
-//
-//	toks []token.Token  (只读 Token 流)
-//	┌────┬────┬────┬────┬────┐
-//	│ 0  │ 1  │ 2  │... │ n-1│
-//	└────┴────┴────┴────┴────┘
-//	           ▲
-//	           │ pos
-//	pending []token.Token  (consumeGt 拆分余量，优先消费)
-//	┌────┬────┐
-//	│ >  │ =  │  (例如 >= 拆成 '>' '=')
-//	└────┴────┘
-//	   ▲
-//	   │ next() 先吃这里
-//
-// cur()/peek()/next() 都“pending 优先、toks 兜底”；saveCursor 复制 pending，
-// restoreCursor 整体回退，实现试探解析零副作用。
+// savedCursor 存试探快照：pos 索引+pending 余量（深拷防别名），供 save/restore 零副作用悔棋。
+// 布局：toks 只读流（pos 指针）+pending 优先队列（如 `>=` 拆 `>`+`=`），cur/peek/next 皆 pending 优先。
 type savedCursor struct {
 	pos     int
 	pending []token.Token
@@ -150,7 +132,7 @@ func (p *Parser) spanFrom(start token.Token) token.Span {
 	end := p.cur().Span
 	if p.pos > 0 {
 		end = p.toks[p.pos-1].Span
-		// end.End is end of last consumed.
+		// 取料架上最后吃掉件的尾，如连吃三词即第三词尾。
 	}
 	return token.Span{Start: start.Span.Start, End: end.End, File: p.file}
 }
@@ -165,16 +147,7 @@ func (p *Parser) spanBetween(start token.Token, end token.Token) token.Span {
 	return token.Span{Start: start.Span.Start, End: end.Span.End, File: p.file}
 }
 
-// consumeGt 消费单个 '>'，必要时拆分 >> / >=。
-// Token 流从不原地修改：拆分余量追加到 p.pending（最多两个：'>' 与 '='），
-// 试探解析可通过 saveCursor/restoreCursor 精确恢复。合成 Token 复用原 Token 的 Span。
-//
-// token 切片从不被修改：拆分的余下部分排队进入 p.pending（`>=` 最多两个
-// token：`>` 然后 `=`），因此推测式解析可通过 saveCursor/restoreCursor 精确恢复。
-// 合成 token
-// reuse the original token's span, matching the old slice-splicing behavior.
-//
-// 设计者视角：consumeGt 是泛型尖括号的“拆弹器”——lexer 为移位/比较把 `>>`/`>=`
+// consumeGt 是泛型拆弹器：`>>` 拆两 `>`，`>=` 拆 `>`+`=`，余量进 pending，合成 Token 复用原 Span。
 // 焊成一颗 Token，但 `F<A>>` / `F<A>=v` 在类型语境里必须是两个 '>' 或 '>'+'='。
 // 障碍是拆了就回不去：老代码曾直接改 toks 切片，快照恢复直接失效；现把余量排进
 // pending（`>>` 余一个 '>'，`>=` 余 '>'+'='），原流只动 pos，悔棋只需倒 pending。
@@ -207,9 +180,7 @@ func (p *Parser) consumeGt() bool {
 		p.pending = append(p.pending, token.Token{Kind: token.Gt, Literal: ">", Span: c.Span})
 		return true
 	case token.Ge:
-		// >= inside generics => '>' then '=' (e.g. `F<A>=v` lexed together).
-		// Like the old slice-splicing code, both parts stay pending: the
-		// caller sees '>' next (outer levels eat it), then '='.
+		// 泛型内 `>=` 拆 `>`+`=`，如 `F<A>=v` 余 `=` 留给赋值。
 		p.pos++
 		p.pending = append(p.pending,
 			token.Token{Kind: token.Gt, Literal: ">", Span: c.Span},

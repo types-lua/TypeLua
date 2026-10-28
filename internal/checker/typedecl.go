@@ -8,17 +8,17 @@ import (
 // 设计者视角：类型声明在 collectTypes 阶段已登记；此处仅 resolve 以
 // 触发错误与缓存，并为 enum 生成运行时表值。
 
-// Type declaration checking (aliases, interfaces, enums).
+// 类型详见实现，排查看 Span。
 //
 // 设计者视角：类型声明在 collectTypes 已占座，此处只“点火”——resolve 触发错误与
-// 缓存（alias/interface），enum 另产运行时表值（值/类型双记+成员桩）。障碍是重复
+// 缓存详见实现，排查看 Span。
 // 声明：lookup 指针须与本节点同（Entry.alias/iface/enumDecl 归属），否则为副本
 // 直接退（错已报）。取舍：声明体不另验（resolve 即验）。排查现场：前向引用取空
 // 先查 collectTypes 是否登记。
 
 // ---------- type declarations ----------
 
-// checkTypeAlias triggers resolution (errors and cycles surface here).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkTypeAlias 是别名的“点火器”——lookup 到本节点 Entry 即 resolve
 // （错与环在 entry 层报+缓存）。无他事。排查现场：别名环未报先查 resolving 守卫。
@@ -27,11 +27,11 @@ func (c *Checker) checkTypeAlias(n *ast.TypeAliasDecl) {
 	if e == nil {
 		return
 	}
-	// Resolve to surface errors + cycles.
+	// 解析，排查先看 Span/诊断。
 	_ = c.resolveTypeEntry(e, nil)
 }
 
-// checkInterface records members then triggers resolution.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkInterface 多一步“钉桩”——FuncType 字段记 method 余记 field，
 // 再 resolve（继承合并与重字段错在 buildInterface 报）。障碍是方法简写识别：
@@ -54,7 +54,7 @@ func (c *Checker) checkInterface(n *ast.InterfaceDecl) {
 	_ = c.resolveTypeEntry(e, nil)
 }
 
-// checkEnum resolves the enum and defines its runtime table value.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkEnum 是枚举的“双生”——类型侧 resolve 取 Enum，值侧 Object 表
 // （成员字面为字段）落值册，双记 Entry（见 recordDefEntry），成员逐桩。障碍是
@@ -66,7 +66,7 @@ func (c *Checker) checkEnum(n *ast.EnumDecl) {
 		return
 	}
 	et := c.resolveTypeEntry(e, nil)
-	// Define runtime value: enum table.
+	// 定义，排查先看 Span/诊断。
 	if _, ok := et.(*types.Enum); ok {
 		fields := map[string]types.Field{}
 		for name, m := range et.(*types.Enum).Members {

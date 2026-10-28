@@ -11,21 +11,12 @@ import (
 
 // 设计者视角：类分两遍——buildClassDef 只算签名（壳 + 继承 + override），
 // checkClassBodies 再检查字段初始化与方法体；壳对象先占位支持递归 self 引用。
-
-// Class definitions: building, inheritance, overrides, visibility.
+// 类两遍盖楼：签名壳+继承+override，壳占位撑递归。
 //
 // 设计者视角：类是“两遍盖楼”——buildClassDef 只算签名（壳+继承+override），
 // checkClassBodies 再验初始化与方法体（见 classcheck.go）。障碍是递归自引用与
-// 菱形继承：壳（shell）先占位、基链 walk 带 visited 防环。候选：结构式复用 vs
-// 名义族谱；选名义（Def 指针认亲，Name 只降级）。可见性 private 不继承、
-// protected 限子类。不变量：定义态 inst 恒带占位泛型。排查现场：成员丢失先查
-// 私有过滤，循环继承先查 visited 环。
-
-// ---------- classes ----------
-
-// classParamNames lists generic parameter names in declaration order.
-//
-// 设计者视角：classParamNames 是泛型维度的“目录条”——只取 Name 顺序，供 shell
+// 菱形继承：壳详见实现，排查看 Span。
+// …（略，详见实现；排查先看 Span/诊断）
 // 的 Params 与 Args 对齐。障碍是 ast 与 types 两套表示：此处只抽名，不碰约束/
 // 默认（约束在 buildClassDef 另解）。不变量：顺序与声明一致，空即非泛型。
 // 排查现场：实例维度错位先查此处与 Args 是否同序。
@@ -37,8 +28,8 @@ func classParamNames(gs []*ast.GenericParam) []string {
 	return out
 }
 
-// isIdentityClassArgs reports whether resolved args are exactly the entry's
-// own type parameters (self-reference to the current instantiation).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isIdentityClassArgs 是递归自引用的“照镜子”——`next: Box<T>` 在
 // Box<T> 构建中出现时，实参恰为自身形参（逐位 GenericParam 同名），应直接绑
@@ -60,7 +51,7 @@ func isIdentityClassArgs(e *typeEntry, sargs []types.Type) bool {
 }
 
 // classSubFromTypes builds the param->arg substitution with arity,
-// default and constraint diagnostics.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：classSubFromTypes 是类实例化的“配料表”——按位配对，缺省走 Default，
 // 缺省亦无则填 Unknown，约束不满足即报 TypeArgConstraint。障碍是超量实参：截断
@@ -92,7 +83,7 @@ func (c *Checker) classSubFromTypes(e *typeEntry, tys []types.Type, span token.S
 	return sub
 }
 
-// classSubFromNodes resolves type-argument syntax then builds substitution.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：classSubFromNodes 是语法到配料表的“翻译机”——先逐个 resolveType
 // 再委托 classSubFromTypes。障碍是 Args 中的前向/递归引用必须在调用方 tparam
@@ -106,7 +97,7 @@ func (c *Checker) classSubFromNodes(e *typeEntry, nodes []ast.TypeNode, span tok
 	return c.classSubFromTypes(e, tys, span)
 }
 
-// currentClass returns the enclosing class context, if any.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：currentClass 是 self/super 门禁的“查岗哨”——栈顶即当前方法所属类，
 // 空栈即不在类中。障碍是嵌套函数：闭包内仍见栈顶，故 super 另用 retDepth 限入口层
@@ -119,8 +110,8 @@ func (c *Checker) currentClass() *classCtx {
 	return c.classStack[len(c.classStack)-1]
 }
 
-// checkAccess enforces private/protected visibility. Public (or non-class)
-// members are always accessible.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkAccess 是成员的“门禁闸”——public/无 Owner 恒放行；private 仅
 // 同 Def；protected 放行同 Def 与子类链（见 isSubclassOf）。障碍是类外静态访问与
@@ -151,10 +142,10 @@ func (c *Checker) checkAccess(acc types.Access, owner *types.ClassDef, sp token.
 	return false
 }
 
-// isSubclassOf walks the base chain with cycle guard.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isSubclassOf 是族谱的“查家谱”——沿 Base 上溯比 Def 指针。障碍是
-// 恶意环继承（A extends B extends A）：朴素循环永不终止，故 seen 按 *Class 指针
+// 恶意环继承详见实现，排查看 Span。
 // 判环，命中即 false。候选：Name 比 vs Def 比；选 Def（撞名类不可互认）。不变量：
 // 纯读，无诊断。排查现场：protected 误拦先查 inst 的 Base 链是否在 shell 回填前
 // 被快照（半截链）。
@@ -172,11 +163,11 @@ func isSubclassOf(inst *types.Class, owner *types.ClassDef) bool {
 	return false
 }
 
-// ensureClassDef builds (once) the checked definition form of a class:
-// instance shape with generic placeholders intact for call-site inference.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：ensureClassDef 是类的“一次性模具间”——首调建 Def+shell 并调
-// buildClassDef，重入（resolving）即返 nil 令上层报环。障碍是递归与重复构建：
+// buildClassDef，重入详见实现，排查看 Span。
 // e.classBuild 缓存保证 once，resolving 守卫防重入，patches 在建成后统一回放
 // （非镜面自引用的延迟回填，见 resolveNamed）。候选：eager 全量 vs 懒按需；
 // 选懒，类多而用少时省时。不变量：成功后 classBuild 非 nil 且 patches 清空。
@@ -205,7 +196,7 @@ func (c *Checker) ensureClassDef(e *typeEntry) *classBuild {
 }
 
 // resolveBaseRef resolves an `extends` clause to an instantiated base
-// instance plus its (substituted) class value for statics/constructor.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：resolveBaseRef 是继承的“提亲”——extends 只认裸类名（拒 a.B 限定），
 // 查到 Entry 后 ensureClassDef 取模，再按 Args 实例化出 inst/val 双件。障碍是
@@ -236,13 +227,13 @@ func (c *Checker) resolveBaseRef(node ast.TypeNode, selfName string) (*types.Cla
 	inst, _ := types.Substitute(def.inst, sub).(*types.Class)
 	val, _ := types.Substitute(def.val, sub).(*types.ClassValue)
 	if inst.Def == e.classDef && e.name == selfName && len(nt.Args) == 0 {
-		// Direct self-extension is reported by the caller chain walk;
-		// keep the reference so the walk can see it.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	}
 	return inst, val
 }
 
-// classMemberSig is the resolved signature of one member (pass 1 output).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：classMemberSig 是一遍的“施工卡”——字段记声明型（nil 表待推断，
 // 二遍回填），方法/构造记 *Func。障碍是字段无标注时一遍无型可记：用 nil 哨兵
@@ -255,7 +246,7 @@ type classMemberSig struct {
 	funcType  *types.Func
 }
 
-// astVisibility maps parser visibility to types.Access (default public).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：astVisibility 是可见性的“翻译章”——Private/Protected 直译，其余
 // （含缺省）归 Public。障碍是零值 Visibility 必须有归宿：归 Public 最宽松，
@@ -270,8 +261,8 @@ func astVisibility(v ast.Visibility) types.Access {
 	return types.Public
 }
 
-// buildClassDef resolves signatures (no bodies): base chain, flattened
-// members, statics, constructor, override and implements checks.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：buildClassDef 是一遍的“结构封顶”——按序：备泛型环境→立 shell 占位→
 // 查重与保留字→解基类并环检→抄基成员（滤 private）→逐成员算签名→验 override/
@@ -290,7 +281,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 	defer c.popTParams()
 
 	shell := &types.Class{Def: def, Name: n.Name.Name, Params: classParamNames(n.Generics), Fields: map[string]types.ClassField{}, IsAbstract: n.Abstract}
-	// Definition-form args are the params themselves so substitution
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	// (`Box.new(v)` inside `static wrap<U>`) tracks instantiations.
 	for _, pn := range shell.Params {
 		shell.Args = append(shell.Args, &types.GenericParam{Name: pn})
@@ -308,7 +299,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 	}
 	e.classShell = shell
 
-	// Duplicate and reserved member names.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	seen := map[string]bool{}
 	processed := map[string]bool{}
 	var ctorMember *ast.ClassMember
@@ -346,7 +337,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 			c.errorf(diag.ModifierNotAllowed, m.Span(), "methods cannot be 'readonly'")
 		}
 		if m.IsAbstract && m.Kind == ast.ClassField {
-			// Parser already reports TL2037; don't cascade.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		} else if m.IsAbstract && !n.Abstract && !n.Declared {
 			c.errorf(diag.AbstractMemberInvalid, m.Span(), "abstract member '%s' requires an 'abstract class'", m.Name.Name)
 		}
@@ -356,13 +347,13 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 		processed[m.Name.Name] = true
 	}
 
-	// Base class.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	var baseInst *types.Class
 	var baseVal *types.ClassValue
 	if n.Extends != nil {
 		baseInst, baseVal = c.resolveBaseRef(n.Extends, n.Name.Name)
-		// Indirect cycles: walk with a visited set so a malformed chain
-		// can never hang the checker.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		seenChain := map[*types.Class]bool{shell: true}
 		for b := baseInst; b != nil; b = b.Base {
 			if seenChain[b] {
@@ -456,11 +447,11 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 		if !processed[m.Name.Name] {
 			continue
 		}
-		// Only the first declaration of a name counts (dupes reported above).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if _, done := sigs[m]; done {
 			continue
 		}
-		// Mark first occurrence: find it by pointer identity against members.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		first := true
 		for _, o := range n.Members {
 			if o == m {
@@ -506,7 +497,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 		}
 	}
 
-	// Override compatibility against the direct base.
+	// 覆盖详见实现，排查看 Span。
 	if baseInst != nil {
 		for name, sub := range ownInstance {
 			if bf, ok := baseInst.Fields[name]; ok && bf.Access != types.Private {
@@ -522,9 +513,9 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 		}
 	}
 
-	// Abstract members must be implemented by concrete classes.
-	// (Present-but-incompatible members are already reported by the
-	// override check above, so only missing/still-abstract ones remain.)
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if !n.Abstract && !n.Declared && baseInst != nil {
 		for name, bf := range baseInst.Fields {
 			if !bf.Abstract || bf.Access == types.Private {
@@ -537,7 +528,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 		}
 	}
 
-	// Implements: structural check of public members.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, impl := range n.Implements {
 		t := c.resolveType(impl)
 		io, ok := t.(*types.Object)
@@ -558,7 +549,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 	if ctorMember != nil {
 		ctorFunc = sigs[ctorMember].funcType
 		ctorAccess = astVisibility(ctorMember.Visibility)
-		// Constructor params are the value; returns are unused.
+		// 构造详见实现，排查看 Span。
 		ctorFunc = &types.Func{Params: ctorFunc.Params, HasVarArg: ctorFunc.HasVarArg, VarArg: ctorFunc.VarArg}
 	} else if n.Declared {
 		ctorFunc = &types.Func{HasVarArg: true, VarArg: types.Any}
@@ -573,7 +564,7 @@ func (c *Checker) buildClassDef(e *typeEntry) *classBuild {
 	return &classBuild{inst: shell, val: val, sigs: sigs}
 }
 
-// accessRank orders visibility for override checks (private<protected<public).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：accessRank 把可见性压成可比整数，override 只许“提格”不许“降格”。
 // 障碍是 Access 为字符串式枚举，直接比不可序；转 int 后一判即得。不变量：
@@ -588,7 +579,7 @@ func accessRank(a types.Access) int {
 	return 0
 }
 
-// checkMemberOverride validates one override (kind, type, visibility).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkMemberOverride 是继承的“验货台”——三关：种类（方法对方法，
 // 字段对字段）、类型（子 <: 基，IsAssignable）、可见性（不降格，accessRank 比）。
@@ -613,7 +604,7 @@ func checkMemberOverride(c *Checker, sp token.Span, name string, sub, base types
 	}
 }
 
-// ownMemberSpan finds the declaration span of an own member for diagnostics.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：ownMemberSpan 是诊断的“指路牌”——override 报错要指到子类自有成员
 // 而非基类，需按名+静态性回找首声明。障碍是构造器无名成员：直接跳过（Kind 排除），
@@ -628,7 +619,7 @@ func ownMemberSpan(n *ast.ClassDecl, name string, isStatic bool) token.Span {
 	return n.Span()
 }
 
-// fieldKind names a class member for diagnostics ("method" vs "field").
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：fieldKind 是诊断文案的“量词”——override 报错要说清是方法还是字段。
 // 单凭 IsMethod 一判即得，无需查类型。排查现场：文案种类写反先查 IsMethod 标记

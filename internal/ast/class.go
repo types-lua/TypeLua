@@ -4,11 +4,11 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Class declaration nodes.
+// 类声明节点：`class C {…}`，成员 Span 各管一段。
 
 // ---------- Classes ----------
 
-// Visibility 表示类成员的可见性修饰（public/private/protected），用于检查器与发射器的访问控制。
+// Visibility 表示类成员的可见性修饰详见实现，排查看 Span。
 type Visibility int
 
 const (
@@ -42,10 +42,10 @@ type ClassDecl struct {
 
 func (*ClassDecl) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：ClassDecl 的 Span 覆盖整个 `class ... end`，是折叠、跳转、报错的
-// 统一门牌号；成员各自另有小门牌（ClassMember.S），大小坐标各司其职，避免“一报错
+// 统一门牌号；成员各自另有小门牌详见实现，排查看 Span。
 // 就圈整类”。排查现场：若类报错只圈到类名，检查 parser 是否忘了把 end 纳入 S。
 func (n *ClassDecl) Span() token.Span { return n.S }
 
@@ -76,10 +76,10 @@ type ClassMember struct {
 	IsStatic   bool
 	IsReadonly bool
 	IsAbstract bool
-	// Field:
+	// 字段区：`name: T = init`，无 type 无 init 即补 any。
 	FieldType TypeNode // nil => infer from Init
 	Init      Expr     // nil if none
-	// Method / constructor:
+	// 方法/构造区：`m(x): R`，declare/abstract 无体。
 	Generics   []*GenericParam
 	Params     []*Param
 	HasVarArg  bool
@@ -91,7 +91,7 @@ type ClassMember struct {
 	S          token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：成员 Span 只圈自身声明（含修饰符与签名），不含前后逗号与换行，
 // 让“私有字段泄漏”“抽象方法有体”等诊断能精准下划线。Body 的块 Span 另计，
@@ -111,7 +111,7 @@ func (n *ClassMember) IsConstructor() bool { return n.Kind == ClassConstructor }
 // GenericParam 表示泛型参数声明（名称 + 约束 + 默认值）；S 为源码 Span，用于诊断与定位。
 //
 // 设计者视角：泛型参数是“类型的形参”，长相酷似函数 Param 但活在类型层：Constraint
-// 是上限（extends），Default 是缺省实参，两者皆可 nil，好比函数的可选参数。障碍是
+// 是上限详见实现，排查看 Span。
 // 约束与默认值的前后依赖（Default 必须满足 Constraint），但 AST 只存原文不验证，
 // 把“是否合法”留给 checker 的实例化阶段，保持语法层无类型计算。不变量：Name 永非
 // nil；Constraint/Default 为 nil 即无约束/无默认。排查现场：若泛型报错无位置，检查
@@ -123,7 +123,7 @@ type GenericParam struct {
 	S          token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：泛型参数的 Span 覆盖 `Name extends C = D` 全段而非仅 Name，让
 // “约束不满足默认值”“循环默认”等诊断能圈出整段因果链。parser 预拼 S，checker

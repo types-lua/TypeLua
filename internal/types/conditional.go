@@ -9,7 +9,6 @@ package types
 //
 // 物理布局：
 //
-//	Conditional
 //	├── Check        Type   // 被检查的类型
 //	├── Extends      Type   // 约束/模式（可含 infer）
 //	├── TrueBranch   Type   // 命中分支
@@ -54,7 +53,7 @@ func (t *Conditional) stringSeen(seen map[Type]bool) string {
 //
 // 设计者视角：它是条件类型的“闸门”，好比微波炉门没关好就不启动——Check 里
 // 还含 GenericParam/InferParam/Ref 就坚决不算，原样退回 (c,false)，
-// 调用方（assignable/subst）见 false 即走 permissive 放行。障碍是过早求值会
+// 调用方详见实现，排查看 Span。
 // 把泛型函数的条件结果固化（如 `T extends string ? A : B` 在 T 未定时算成 B）。
 // 不变量：返回 true 时 Type 必为求值后类型，false 时必为原 c。排查现场：
 // 该算没算，先查 IsConcreteType 是否误判含参；不该算却算了，查守门是否被绕过。
@@ -106,8 +105,8 @@ func evalOne(check, extends, trueB, falseB Type, opt Options) Type {
 	return falseB
 }
 
-// matchInfer matches a concrete source against a pattern, collecting infer
-// bindings. The seen map makes matching coinductive over recursive types.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：matchInfer 是“模式猎手”——拿具体 source 去套含 infer 的 pattern
 // （如 `T extends { x: infer U }`），命中即把 U 绑到实际类型。障碍有三：
@@ -135,7 +134,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		bindings[ip.Name] = source
 		return true
 	}
-	// Unconstrained unknowns match anything without binding.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if pattern.Kind() == KAny {
 		return true
 	}
@@ -157,24 +156,24 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 	}
 	seen[key] = true
 
-	// Bare type parameters only match themselves here (concrete sources
-	// never satisfy an unbound parameter).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if _, ok := pattern.(*GenericParam); ok {
-		// Fast path first (pointer identity), then structural fallback.
-		// GenericParam copies print differently per copy, so compare names.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if sg, ok := source.(*GenericParam); ok && sg.Name == pattern.(*GenericParam).Name {
 			return true
 		}
 		return source.String() == pattern.String()
 	}
-	// Nested conditionals in pattern position: evaluate when possible.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if pc, ok := pattern.(*Conditional); ok {
 		if r, ok := TryEvalConditional(pc, opt); ok {
 			return matchInfer(source, r, bindings, seen, opt)
 		}
 		return false
 	}
-	// Mapped and indexed patterns evaluate when concrete.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if pm, ok := pattern.(*Mapped); ok {
 		if r, ok := TryEvalMapped(pm, opt); ok {
 			return matchInfer(source, r, bindings, seen, opt)
@@ -188,7 +187,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		return false
 	}
 
-	// Literals match identical literals or via their base.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if sl, ok := source.(*Literal); ok {
 		if pl, ok := pattern.(*Literal); ok {
 			return sl.Value == pl.Value
@@ -199,7 +198,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		return false
 	}
 
-	// Primitives (with the integer/float <: number lattice).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if isPrim(source) && isPrim(pattern) {
 		return primAssignable(source.(*Primitive), pattern.(*Primitive))
 	}
@@ -207,7 +206,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		return false
 	}
 
-	// Unions: source union requires all members; pattern union needs one.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if su, ok := source.(*Union); ok {
 		for _, m := range su.Types {
 			if !matchInfer(m, pattern, bindings, seen, opt) {
@@ -218,7 +217,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 	}
 	if pu, ok := pattern.(*Union); ok {
 		for _, m := range pu.Types {
-			// Tentative bindings per member: keep the first that matches.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			probe := copyBindings(bindings)
 			if matchInfer(source, m, probe, seen, opt) {
 				for k, v := range probe {
@@ -230,7 +229,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		return false
 	}
 
-	// Intersections: source needs one side; pattern needs all sides.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if si, ok := source.(*Intersection); ok {
 		for _, m := range si.Types {
 			if matchInfer(m, pattern, bindings, seen, opt) {
@@ -248,7 +247,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		return true
 	}
 
-	// Optionals and parens are already normalized (unions); void/nil below.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if pattern.Kind() == KNil || pattern.Kind() == KVoid {
 		return source.Kind() == KNil || source.Kind() == KVoid
 	}
@@ -256,7 +255,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		return false
 	}
 
-	// Arrays: tuples spread element-wise into the element pattern.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if pa, ok := pattern.(*Array); ok {
 		switch s := source.(type) {
 		case *Array:
@@ -291,7 +290,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		return false
 	}
 
-	// Functions: returns covariantly, params pairwise source-to-pattern.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if pf, ok := pattern.(*Func); ok {
 		sf, ok := source.(*Func)
 		if !ok {
@@ -334,7 +333,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		return true
 	}
 
-	// Objects/classes/maps: every required pattern field must match.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if po, ok := pattern.(*Object); ok {
 		return matchObjectFields(source, po.Fields, bindings, seen, opt)
 	}
@@ -347,8 +346,8 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 			matchInfer(sm.Value, pm.Value, bindings, seen, opt)
 	}
 	if _, ok := pattern.(*Class); ok {
-		// Nominal patterns match along the source chain; bindings flow
-		// through the first matching ancestor's arguments.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		sc, ok := source.(*Class)
 		if !ok {
 			return false
@@ -356,7 +355,7 @@ func matchInfer(source, pattern Type, bindings map[string]Type, seen map[visit]b
 		return matchClassPattern(sc, pattern.(*Class), bindings, seen, opt)
 	}
 
-	// Enum pattern: source must be one of its members.
+	// 枚举详见实现，排查看 Span。
 	if pe, ok := pattern.(*Enum); ok {
 		for _, m := range pe.Members {
 			if matchInfer(source, m, bindings, seen, opt) {
@@ -418,7 +417,7 @@ func isRestElem(t Type) bool {
 
 // restTarget unwraps `...T` (or returns t unchanged). When T is an array
 // type (the `...rest: unknown[]` tuple idiom), elements match against its
-// element type, mirroring function varargs.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：`...T` 的 T 若是数组（如 `...rest: unknown[]`），比较的是元素
 // 类型而非数组本身——镜像函数 vararg 语义。候选：直接比数组 vs 拆元素；选拆
@@ -461,8 +460,8 @@ func matchTupleElems(src, pat []Type, bindings map[string]Type, seen map[visit]b
 	return i == len(src)
 }
 
-// matchObjectFields matches a source against required pattern fields.
-// Sources may be objects, class instances (public view), or string-keyed maps.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：对象模式是“查户口”：pattern 的每个必填字段都必须在 source 找到
 // 且 matchInfer 通过。source 三态分流——Object 查 Fields/Indexer、Class 只看
@@ -523,8 +522,8 @@ func matchObjectFields(source Type, fields map[string]Field, bindings map[string
 	return true
 }
 
-// matchClassPattern matches nominally: the source must be the same class or
-// a subclass, with compatible type arguments flowing into infer positions.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：类模式是“认祖归宗”：先沿 source.Base 链找同 Def 祖先（防环用
 // visited），找到后再把实参逐位 matchInfer，让 infer 从泛型实参里取数。

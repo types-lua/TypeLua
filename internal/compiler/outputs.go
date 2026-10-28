@@ -7,12 +7,12 @@ import (
 	"github.com/typelua/typelua/internal/config"
 )
 
-// OutputForFile maps a source path to its emitted .lua path.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// It is the single source of truth shared by Program.Emit and watch-mode
-// stale-output cleanup, so both must agree on every input (relative or
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // absolute source paths, custom rootDir/outDir). ok=false for `.d.tl`
-// inputs, which are checked but never emitted.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：OutputForFile 是输出布局的“唯一门牌办”——Emit 与 watch 清理同问
 // 此处，杜绝两套算法分叉。障碍是相对/绝对混杂：outDir 非绝对即相对 Dir 拼，

@@ -4,7 +4,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Statement nodes.
+// 语句详见实现，排查看 Span。
 
 // ---------- Statements ----------
 
@@ -21,7 +21,7 @@ type ReturnStmt struct {
 
 func (*ReturnStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Return 的 S 从 return 关键字到末表达式尾，空返回即关键字本身；
 // 调用点元数不匹配圈整段，缺返回值圈关键字。排查现场：若 return 高亮飞到块尾 end，
@@ -38,7 +38,7 @@ type EmptyStmt struct{ S token.Span }
 
 func (*EmptyStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：EmptyStmt 的 Span 即分号/空位单点，诊断默认忽略它，避免“空语句错误”
 // 刷屏。排查现场：若空语句被圈红，检查 parser 是否误报而非 AST 之过。
@@ -57,7 +57,7 @@ type ExprStmt struct {
 
 func (*ExprStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：ExprStmt 的 S 即内层调用全段，副作用诊断圈整句。排查现场：若调用语句
 // 报错只圈函数名，检查是否用了 Func 子 Span 而非本 S。
@@ -67,7 +67,7 @@ func (n *ExprStmt) Span() token.Span { return n.S }
 //
 // 设计者视角：多重赋值是 Lua 的“拉链对齐”——Targets 与 Values 按位拉合，多退少补
 // （末值多返回展开、缺值补 nil），语义由 checker/emitter 按 Lua 规则消化，AST 只保序
-// 搬运。Targets 合法性（IsLValue）由 parser 在 `=` 处一次验明，后续阶段不再复验。
+// 搬运。Targets 合法性如 `=`，排查看 Span。
 // 不变量：Targets 永非空。排查现场：若左右元数诊断错位，检查逗号收集时 Targets/Values
 // 是否等长切片错配，而非类型本身。
 type AssignStmt struct {
@@ -78,7 +78,7 @@ type AssignStmt struct {
 
 func (*AssignStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Assign 的 S 从首目标到末值尾，左右不匹配圈整句，单个目标非法圈该目标
 // 子 Span。排查现场：若赋值报错圈到等号，检查子 Span 是否丢失而回退到整句。
@@ -102,7 +102,7 @@ type LocalAssign struct {
 
 func (*LocalAssign) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：LocalAssign 的 S 从 local 到末值/末类型尾，未初始化变量的 S 止于名字尾，
 // 让“未使用局部变量”仍有坐标。排查现场：若注记类型报错圈到变量名，检查是否误用本 S
@@ -125,7 +125,7 @@ type LocalFuncDef struct {
 
 func (*LocalFuncDef) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：LocalFuncDef 的 S 覆盖 `local function f ... end` 全段，名字错误圈 Name，
 // 体内错误圈 Func.Body——大小坐标分工。排查现场：若函数体重构折叠错位，检查 S.End 是否
@@ -150,21 +150,14 @@ type DeferStmt struct {
 
 func (*DeferStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Defer 的 S 从 defer/errdefer 关键字到调用尾，关键字拼错圈首词，调用
 // 参数错圈 Call 子段。排查现场：若 defer 被当普通标识符，检查语句首试探是否后接
 // Call 起始（`(` / 标识符调用）。
 func (n *DeferStmt) Span() token.Span { return n.S }
 
-// ImportStmt is require sugar:
-//
-//	import "path"                 (side-effect require)
-//	import Name from "path"       (local binding, any)
-//	import Name: Type from "path" (annotated binding)
-//
-// It desugars to `local Name = require("path")` (bare require for the
-// side-effect form); `import` stays a plain identifier elsewhere.
+// ImportStmt 三档糖：`import "p"` 副作用、`import N from "p"` 绑 any、`import N:T from "p"` 带型，皆脱糖为 require。
 //
 // 设计者视角：import 是 require 的“三档糖衣”——副作用档 Name 为 nil 只跑 require，
 // 绑定档 Name 非空落为本地量，注记档 Type 非空再叠类型。障碍同样是软关键字：非句首
@@ -181,7 +174,7 @@ type ImportStmt struct {
 
 func (*ImportStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Import 的 S 覆盖整句 import，便于模块未找到时圈整行；Path/Name 各有子 Span
 // 做精确定位。排查现场：若缺模块报错飞到文件头，检查 S 是否含 Path 区间。
@@ -202,13 +195,12 @@ type FuncDefStmt struct {
 
 func (*FuncDefStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：FuncDef 的 S 从 function 到 end，落点错误圈 Name，体内错误圈 Func.Body。
 // 排查现场：若全局函数污染检查误报，检查 Name.Prefix 首元是否为 _G 隐式。
 func (n *FuncDefStmt) Span() token.Span { return n.S }
 
-// FuncName is a.b.c or a.b:c
 // FuncName 表示函数定义的目标名（a.b.c 或 a.b:c）；S 为源码 Span，用于诊断与定位。
 //
 // 设计者视角：FuncName 把“点路径 + 可选冒号方法”拆成 Prefix 切片与 Method 指针：
@@ -222,7 +214,7 @@ type FuncName struct {
 	S      token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：FuncName 的 S 覆盖 `a.b:c` 全路径，逐段 Ident 另有小坐标，未定义字段
 // 圈到对应段而非整路径。排查现场：若路径报错圈不全，检查 S.End 是否取到末段/Method 尾。
@@ -242,7 +234,7 @@ type DoBlock struct {
 
 func (*DoBlock) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Do 的 S 含 do/end 关键字，折叠整块；内层 Block.S 只圈语句区。
 // 排查现场：若空 do 块无坐标，检查 S 是否仍含关键字区间。
@@ -264,7 +256,7 @@ type IfStmt struct {
 
 func (*IfStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：If 的 S 从 if 到 end，全分支诊断可回溯整句；各分支 Cond/Block 另有子 Span
 // 做精准圈选。排查现场：若缺 end 的恢复圈错，检查 S.End 是否取到同步点。
@@ -294,7 +286,7 @@ type WhileStmt struct {
 
 func (*WhileStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：While 的 S 从 while 到 end，条件错圈 Cond，体错圈 Block；
 // 空体循环仍有 end 兜底坐标。排查现场：若 break 跳错层，检查 checker 的循环栈
@@ -315,7 +307,7 @@ type RepeatStmt struct {
 
 func (*RepeatStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Repeat 的 S 从 repeat 到 until 条件尾，条件圈 Cond，体内圈 Block。
 // 排查现场：若 until 条件定位飞到块首，检查 S.End 是否取到 Cond.End。
@@ -339,7 +331,7 @@ type NumericFor struct {
 
 func (*NumericFor) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：NumericFor 的 S 从 for 到 end，变量/起止/步长各有子 Span，步长缺省时
 // S 仍全包。排查现场：若循环变量重定义误报，检查 Var.S 与外层同名量区分。
@@ -361,7 +353,7 @@ type GenericFor struct {
 
 func (*GenericFor) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：GenericFor 的 S 同样首尾全包，迭代源错误圈 Exprs，变量错误圈 Names。
 // 排查现场：若 `in` 关键字丢失仍有坐标，检查 S 是否含 in 区间做恢复锚点。
@@ -376,7 +368,7 @@ type BreakStmt struct{ S token.Span }
 
 func (*BreakStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Break 的 S 即关键字单点，跳出目标由 checker 的循环栈回填诊断附加信息。
 // 排查现场：若 break 高亮为空，检查是否为合成节点带零值 Span。
@@ -395,7 +387,7 @@ type GotoStmt struct {
 
 func (*GotoStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Goto 的 S 从 goto 到标签名，缺标签名圈 goto 尾。排查现场：若跳转与作用域
 // 诊断混淆，检查 Label 子 Span 与本 S 的分工。
@@ -413,14 +405,14 @@ type LabelStmt struct {
 
 func (*LabelStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Label 的 S 含两侧 `::`，悬空标签（无对应 goto）圈整段提示清理。
 // 排查现场：若标签与变量同名混淆，检查命名空间是否独立（标签自成一表）。
 func (n *LabelStmt) Span() token.Span { return n.S }
 
 // SpawnStmt is `spawn <call>` (soft keyword): spawns the call as a
-// concurrent task on the cooperative scheduler. Arguments are captured
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // lazily in a closure (same convention as `defer`: see SPEC §12), i.e.
 // evaluated when the task starts, not at the `spawn` site.
 // `spawn` stays a plain identifier elsewhere (`local spawn = 1`, `spawn(x)`).
@@ -437,33 +429,20 @@ type SpawnStmt struct {
 
 func (*SpawnStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Spawn 的 S 从 spawn 到调用尾，调度器挂起点诊断圈整句，参数错误圈 Call。
 // 排查现场：若 spawn 在非 async 内误放行，检查 checker 的 async 上下文判定。
 func (n *SpawnStmt) Span() token.Span { return n.S }
 
 // SelectStmt is Go-style `select { case ... default ... }` over channels:
-// each case is one send / receive / timeout guard plus a body. It suspends
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // the current async task until one guard is ready (or `default` fires
 // immediately). Only valid inside `async` (checker-enforced).
 //
 // Source form (braces, no `end`, mirroring class/enum bodies):
 //
-//	select {
-//	  case v = ch:recv() then
-//	    print(v)
-//	  case ch:send(x) then
-//	    print("sent")
-//	  case timeout(1.0) then
-//	    print("timed out")
-//	  default then
-//	    print("busy")
-//	}
-//
-// 设计者视角：select 是“多路 channel 的等红灯”——Cases 逐个挂 guard，Default（nil 即无）
-// 立即放行。形态学：花括号无 end，与 class/enum 体同构，parser 复用 brace 体恢复；
-// 每个 case 的 guard 仅三选一（Recv/Send/Timeout），由 SelectCase 独占字段保证。
+// …（略，详见实现；排查先看 Span/诊断）
 // 障碍是 async 约束：挂起只能在 async 内，checker 强制拦截。DS 记 default 关键字位置，
 // 便于“重复 default”精准报错。不变量：Cases 可空但 Default 单一。排查现场：若 select
 // 在同步函数放行，检查 async 标记；若 guard 种类混淆，检查 SelectCase 独占字段。
@@ -476,7 +455,7 @@ type SelectStmt struct {
 
 func (*SelectStmt) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Select 的 S 覆盖 `select {...}` 全括号体，guard 错误圈 SelectCase.S，
 // default 重复圈 DS。排查现场：若 case 体报错圈到整 select，检查是否误用父 Span。
@@ -491,7 +470,7 @@ func (n *SelectStmt) Span() token.Span { return n.S }
 // Block 为命中后执行体。不变量：Recv/Send/Timeout 恰一有效；RecvVars 长度 1-2。
 // 排查现场：若 recv 变量泄漏到 case 外，检查 RecvLocal 与 Block 作用域隔离。
 type SelectCase struct {
-	// Guard kinds (exactly one non-nil, or Timeout):
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	//   Recv: `v = ch:recv()` / `v, ok = ch:recv()` (RecvVars 1-2 idents)
 	//   Send: `ch:send(v)` (MethodCallExpr, method "send")
 	//   Timeout: `sleep(sec)` / `timeout(sec)` (CallExpr, 1 numeric arg)
@@ -504,7 +483,7 @@ type SelectCase struct {
 	S         token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：SelectCase 的 S 从 case 到 block 尾，guard 写错圈 guard 子段，体错圈 Block。
 // 排查现场：若 timeout 参数非法圈不到，检查 Timeout.Expr 子 Span。

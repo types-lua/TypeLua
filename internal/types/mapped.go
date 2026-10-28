@@ -11,16 +11,8 @@ import (
 //
 // Homomorphic（非 nil）是 `keyof` 基对象：其字段修饰符会被继承，除非被显式
 // `?`/`-?`/`readonly`/`-readonly` 覆盖；nil 表示绝对映射（仅标记决定）。
-// 这样 `{ [K in keyof T]: ... }` 才能保留 T 的可选/只读信息。
+// …（略，详见实现；排查先看 Span/诊断）
 //
-// 物理布局：
-//
-//	Mapped
-//	├── Param       string  // 绑定变量名 K
-//	├── Constraint  Type    // K 的取值域
-//	├── Optional    bool    // `?` / `+?`
-//	├── OptMinus    bool    // `-?`
-//	├── Readonly    bool    // `readonly` / `+readonly`
 //	├── RoMinus     bool    // `-readonly`
 //	├── Homomorphic Type    // keyof 基对象（nil=绝对）
 //	└── Value       Type    // 值类型模板（含 K）
@@ -75,7 +67,6 @@ func (t *Mapped) stringSeen(seen map[Type]bool) string {
 //
 // 物理布局：
 //
-//	IndexedAccess
 //	├── Obj   Type   // 被索引的对象/数组/元组/映射/类/枚举
 //	└── Index Type   // 索引键
 type IndexedAccess struct {
@@ -102,7 +93,7 @@ func (t *IndexedAccess) stringSeen(seen map[Type]bool) string {
 	return typeString(t.Obj, seen) + "[" + typeString(t.Index, seen) + "]"
 }
 
-// literalKeyName normalizes a literal to an object field name.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：索引访问/映射求值需要把字面量 `"foo"` / `'bar'` 转为字段名；
 // 仅 Literal 可转换，其它类型返回 false。候选：字符串化后再 strip 引号 vs
@@ -120,13 +111,13 @@ func literalKeyName(t Type) (string, bool) {
 	return v, true
 }
 
-// evalMapped expands a mapped type over a concrete domain.
-// Returns ok=false when the constraint still mentions parameters.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 返回，排查先看 Span/诊断。
 //
 // 设计者视角：映射类型 `{ [K in Domain]: V }` 只有在 Domain 具体时才能展开；
 // 域为 string/number/integer 原语时退化为索引签名，为字面量联合时展开为
 // 字段。候选：急切展开所有映射 vs 仅具体域；选仅具体域，泛型域保留 Mapped
-// 形状供后续实例化。Homomorphic 基对象用于继承修饰符（`keyof T`）。不变量：
+// 形状供后续实例化。Homomorphic 基对象用于继承修饰符如 `keyof T`，排查看 Span。
 // 返回的 Object 字段名来自字面量键；修饰符继承规则见代码。排查现场：若
 // 映射展开字段缺失/修饰符错误，检查 base 与 Optional/OptMinus 分支。
 func evalMapped(m *Mapped, opt Options) (Type, bool) {
@@ -141,7 +132,7 @@ func evalMapped(m *Mapped, opt Options) (Type, bool) {
 			Value: Substitute(m.Value, map[string]Type{m.Param: prim}),
 		}}}, true
 	}
-	// Literal domain: one field per key.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	keys := unionMembers(m.Constraint)
 	var lits []Type
 	for _, k := range keys {
@@ -199,7 +190,7 @@ func unionMembers(t Type) []Type {
 }
 
 // evalIndexedAccess resolves `T[K]`; ok=false defers (generic sides) while
-// ok=true with an error string reports a definite mistake.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：索引访问 `T[K]` 的求值必须区分"还没法算"（泛型侧，返回 defer）
 // 与"确定性错误"（类型不支持索引，返回错误字符串），让调用方分别处理。
@@ -217,7 +208,7 @@ func evalIndexedAccess(obj, index Type, opt Options) (Type, bool, string) {
 	if obj.Kind() == KNever {
 		return Never, true, ""
 	}
-	// Distribute unions on either side (all members must resolve).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if u, ok := index.(*Union); ok {
 		var rs []Type
 		for _, m := range u.Types {
@@ -255,7 +246,7 @@ func evalIndexedAccess(obj, index Type, opt Options) (Type, bool, string) {
 				}
 				return f.Type, true, ""
 			}
-			// Literal key against indexers.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			for _, ix := range o.Indexers {
 				if keyAcceptsLiteral(ix.Key, index) {
 					return ix.Value, true, ""
@@ -263,7 +254,7 @@ func evalIndexedAccess(obj, index Type, opt Options) (Type, bool, string) {
 			}
 			return nil, true, "type '" + obj.String() + "' has no field '" + name + "'"
 		}
-		// General key: string over fields, or a matching indexer.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if index.Kind() == KString || index.Kind() == KAny {
 			var rs []Type
 			for _, f := range o.Fields {
@@ -360,7 +351,7 @@ func tupleIndex(v string) (int, error) {
 	return strconv.Atoi(v)
 }
 
-// anyLike mirrors the checker's permissive dynamic types.
+// tupleIndex如 `f(1)`，排查看 Span。
 //
 // 设计者视角：any 与 unknown 在索引求值中都视为"任意"，统一为 anyLike 避免
 // 两处分支重复；保持与 checker 的 permissive 动态类型一致。排查现场：若
@@ -369,7 +360,7 @@ func anyLike(t Type) bool {
 	return t.Kind() == KAny || t.Kind() == KUnknown
 }
 
-// TryEvalMapped evaluates m when its domain is concrete.
+// anyLike如 `f(1)`，排查看 Span。
 //
 // 设计者视角：TryEval* 是 eval* 的守门包装，供 assign/subst/conditional 调用；
 // 本实现直接委托 evalMapped（其内部已做 IsConcreteType 守门），保持接口统一。

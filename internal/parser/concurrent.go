@@ -6,33 +6,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Concurrency syntax (all soft keywords, Lua-superset preserving):
-//
-//	async function f() ... end        (global async)
-//	local async function f() ... end  (local async)
-//	local f = async function() ... end (async literal)
-//	async methods: `async name(...) ... end` in classes
-//	await <expr>                      (suspension marker, erases to expr)
-//	spawn <call>                      (`spawn f(x)`, `spawn o:m()`, `spawn function() end()`)
-//	select { case ... default ... }   (Go-style multiplex)
-//
-// `async`/`await`/`spawn`/`select`/`case`/`default` stay plain identifiers
-// everywhere else (`local await = 1`, `spawn(x)`, `select(...)`, ...).
-
-// 并发语法物理布局（软关键字，保持 Lua 超集）：
-//
-//	语句级：
-//	  async function ... end   ──► parseAsyncGlobal
-//	  local async function ... ──► parseAsyncLocalFunc
-//	  spawn <call>            ──► parseSpawn (函数字面量隐式 async)
-//	  select { case ... }     ──► parseSelect
-//	表达式级：
-//	  async function() ... end ──► parseAsyncFuncLit (匿名)
-//	  await <expr>            ──► parseAwait (仅前缀位置)
-//	同步原语：
-//	  ch:send(v) / ch:recv() / sleep(s) / timeout(s)
-//
-// 所有关键字判定靠 isXxxStart（同行情境），避免词法层状态。
+// 并发全软关键字（保 Lua 超集）：`async function f() end`/`spawn f(x)`/`await x`/`select{case…}`，余位仍是变量（`local await=1`/`spawn(x)`）；判定靠 isXxxStart 同行前瞻。
 
 // isIdentNamed 报告 Token 是否为指定名的普通标识符（Kind 必为 Ident，Literal 全等）。
 //
@@ -48,7 +22,7 @@ func isIdentNamed(t token.Token, name string) bool {
 //
 // 设计者视角：sameLine 好比给软关键字加了“同桌 شرط”——`async` 次行跟 `function`
 // 不算异步（可能是两句），`spawn` 次行跟调用不算派生。障碍是 Lua 允许换行续写：
-// 取舍是并发四兄弟（async/await/spawn/select/import/defer）一律同行才算，
+// 取舍是并发四兄弟详见实现，排查看 Span。
 // 换行即拆成两句，保住“裸词仍是变量”的超集承诺。不变量：只看 Start.Line，不看列。
 // 排查现场：若行尾 `\r\n` 导致误判跨行，先看 Pos 行号计算而非此处。
 func sameLine(a, b token.Token) bool {
@@ -57,7 +31,7 @@ func sameLine(a, b token.Token) bool {
 
 // ---------- async ----------
 
-// isAsyncFuncStart reports `async function` at current pos (same line).
+// isAsyncFuncStart 是异步双敲门：同行 `async function` 才算，孤 `async` 仍是变量。
 //
 // 设计者视角：isAsyncFuncStart 是异步的“双敲门”——cur 为 `async` 且 peek(1) 为
 // Function 且同行，三齐才算，`async` 单独仍是变量（`local async = 1` 活路保留）。
@@ -72,10 +46,7 @@ func (p *Parser) isAsyncFuncStart() bool {
 	return n1.Kind == token.Function && sameLine(p.cur(), n1)
 }
 
-// parseAsyncFuncLit parses `async function...` assuming `async` not yet
-// consumed. isMethod marks colon-methods (implicit self). Handles both
-// anonymous (`async function() ... end`) and, when allowName is set,
-// named forms via parseAsyncGlobal/parseAsyncLocal (not here).
+// parseAsyncFuncLit 装配匿名异步：`async <T> function` 双位泛型试探+parseFuncBody，IsAsync 立旗。
 //
 // 设计者视角：parseAsyncFuncLit 是匿名异步的“装配台”——吃 async 后两处泛型试探
 // （`async <T> function` 与 `async function <T>(` 双位，首位命中即用，次位回补），
@@ -86,7 +57,7 @@ func (p *Parser) isAsyncFuncStart() bool {
 // at(LParen) 提交条件。
 func (p *Parser) parseAsyncFuncLit(isMethod bool) *ast.FuncLit {
 	start := p.next() // async
-	// Optional generics on anonymous async functions.
+	// 匿名异步可选泛型 `async <T> function`。
 	var fgen []*ast.GenericParam
 	if p.at(token.Lt) {
 		save := p.saveCursor()
@@ -99,9 +70,7 @@ func (p *Parser) parseAsyncFuncLit(isMethod bool) *ast.FuncLit {
 			p.diags = p.diags[:nd]
 		}
 	}
-	// p.cur() should be `function`; parseFuncBody expects it? No:
-	// parseFuncBody expects `(` at cur (it is called after `function` is
-	// consumed in parsePrimary). Mirror that: consume `function` then body.
+	// 此处 cur 应为 function，吃掉再走 parseFuncBody（与 parsePrimary 镜像）。
 	if !p.at(token.Function) {
 		p.errorf(diag.ParseUnexpectedSyntax, p.cur().Span, "expected 'function' after 'async'")
 		return &ast.FuncLit{Body: &ast.Block{}, IsAsync: true, S: start.Span}
@@ -129,8 +98,7 @@ func (p *Parser) parseAsyncFuncLit(isMethod bool) *ast.FuncLit {
 	return fn
 }
 
-// parseAsyncGlobal parses `async function name<T>(...) ... end` at
-// statement level (global function, like parseGlobalFunc but async).
+// parseAsyncGlobal 给全局异步上户：`async function 名<T>(…) end`，IsAsync 立旗。
 //
 // 设计者视角：parseAsyncGlobal 是全局异步的“上户”——async、function 双吃后
 // parseFuncName 定户名，泛型试探（后接 '(' 才落户），parseFuncBody 按 Method 定 self，
@@ -163,10 +131,9 @@ func (p *Parser) parseAsyncGlobal() ast.Stmt {
 	return &ast.FuncDefStmt{Name: name, Generics: generics, Func: fn, S: token.Span{Start: start.Span.Start, End: fn.Span().End, File: p.file}}
 }
 
-// parseAsyncLocalFunc parses `async function name(...) ... end` after a
-// `local` token (caller consumed `local` + peeked `async function`).
+// parseAsyncLocalFunc 给局部异步分户：`local async function 名(…) end`，Span 含 local。
 //
-// 设计者视角：parseAsyncLocalFunc 是局部异步的“分户”——调用方（parseLocal）已吃 local
+// 设计者视角：parseAsyncLocalFunc 是局部异步的“分户”——调用方详见实现，排查看 Span。
 // 并以前瞻确认 `async function`，此处吃 async/function 后 AllowSoft 取名（`type` 们
 // 可作函数名），泛型试探、parseFuncBody(false)（local 无 self），S 从 local 起。
 // 取舍：名缺席即同步回 Empty，local 的 Start 由入参透传，保证 Span 含 local。
@@ -201,14 +168,7 @@ func (p *Parser) parseAsyncLocalFunc(start token.Token) ast.Stmt {
 
 // ---------- await ----------
 
-// isAwaitPrefix reports whether `await` at current pos starts an
-// `await <expr>` (vs. a plain variable use). Rules:
-//   - must be Ident "await" with an operand starting on the same line;
-//   - `await` alone (delimiter/operator/EOL follows) is a variable;
-//   - `await(`/`await{`/`await"..."`/`await.`/`await:`/`await[` stay calls
-//     (Lua call/index syntax wins, preserving `await(x)` as a call);
-//   - otherwise (Ident/Number/Function/not/-/~/`/await/function/...)
-//     it is an await marker.
+// isAwaitPrefix 是 await 验钞机：同行跟操作数且非 `await(x)`/`await{}` 调用形才算挂起，孤词仍是变量。
 //
 // 设计者视角：isAwaitPrefix 是 await 的“验钞机”——`await` 平时仍是变量，只有“同行跟操作数
 // 且非调用形”才算挂起标记。障碍是 Lua 调用糖：`await(x)`/`await{}`/`await""/await./await:/await[`
@@ -241,12 +201,10 @@ func (p *Parser) isAwaitPrefix() bool {
 		token.Lt, token.Le, token.Gt, token.Ge, token.Eq, token.Ne,
 		token.And, token.Or, token.ColonColon, token.Question, token.Arrow,
 		token.FatArrow, token.Bang:
-		// `await + 1` is `await` variable plus 1, not await of `+1`? Unary
-		// minus is the exception: `await -x` awaits `-x` (common).
-		// Keep it simple: binary position => variable.
+		// `await + 1` 按变量+1，唯 `await -x` 按挂起收（常见）。
 		return false
 	}
-	// not/Hash/Tilde/Minus/Ident/Number/True/False/Nil/Function/... are operands.
+	// 余下 not/#/~/-/Ident/数字等皆为操作数。
 	return true
 }
 
@@ -254,7 +212,7 @@ func (p *Parser) isAwaitPrefix() bool {
 //
 // 设计者视角：parseAwait 好比在表达式上盖“暂停章”——吃 await 后以 precUnary 吃操作数
 // （与一元同级，保证 `await -x` 即 `await(-x)`、`await a + b` 按 Pratt 续吃）。
-// 障碍是裸 await（`local x = await`）：x 为 nil 即回 Ident("await") 占位并记账，
+// 障碍是裸 await如 `local x = await`，排查看 Span。
 // 让变量语义不断链。取舍：S 从 await 到操作数尾（发射期擦除为 expr，Span 仍可溯）。
 // 不变量：永返非 nil Expr。排查现场：若 `await` 高亮偏小，先看 S.End 是否取到操作数尾。
 func (p *Parser) parseAwait() ast.Expr {
@@ -269,11 +227,7 @@ func (p *Parser) parseAwait() ast.Expr {
 
 // ---------- spawn ----------
 
-// isSpawnStart reports `spawn <call>` at statement start: `spawn` + call
-// operand on the same line. Genuine value uses stay plain: `spawn(x)`,
-// `spawn = 1`, `spawn.foo`, `spawn:foo()`, `spawn + 1`, lone `spawn`.
-// Anything else on the same line (including mistakes like `spawn 42`)
-// enters parseSpawn for validation.
+// isSpawnStart 是 spawn 安检门：同行 `spawn f(x)` 放行，`spawn(x)`/`spawn.foo` 仍是值用；`spawn 42` 放进去再判死刑。
 //
 // 设计者视角：isSpawnStart 是 spawn 的“安检门”——`spawn` 后同行跟“像调用开头”的才放行
 // 进 parseSpawn 复核（含 `spawn 42` 这种错写，放进去再判死刑以便定位）；
@@ -319,8 +273,7 @@ func (p *Parser) isSpawnStart() bool {
 // 排查现场：若 `spawn o:m()` 的方法丢失，先看 parseSuffix 的 Colon 分支。
 func (p *Parser) parseSpawn() ast.Stmt {
 	start := p.next() // spawn
-	// Anonymous `spawn function() ... end(args)`: the body runs as a task,
-	// so it is implicitly async (await/select allowed inside).
+	// 匿名 `spawn function() end(args)` 体作任务跑，隐式 async，内可用 await/select。
 	if p.at(token.Function) || (isIdentNamed(p.cur(), "async") && p.peek(1).Kind == token.Function && sameLine(p.cur(), p.peek(1))) {
 		var fn ast.Expr
 		if isIdentNamed(p.cur(), "async") {
@@ -366,7 +319,7 @@ func (p *Parser) parseSpawn() ast.Stmt {
 
 // ---------- select ----------
 
-// isSelectStart reports `select {` (same line): `select(...)` stays a call.
+// isSelectStart 是 select 试纸：同行 `select {` 才算多路，`select(x)` 仍是调用。
 //
 // 设计者视角：isSelectStart 是 select 的“试纸”——`select` 后同行跟 `{` 才算多路复用，
 // `select(...)` 仍是普通调用（Lua 超集活路）。纯两步前瞻零消费，行跨即 false。
@@ -459,8 +412,7 @@ func (p *Parser) synchronizeSelect() {
 	}
 }
 
-// parseSelectCaseBlock parses a case/default body up to the next
-// `case`/`default`/`}` (with optional `return` tail, like parseBlock).
+// parseSelectCaseBlock 是节体小 parseBlock：收到下个 `case`/`default`/`}` 即停，`return case` 不吞标题。
 //
 // 设计者视角：parseSelectCaseBlock 是节体的“小 parseBlock”——语句循环收，`;` 作空语句，
 // `return` 居末（裸 return 特判：后跟 case/default/`}` 时不把下节标题当返回值吃，
@@ -484,9 +436,7 @@ func (p *Parser) parseSelectCaseBlock() *ast.Block {
 			continue
 		}
 		if p.at(token.Return) {
-			// Bare `return` when a case/default/`}` follows (a select
-			// case is not a Lua block end, so parseReturn would eat the
-			// next `case` as a return value).
+			// 裸 `return` 后跟 case/default/`}` 时不吃下节标题，如 `return case` 立空返回。
 			n1 := p.peek(1)
 			if n1.Kind == token.RBrace || n1.Kind == token.EOF ||
 				(n1.Kind == token.Ident && (n1.Literal == "case" || n1.Literal == "default")) {
@@ -523,7 +473,7 @@ func (p *Parser) parseSelectCaseBlock() *ast.Block {
 	return &ast.Block{Stmts: stmts, Ret: ret, S: sp}
 }
 
-// parseSelectCase parses `case <guard> then <block>`.
+// parseSelectCase 验单节票：`case ch:recv()/ch:send(v)/timeout(s) then 块`，send 恰 1 参 recv 恰 0 参。
 //
 // 设计者视角：parseSelectCase 是单节的“验票+进场”——guard 三验：`case local v[,ok] = ch:recv()`
 // 本地接收路（超 2 变量即记账，最多 v,ok）；`v[,ok] = ch:recv()` 赋值路经
@@ -580,11 +530,11 @@ func (p *Parser) parseSelectCase() *ast.SelectCase {
 		sc.RecvVars = vars
 		sc.RecvLocal = true
 	} else {
-		// Try `v = ch:recv()` / `v, ok = ch:recv()` assign form via lookahead.
+		// 先试 `v[,ok] = ch:recv()` 赋值守卫。
 		if save := p.tryParseSelectRecvAssign(sc); save {
-			// sc filled.
+			// 赋值守卫命中 sc 已填。
 		} else {
-			// Expression guard: `ch:send(v)`, `ch:recv()`, `sleep(s)`/`timeout(s)`.
+			// 表达式守卫 `ch:send(v)`/`ch:recv()`/`sleep(s)` 三选一。
 			g := p.parseExpr()
 			if g == nil {
 				p.synchronizeSelect()
@@ -621,7 +571,7 @@ func (p *Parser) parseSelectCase() *ast.SelectCase {
 			}
 		}
 	}
-	// Guard/body separator: `then` preferred, `:` or `do` accepted.
+	// 守卫体分隔 `then` 首选，`:`/`do` 亦容，如 `case ch:recv() then`。
 	if p.cur().Kind == token.Then || p.at(token.Colon) || p.cur().Kind == token.Do {
 		p.next()
 	} else {
@@ -629,7 +579,7 @@ func (p *Parser) parseSelectCase() *ast.SelectCase {
 	}
 	sc.Block = p.parseSelectCaseBlock()
 	sc.S = token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}
-	// Validate send arity now (cheap): `ch:send(v)` exactly 1 arg.
+	// 此处验 send 恰 1 参，如 `ch:send(v)`。
 	if sc.Send != nil && len(sc.Send.Args) != 1 {
 		p.errorf(diag.ParseUnexpectedSyntax, sc.Send.Span(), "'ch:send' expects exactly 1 argument, got %d", len(sc.Send.Args))
 	}
@@ -639,8 +589,7 @@ func (p *Parser) parseSelectCase() *ast.SelectCase {
 	return sc
 }
 
-// tryParseSelectRecvAssign tries `v = ch:recv()` / `v, ok = ch:recv()`
-// (up to 2 idents). Returns true and fills sc on success; rewinds otherwise.
+// tryParseSelectRecvAssign 侦察赋值守卫 `v[,ok] = ch:recv()`：成填 sc，败零副作用回退交表达式路。
 //
 // 设计者视角：tryParseSelectRecvAssign 是赋值守卫的“侦察兵”——首 Ident（软关键字亦可，
 // 但 case/default/then/do/local 五词禁入）+可选 `,次Ident` + `=` + parseSuffix，
@@ -661,7 +610,7 @@ func (p *Parser) tryParseSelectRecvAssign(sc *ast.SelectCase) bool {
 	if lit == "" {
 		lit = first.Kind.String()
 	}
-	// `case`/`default`/`then` can never start a recv-assign guard.
+	// `case`/`default`/`then`/`do`/`local` 永不开赋值守卫。
 	if lit == "case" || lit == "default" || lit == "then" || lit == "do" || lit == "local" {
 		p.restoreCursor(save)
 		p.diags = p.diags[:nd]
@@ -669,8 +618,7 @@ func (p *Parser) tryParseSelectRecvAssign(sc *ast.SelectCase) bool {
 	}
 	vars = append(vars, &ast.Ident{Name: lit, S: first.Span})
 	if p.at(token.Comma) {
-		// Need second ident + `=`. If not, rewind (it was e.g. `f(a, b)`? No:
-		// guard exprs starting `ident ,` are rare; rewind to expr parse).
+		// 须次 Ident+`=`，否则如 `f(a,b)` 回退走表达式路。
 		p.next()
 		if p.cur().Kind != token.Ident && !isSoftKw(p.cur().Kind) {
 			p.restoreCursor(save)
@@ -702,7 +650,7 @@ func (p *Parser) tryParseSelectRecvAssign(sc *ast.SelectCase) bool {
 		p.diags = p.diags[:nd]
 		return false
 	}
-	// Success: keep diags as-is (suffix parse reported nothing fatal), fill sc.
+	// 成功即填 sc，诊断照单收。
 	_ = nd
 	sc.Recv = mc
 	sc.RecvVars = vars

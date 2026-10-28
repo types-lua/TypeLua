@@ -6,16 +6,16 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Macro expansion core: arity, recursion guard, call drivers.
+// 宏详见实现，排查看 Span。
 //
 // 设计者视角：本文件是宏调用的“接生房”——arity 把门、enter/leave 防递归、
 // renameScope 备卫生、expand*Macro 走复印改名代入全套。障碍是实参须先在调用点
-// 展开（caller context），体复制后才改名代入，序错则卫生破。
+// 展开详见实现，排查看 Span。
 // ---------- macro expansion core ----------
 
 // checkArity validates argument count. A variadic macro (`...`) requires
-// at least len(params); otherwise the count must match exactly.
-// Mismatches report (best-effort runnable output) via a nil return.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkArity 是“检票口”——变参下限对、定参精确对，错即报
 // MacroArityMismatch 返 nil 让上层产 nil/空保可跑。障碍是变参 extras 可零：
@@ -38,11 +38,11 @@ func (e *expander) checkArity(md *macroDef, call token.Span, nargs int) []int {
 	return idx
 }
 
-// enter guards recursion: same macro re-entered, or depth exceeded.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：enter 是递归的“闸刀”——栈中重名即 RecursiveMacro，栈深超 64 亦拦，
 // 过则压栈。障碍是间接递归（a→b→a）：单名判不够，须整栈扫+深度双保险。候选：
-// visited 集 vs 栈；选栈，报错可指名。不变量：true 恒配 leave（defer）。排查现场：
+// visited 集 vs 栈；选栈，报错可指名。不变量：true 恒配 leave详见实现，排查看 Span。
 // 误报递归先查栈是否忘弹。
 func (e *expander) enter(name string, sp token.Span) bool {
 	for _, n := range e.stack {
@@ -65,8 +65,8 @@ func (e *expander) leave() {
 	e.stack = e.stack[:len(e.stack)-1]
 }
 
-// renameScope prepares a rename context: avoid-set from caller arguments,
-// labels pre-scanned over the copied body.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：renameScope 备“卫生包”——avoid 采实参全拼（见 collectIdents），
 // labels 待 prescan。障碍是漏采：少一拼即可能捕获；故过近似宁多勿少。候选：
@@ -92,7 +92,7 @@ func (e *expander) reportStrayDots(md *macroDef, sub *substCtx) {
 	}
 }
 
-// expandExprMacro expands an expression-macro call.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：表达式宏五步曲——展实参→arity→enter→复印改名代入→递归展结果。
 // 障碍是改名与代入序：须先 prescanLabels+rename 再 subst，否则影子参错位；
@@ -100,7 +100,7 @@ func (e *expander) reportStrayDots(md *macroDef, sub *substCtx) {
 // 定义底片 pristine。不变量：失败返 NilLit 保可跑。排查现场：卫生破先查序，
 // ... 未展先查 splice 位。
 func (e *expander) expandExprMacro(md *macroDef, call *ast.CallExpr, env *scope) ast.Expr {
-	// Expand arguments first (caller context).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	args := make([]ast.Expr, len(call.Args))
 	for i, a := range call.Args {
 		args[i] = e.expandExpr(a, env)
@@ -128,7 +128,7 @@ func (e *expander) expandExprMacro(md *macroDef, call *ast.CallExpr, env *scope)
 	return e.expandExpr(body, env)
 }
 
-// expandStmtMacro expands a statement-macro call into statements.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：语句宏七步曲——前五同表达式，另加语句合法性筛（splice 占位须为
 // Call/MethodCall，否则 MacroExpandsToInvalidStmt 汰之）与调用点域二次展
@@ -160,8 +160,8 @@ func (e *expander) expandStmtMacro(md *macroDef, call *ast.CallExpr, env *scope)
 	}
 	substBlock(blk, sub)
 	e.reportStrayDots(md, sub)
-	// Spliced placeholders must yield real statements (calls); anything
-	// else would emit invalid Lua.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	var valid []ast.Stmt
 	for _, st := range blk.Stmts {
 		if es, ok := st.(*ast.ExprStmt); ok {
@@ -183,7 +183,7 @@ func (e *expander) expandStmtMacro(md *macroDef, call *ast.CallExpr, env *scope)
 		valid = append(valid, st)
 	}
 	blk.Stmts = valid
-	// Expand nested calls (and nested definitions) in call-site scope.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	child := &scope{parent: env}
 	tmp := &ast.Block{Stmts: blk.Stmts, S: call.Span()}
 	e.expandBlock(tmp, child)

@@ -26,9 +26,9 @@ import (
 // parseBlock 解析语句块：循环收语句，Return 居末，遇 EOF/End/Else/Elseif/Until/RBrace 即停。
 //
 // 设计者视角：parseBlock 是块的“装配循环”——它是全 parser 最忙的 for，一边分发
-// parseStmt，一边守着六个哨兵（End/Else/Elseif/Until/RBrace/EOF）与 ';' 空语句。
+// parseStmt，一边守着六个哨兵详见实现，排查看 Span。
 // 障碍有二：一是 `return` 在 AST 里不住 Stmts 而住 Block.Ret（结构上锁死“末尾唯一”）；
-// 二是深度熔断（enterDepth）要罩住整块，超深文件在此即被计数器拦下。取舍：return 后
+// 二是深度熔断详见实现，排查看 Span。
 // 只容 ';' 即 break，让 `return 1; foo()` 的 foo 不被吞；parseStmt 回 nil（撞哨兵）
 // 即无声收尾。不变量：返回 Block 永非 nil，S 覆盖首语句到 Ret 尾（空块即零宽）。
 // 排查现场：若 return 后语句神秘消失，先看 Ret 分支的 break；若 brace 体提前收尾，
@@ -52,7 +52,7 @@ func (p *Parser) parseBlock() *ast.Block {
 		if k == token.Return {
 			r := p.parseReturn()
 			ret = r
-			// return must be last; allow trailing ';' then break.
+			// return 锁尾：只容身后 `;`，`return 1; foo()` 的 foo 不进块。
 			for p.at(token.Semi) {
 				p.next()
 			}
@@ -60,7 +60,7 @@ func (p *Parser) parseBlock() *ast.Block {
 		}
 		st := p.parseStmt()
 		if st == nil {
-			// End token encountered; break without consuming.
+			// 撞哨兵 End 即收尾，不消费留给上层。
 			break
 		}
 		stmts = append(stmts, st)
@@ -90,7 +90,7 @@ func (p *Parser) parseBlock() *ast.Block {
 // parseReturn 解析 `return [exprlist]`，裸 return（后接块尾/';'）即空返回。
 //
 // 设计者视角：parseReturn 是块尾的“封口机”——先吃 `return`，再看下一 Token 是否为
-// 块尾哨兵（EOF/End/Else/.../RBrace/';'），是即裸返回，否即 parseExprList 收值。
+// 块尾哨兵详见实现，排查看 Span。
 // 障碍是 select-case 体里的 `return` 后跟 `case`：那不是返回值而是下节标题，
 // parseSelectCaseBlock 另有特判，此处只认通用哨兵。取舍：Span 空返回即 start 本身，
 // 有值即裹到末 Expr 尾，让“return 圈哪”一眼可判。不变量：永不消费哨兵本身。
@@ -98,7 +98,7 @@ func (p *Parser) parseBlock() *ast.Block {
 func (p *Parser) parseReturn() *ast.ReturnStmt {
 	start := p.next() // return
 	var exprs []ast.Expr
-	// return is bare if next starts a block end.
+	// 裸 return：下个是块尾哨兵即空返回，如 `return end`。
 	switch p.cur().Kind {
 	case token.EOF, token.End, token.Else, token.Elseif, token.Until, token.RBrace, token.Semi:
 		break
@@ -114,10 +114,10 @@ func (p *Parser) parseReturn() *ast.ReturnStmt {
 	return &ast.ReturnStmt{S: sp, Exprs: exprs}
 }
 
-// parseStmt 按首 Token 分发单条语句：软关键字先行（import/defer/spawn/select/async），再经典关键字，最后兜底表达式语句。
+// parseStmt 按首 Token 分发单条语句：软关键字先行详见实现，排查看 Span。
 //
 // 设计者视角：parseStmt 是语句的“总机房”——先查四路软线（isXxxStart 前瞻，同行才算），
-// 再查硬关键字（do/if/while/function/local/...），最后全丢给 parseExprStmtOrAssign。
+// 再查硬关键字详见实现，排查看 Span。
 // 障碍是软关键字平时仍是标识符：`spawn(x)` 是调用而 `spawn f(x)` 是语句，全靠
 // isSpawnStart 等的形状+同行双判；`macro Name` 才是定义，`macro(` 即调用。
 // 取舍：End/Else/Elseif/Until/EOF/RBrace 回 nil（告诉 parseBlock 收尾），而非造 EmptyStmt，
@@ -173,7 +173,7 @@ func (p *Parser) parseStmt() ast.Stmt {
 		}
 		return p.parseExprStmtOrAssign()
 	case token.MacroKw:
-		// `macro Name` declares; any other use is a plain identifier.
+		// `macro Name` 才是定义，`macro(` 即普通调用。
 		if p.peek(1).Kind == token.Ident {
 			return p.parseMacroDef()
 		}
@@ -189,14 +189,8 @@ func (p *Parser) parseStmt() ast.Stmt {
 	}
 }
 
-// isImportStart peeks `import "path"` / `import Name from` (soft keyword;
-// `import` stays a plain identifier everywhere else, including the
-// parenthesized call `import("x")`). The token after `import` must sit on
-// the same line, so a bare `import` statement followed by a string on the
-// next line is never glued into an import.
-//
-// 设计者视角：isImportStart 是 import 糖的“试纸”——`import` 本是普通 Ident，
-// 只有同行跟 String（`import "p"`）或 `Name from`/`Name: T from` 才算导入。
+// isImportStart 是 import 糖试纸：同行 `import "p"`/`import Name from "p"` 才算导入，`import("x")` 仍是调用，换行字符串不粘连。
+// 只有同行跟 String如 `import "p"`/`Name from`/`Name: T from`，排查看 Span。
 // 障碍是 `import("x")` 仍是函数调用：peek(1)==LParen 即判 false，保住调用语义；
 // 次行字符串更不许粘连（sameLine 卡死），避免 `import\n"str"` 被误缝合。
 // 取舍：`import Name` 单名无 from 即 false（合法导入必有 from），纯前瞻零消费。
@@ -214,9 +208,7 @@ func (p *Parser) isImportStart() bool {
 	}
 	if n1.Kind == token.Ident || isSoftKw(n1.Kind) {
 		n2 := p.peek(2)
-		// `import Name from` or `import Name: Type from`. (`import Name`
-		// alone can never start a valid expression statement, so the
-		// colon form needs no deeper lookahead.)
+		// `import Name from`/`import Name: T from` 才算，单 `import Name` 永不成表达式故冒号无需深看。
 		if (n2.Kind == token.Ident && n2.Literal == "from") || n2.Kind == token.Colon {
 			return true
 		}
@@ -224,13 +216,7 @@ func (p *Parser) isImportStart() bool {
 	return false
 }
 
-// parseImport parses the require sugar:
-//
-//	import "path"
-//	import Name from "path"
-//	import Name: Type from "path"
-//
-// 设计者视角：parseImport 是 require 糖的“拆包机”——三种形态归一为 ImportStmt
+// parseImport 是 require 糖拆包机：`import "p"`/`import Name from "p"`/`import Name: T from "p"` 归一为 ImportStmt。
 // （Path 必有，Name/Type 可选），checker 按 Path 寻模块、按 Type 定名类型。
 // 障碍是 Name 可为软关键字（如 `import type from "m"`）：parseIdentAllowSoft 放行。
 // 取舍：缺 `from`/缺路径串即记账+同步恢复，不硬凑 AST；Type 冒号后走全 parseType。
@@ -267,11 +253,7 @@ func (p *Parser) parseImport() ast.Stmt {
 	return &ast.ImportStmt{Name: name, Type: ty, Path: &ast.StringLit{Literal: t.Literal, S: t.Span}, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
-// isDeferStart peeks `defer <call>` / `errdefer <call>` (soft keywords:
-// the callee must be a plain identifier on the same line, so `defer(x)`
-// stays a call to a function named defer and `defer` alone stays a name).
-//
-// 设计者视角：isDeferStart 是 defer 的“嗅探器”——`defer`+同行 Ident 才算延迟调用，
+// isDeferStart 是 defer 嗅探器：`defer f()` 同行 Ident 才算延迟，`defer(x)` 仍是调用。
 // `defer(x)`（次 Token 为括号）与孤 `defer` 一律放回标识符。障碍是方法调用
 // `defer o:m()` 的 callee 首词仍是 Ident，嗅探只看首词即够，深层形状交 parseDefer
 // 用 parseSuffix 复核。取舍：errdefer 同门判定（Literal 双认），纯前瞻零消费。
@@ -288,10 +270,7 @@ func (p *Parser) isDeferStart() bool {
 		n1.Span.Start.Line == p.cur().Span.Start.Line
 }
 
-// parseDefer parses `defer <call>` / `errdefer <call>`; the call may use
-// explicit type arguments (`defer f<T>()`).
-//
-// 设计者视角：parseDefer 是延迟调用的“登记处”——吃掉 defer/errdefer 后用 parseSuffix
+// parseDefer 是延迟登记处：吃 defer 后用 parseSuffix 收 `f<T>()`/`:m()`，Call/MethodCall 才立案。
 // 收 callee（含 `f<T>()` 泛型实参与 `:m()` 方法形），是 Call/MethodCall 即登记
 // DeferStmt（IsErr 区分 errdefer），否则记账+同步。障碍是 callee 与普通表达式同形：
 // 取舍是 switch 验形而非重解析，`defer x + 1` 当场判死刑，不猜测。
@@ -371,7 +350,7 @@ func (p *Parser) parseIf() ast.Stmt {
 
 // parseWhile 解析 `while cond do block end` 循环。
 //
-// 设计者视角：parseWhile 是“门卫循环”——cond 在门外验（parseExpr），do 开门，
+// 设计者视角：parseWhile 是“门卫循环”——cond 在门外验详见实现，排查看 Span。
 // Block 进场，end 关门，形态固定故无分流。取舍：与 parseIf 共用 cond 解析，
 // 优先级语义一致（`while a and b do` 即 `(a and b)`）。不变量：S 从 while 到 end。
 // 排查现场：若 `do` 缺失后块被吞，先看 expect(Do) 失败后 parseBlock 是否从错误位置起块。
@@ -402,8 +381,8 @@ func (p *Parser) parseRepeat() ast.Stmt {
 //
 // 设计者视角：parseFor 是岔路最多的循环解析——先收首名+可选类型，再看 '=' 即数字路
 // （s,e,step 三值），否则即泛型路（逗号续名、`in` 后 exprlist）。障碍是类型注记可
-// 紧贴循环变量（`for i: integer = ...`）：冒号分支要在 '=' 判定前先吃类型，否则
-// 会把 `: integer` 当比较。取舍：数字/泛型两路各产专属节点（NumericFor/GenericFor），
+// 紧贴循环变量如 `for i: integer = ...`，排查看 Span。
+// 会把 `: integer` 当比较。取舍：数字/泛型两路各产专属节点如 `: integer`，排查看 Span。
 // 不共用通泛结构，让 checker 不必二次分流。不变量：S 从 for 到 end。
 // 排查现场：若 `for k,v in ...` 的 v 丢失，先看逗号循环的 break 条件；若 step 被吞，
 // 先看第二逗号分支。
@@ -414,14 +393,14 @@ func (p *Parser) parseFor() ast.Stmt {
 		p.synchronize()
 		return &ast.EmptyStmt{S: start.Span}
 	}
-	// Optional type after loop var: for i: integer = ... (numeric) or for k: K, v: V in ... (generic)
+	// 循环变量后可选类型：`for i: integer = …` 数字路，`for k: K, v: V in …` 泛型路。
 	var firstTy ast.TypeNode
 	if p.at(token.Colon) {
 		p.next()
 		firstTy = p.parseType()
 	}
 	if p.at(token.Assign) {
-		// Numeric for.
+		// 数字路 `for i = s,e[,step] do`。
 		p.next()
 		s := p.parseExpr()
 		p.expect(token.Comma, "','")
@@ -436,7 +415,7 @@ func (p *Parser) parseFor() ast.Stmt {
 		p.expect(token.End, "'end'")
 		return &ast.NumericFor{Var: name, VarTy: firstTy, Start: s, End: e, Step: step, Block: b, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
-	// Generic for: name [, name]* [types] in exprlist do block end
+	// 泛型路 `for k,v in exprs do`。
 	names := []*ast.Ident{name}
 	types := []ast.TypeNode{firstTy}
 	for p.at(token.Comma) {
@@ -508,7 +487,7 @@ func (p *Parser) parseGlobalFunc() ast.Stmt {
 	}
 	var generics []*ast.GenericParam
 	if p.at(token.Lt) {
-		// Only treat as generics if it parses and is followed by '('.
+		// `<T>` 后须跟 `(` 才算泛型，否则按比较回退，如 `function f<T>(x)`。
 		save := p.saveCursor()
 		nd := len(p.diags)
 		g := p.parseGenericParams()
@@ -560,7 +539,7 @@ func (p *Parser) parseFuncName() *ast.FuncName {
 // class、macro 各有专诊（且各有“像声明才进”的二次确认，如 `local type = 1` 仍是变量），
 // 都不是才进通用多变量路（`name [attr] [: T]` 逗号列 + 可选 `= exprlist`）。
 // 障碍有二：一是 `x <attr>: T` 与 `x: T <attr>` 两种注记顺序都要吃；二是 attr 的
-// `<const>`/`<close>` 与泛型 `<T>` 同形，需 parseAttr 三步硬判（Lt+Ident+Gt）。
+// `<const>`/`<close>` 与泛型 `<T>` 同形，需 parseAttr 三步硬判如 `<const>`/`<close>`/`<T>`，排查看 Span。
 // 取舍：声明分流用 peek 二三步前瞻零消费，误判宁可走变量路（后验可纠），不提前吞关键字。
 // 不变量：names 为空即记账+同步回 EmptyStmt。排查现场：若 `local type Foo = ...`
 // 未进声明，先看 peek(1)/peek(2) 的 Kind 是否满足 =/</{/extends 四选一。
@@ -652,9 +631,7 @@ func (p *Parser) parseLocal() ast.Stmt {
 	return &ast.LocalAssign{Names: names, Attrs: attrs, Types: types, Values: values, S: token.Span{Start: start.Span.Start, End: end, File: p.file}}
 }
 
-// parseAttr parses `<const>` / `<close>` if present.
-//
-// 设计者视角：parseAttr 是 local 属性的“邮戳检查”——只有 `<`+Ident+`>` 三连且名在
+// parseAttr 是 local 邮戳检查：`<`+Ident+`>` 三连且名在 const/close 白名单才算，余者零消费退回。
 // const/close 白名单才算戳，否则零消费原样退回（把 `<` 留给泛型/比较）。
 // 障碍是 `<` 高度复用：取舍是 peek(1)/peek(2) 硬判三件套，不满足即回 ""，绝不试探
 // 消费。候选曾是复用泛型解析，但属性语法极简，专用三步更快。不变量：成功必消费三 Token；
@@ -664,11 +641,11 @@ func (p *Parser) parseAttr() string {
 	if !p.at(token.Lt) {
 		return ""
 	}
-	// Need Ident then Gt.
+	// 须 Ident 后紧跟 `>` 才算，`>>` 亦不认。
 	if p.peek(1).Kind != token.Ident {
 		return ""
 	}
-	// peek(2) must be > (or start of >> / >=? attrs are simple, require exact >).
+	// 属性极简只认单个 `>`，`>>`/`>=` 到此即止。
 	if p.peek(2).Kind != token.Gt {
 		return ""
 	}

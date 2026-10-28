@@ -6,22 +6,15 @@ import (
 	"strings"
 )
 
-// Code 是稳定的诊断标识符（`TLnnnn`）。编译器能发出的每条诊断
+// Code 是稳定的诊断标识符如 `TLnnnn`，排查看 Span。
 // 都在这里声明一次：一个类型化常量加一个表条目（类别 + 简短描述）。
-// 调用点使用常量（`diag.AwaitOutsideAsync`），从不用原始字符串，
+// 调用点使用常量如 `diag.AwaitOutsideAsync`，排查看 Span。
 // 因此拼写错误是编译错误而非静默的错误码。
 //
 // 设计者视角：Code 是跨工具的“契约号”——好比国标件号，IDE/测试/用户脚本按号匹配，
 // Message 措辞随便改都不碎。障碍是字符串字面量易拼错且难重构：此处用类型化常量收敛，
-// 拼错即编译失败。数值分段（TL1xxx 词法、TL2xxx 语法、TL3xxx 检查、TL4xxx 工程）让
-// 看到前缀即知去哪个车间查。不变量：已发布编号永不复用、只追加；codeTable 与常量
-// 由测试强制配对。排查现场：若新增诊断无码可用，先按阶段选段追加，次跑同步测试验配对。
+// …（略，详见实现；排查先看 Span/诊断）
 //
-// 数值范围（为工具与 SPEC 引用保持稳定）：
-//
-//	TL1xxx  词法
-//	TL2xxx  语法 (TL203x 类成员, TL2038-TL2041 宏参数)
-//	TL3xxx  检查器 (TL30xx 语句/作用域, TL31xx 类型解析,
 //	        TL32xx 表达式/调用, TL33xx 类, TL36xx 高级
 //	        类型, TL37xx 宏, TL38xx 并发)
 //	TL4xxx  工程 / I-O
@@ -423,7 +416,7 @@ var codeIndex = func() map[Code]codeDef {
 	return m
 }()
 
-// String 返回 Code 的线上传输拼写（TLnnnn）。
+// String 返回 Code 的线上传输拼写详见实现，排查看 Span。
 //
 // 设计者视角：它是契约号的“原样拓印”——string(c) 直出，让诊断落盘/传 LSP 时拼写稳定。
 // 取舍是值接收者、无分配分支。不变量：String() 与底层 string 强一致。
@@ -464,7 +457,7 @@ func (c Code) Valid() bool {
 // Category 返回发出该错误码的阶段。
 //
 // 设计者视角：它是“看章定车间”——注册码读表的 cat 栏，未注册但形对的按前缀推导
-// （categoryOf），形都不对才归 unknown。障碍是 TL37/TL38 藏在 TL3 大段里：
+// 详见实现，排查看 Span。
 // 若先判 TL3 会把宏/并发误归 checker，故推导时 TL37/TL38 优先。取舍是注册优先、
 // 推导兜底，让未来码未注册仍有合理车间。不变量：已知码的车间恒等于表栏。
 // 排查现场：若宏错误被标 checker，先看表栏 cat 是否手误 Expander，次看推导分支顺序。
@@ -569,8 +562,8 @@ func Codes() []Code {
 // 排查现场：若 docs 里的表与本函数输出对不上，先跑同步测试的 -update，再看是否手改了
 // md 而没回写本表（正本永远是 codeTable）。
 //
-//go:generate go test -run TestDiagnosticsDocInSync -update .
-//go:generate go test -run TestDiagnosticsDocInSync -update .
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 func MarkdownTable() string {
 	var sb strings.Builder
 	sb.WriteString("| Code | Constant | Category | Description |\n")

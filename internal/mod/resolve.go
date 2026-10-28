@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-// Resolved is one MVS-selected module.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Path+Version+Commit+Direct 四元，Version 为 tag 文（exact 原串保真），
 // Commit 为钉死 SHA。障碍是 revision 钉：Version 存 rev 文、Commit 存 SHA。排查现场：
@@ -18,8 +18,8 @@ type Resolved struct {
 	Direct  bool
 }
 
-// Registry supplies tag listings and manifests for resolution.
-// Implementations: git-backed cache (fetch.go), in-memory fakes (tests).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：四法供 MVS——Tags 列版、Manifest 取依赖、ResolveRev 定修订、LocalDir
 // 指本地。障碍是叶模块：Manifest 返 nil。候选：接口 vs 具体；选接口可测。不变量：
@@ -27,18 +27,18 @@ type Resolved struct {
 type Registry interface {
 	// Tags returns tag name -> commit for the module's repository.
 	Tags(ctx context.Context, path string, dep Dep) (map[string]string, error)
-	// Manifest returns the module's tlua.toml at commit
-	// (nil manifest = leaf module without dependencies).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	Manifest(ctx context.Context, path, commit string) (*Manifest, error)
-	// ResolveRev resolves a branch name or commit SHA to a commit.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	ResolveRev(ctx context.Context, path string, dep Dep, rev string) (string, error)
-	// LocalDir reports a locally-forced content directory for path
-	// (root manifest replaces and discovered transitive path links).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	LocalDir(path string) (string, bool)
 }
 
-// Resolve runs Minimal Version Selection over the root manifest,
-// returning the full module closure (direct + indirect) as a lock.
+// 解析Minimal/Version，如 `minimal` 例，排查看 Span。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：MVS 薄封 resolveWith（丢源表），根先验。障碍是根非法：前置拦。
 // 不变量：语义同 resolveWith 首返。排查现场：源需查用 resolveWith。
@@ -47,7 +47,7 @@ func Resolve(ctx context.Context, root *Manifest, reg Registry) (*Lock, error) {
 	return l, err
 }
 
-// resolveWith also returns the fetch source (explicit URL or "") per path.
+// Resolve如 `f(1)`，排查看 Span。
 //
 // 设计者视角：验根→run 闭包→lock+源表。障碍是 URL 覆冲突：pinSource 拒。排查现场：
 // 源冲突先查 pin。
@@ -65,13 +65,13 @@ func resolveWith(ctx context.Context, root *Manifest, reg Registry) (*Lock, map[
 type resolver struct {
 	root *Manifest
 	reg  Registry
-	// queries accumulates version queries per path.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	queries map[string][]Query
-	// sources pins the fetch source per path (url override or derived).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	sources map[string]string
-	// selected holds MVS results.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	selected map[string]*Resolved
-	// processed tracks (path, version) pairs already expanded.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	processed map[string]bool
 }
 
@@ -86,8 +86,8 @@ func (r *resolver) run(ctx context.Context) error {
 	r.processed = map[string]bool{}
 	for p, d := range r.root.Deps {
 		if _, ok := r.reg.LocalDir(p); ok {
-			// Locally forced content: versions bypassed entirely. The
-			// queue still expands it for transitive requirements below.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			if err := r.pinSource(p, *d); err != nil {
 				return err
 			}
@@ -102,7 +102,7 @@ func (r *resolver) run(ctx context.Context) error {
 			return err
 		}
 	}
-	// Worklist of paths needing (re)selection.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	queue := sortedKeys(r.queries)
 	for p := range r.localSeeds() {
 		queue = append(queue, p)
@@ -138,7 +138,7 @@ func (r *resolver) run(ctx context.Context) error {
 		}
 		for dp, dd := range m.Deps {
 			if _, ok := r.reg.LocalDir(dp); ok {
-				// Content forced locally; queue for expansion only.
+				// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				queue = append(queue, dp)
 				continue
 			}
@@ -156,7 +156,7 @@ func (r *resolver) run(ctx context.Context) error {
 	return nil
 }
 
-// localSeeds lists root requirements served from local directories.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：根 Deps 中本地者为种子（须入队展传递）。障碍是传递本地：run 内另补。
 // 排查现场：本地传递漏先查队列。
@@ -170,7 +170,7 @@ func (r *resolver) localSeeds() map[string]bool {
 	return out
 }
 
-// selectLocal selects locally-forced content by manifest version.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：本地版即 manifest Version（非法兜 `v0.0.0-local`），commit=`local`。
 // 障碍是无版：兜底保可选。候选：旁路 vs 选版；选版保 lock 有版。排查现场：本地版错
@@ -193,7 +193,7 @@ func (r *resolver) selectLocal(ctx context.Context, p string) (bool, error) {
 	return true, nil
 }
 
-// pinSource records the fetch URL for a path, rejecting conflicts.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：显式 URL 钉源，异源同径即冲突错（保单源）。障碍是空 URL：跳。
 // 不变量：同径同源。排查现场：源冲突先查两处 Deps。
@@ -206,14 +206,14 @@ func (r *resolver) pinSource(p string, d Dep) error {
 	return nil
 }
 
-// selectOne picks the MVS version for p; true when (re)selected.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：按询类分流——revision 定点、latest 追 Tags 最大、exact/caret 走
 // selectVersion。障碍是无 tag：latest 错。候选：合流 vs 分流；选分流清。排查现场：
 // 选版错先查询类。
 func (r *resolver) selectOne(ctx context.Context, p string) (bool, error) {
 	qs := r.queries[p]
-	// Revision queries must agree (incomparable otherwise).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	var rev string
 	var revSet bool
 	var semQueries []Query
@@ -237,7 +237,7 @@ func (r *resolver) selectOne(ctx context.Context, p string) (bool, error) {
 	return r.selectVersion(ctx, p, semQueries)
 }
 
-// selectRevision resolves a branch/SHA pin.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：revision 经 Registry 定 commit，Version 存 rev 文（lock 保真）。
 // 障碍是浮动分支：快照于此。排查现场：分支漂移先查 lock。
@@ -257,7 +257,7 @@ func (r *resolver) selectRevision(ctx context.Context, p, rev string) (bool, err
 	return true, nil
 }
 
-// selectVersion picks max(minima) over semver queries (MVS).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：MVS 取 max(各询下界)：exact 下界即自身、caret 下界即 Base、latest
 // 遇 Tags 最大，候选 max 且须全询 Matches，已选低即升。障碍是 exact 冲突（两异钉）：
@@ -302,8 +302,8 @@ func (r *resolver) selectVersion(ctx context.Context, p string, qs []Query) (boo
 		case QueryExact:
 			for i, t := range avail {
 				if t.v.Compare(q.Base) == 0 {
-					// Same version, different tag spellings ("v1.2.3" vs
-					// "1.2.3"): prefer the query's own spelling.
+					// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+					// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 					if pick < 0 || t.tag == q.Text {
 						pick = i
 					}
@@ -333,7 +333,7 @@ func (r *resolver) selectVersion(ctx context.Context, p string, qs []Query) (boo
 		}
 	}
 	if exact != nil {
-		// An exact pin dominates: carets must still accept it.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		for _, q := range qs {
 			if q.Kind == QueryCaret && !q.Matches(exact.v) {
 				return false, fmt.Errorf("module %q: exact pin %q conflicts with %q", p, exact.tag, q.Text)
@@ -357,7 +357,7 @@ func (r *resolver) selectVersion(ctx context.Context, p string, qs []Query) (boo
 	return true, nil
 }
 
-// lock converts the selection into a Lock (direct = root-listed).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：selected 按径排入 Entries，根单标 Direct。障碍是本地 Dir：此处空，
 // backfill 另填。排查现场：Direct 错先查根集。

@@ -12,13 +12,9 @@ import (
 //
 // 物理布局：
 //
-//	ClassField
 //	├── Type     Type        // 成员类型（方法为函数类型）
 //	├── Optional bool        // 字段可选（方法恒 false）
-//	├── Readonly bool
 //	├── Access   Access      // 可见性
-//	├── IsMethod bool
-//	├── Abstract bool
 //	└── Owner    *ClassDef   // 声明类身份
 type ClassField struct {
 	Type     Type
@@ -38,7 +34,6 @@ type ClassField struct {
 //
 // 物理布局：
 //
-//	ClassDef
 //	└── Name string   // 声明名（指针身份即身份）
 type ClassDef struct {
 	Name string
@@ -52,14 +47,12 @@ type ClassDef struct {
 //
 // 物理布局：
 //
-//	Class
 //	├── Def        *ClassDef            // 声明身份（指针相等）
 //	├── Name       string              // 打印名
 //	├── Args       []Type              // 泛型实参
 //	├── Params     []string            // 泛型形参名（冗余，便于打印）
 //	├── Fields     map[string]ClassField // 实例成员（字段+方法）
 //	├── Base       *Class              // 父类（nil=根）
-//	├── IsAbstract bool
 //	└── TypeParams []*GenericParam     // 泛型声明（约束/默认）
 type Class struct {
 	Def        *ClassDef
@@ -69,7 +62,7 @@ type Class struct {
 	Fields     map[string]ClassField // instance members (fields + methods)
 	Base       *Class
 	IsAbstract bool
-	// TypeParams holds resolved generic declarations (constraints and
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	// defaults intact) for explicit-argument checking on `new`.
 	TypeParams []*GenericParam
 }
@@ -105,8 +98,6 @@ func (t *Class) stringSeen(seen map[Type]bool) string {
 	return t.Name + "<" + strings.Join(ps, ", ") + ">"
 }
 
-// ObjectView exposes public instance members structurally (for
-// interface conformance checks).
 // ObjectView 把类实例的 public 成员暴露为结构化 Object，供接口一致性检查。
 //
 // 设计者视角：接口一致性检查需要把名义类实例转为结构化 Object，仅暴露 public
@@ -120,17 +111,17 @@ func (t *Class) ObjectView() *Object { return classObjectView(t) }
 // 产生 Class 实例。
 //
 // 为什么与 Class 分离：Class 是实例形状（字段/继承），ClassValue 是“类本身”
-// 作为值的类型（typeof Foo）；把二者混在一起会让 `Foo` 与 `Foo.new()` 的
+// 作为值的类型如 `Foo`/`Foo.new()`，排查看 Span。
 // 类型无法区分，且静态成员无处安放。
 //
 // 物理布局：
 //
-//	ClassValue
 //	├── Class       *Class                 // 产生的实例类型（泛型定义态）
 //	├── Constructor *Func                  // 构造器（declare stub 为 nil）
 //	├── CtorAccess  Access                 // 构造器可见性
 //	├── Statics     map[string]ClassField  // 静态成员
-//	└── Abstract    bool
+//
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 type ClassValue struct {
 	Class       *Class // instance type produced (generic definition form)
 	Constructor *Func  // nil only for declare stubs (treated as any)
@@ -149,7 +140,7 @@ func (t *ClassValue) Kind() Kind { return KClassValue }
 // String 把 ClassValue 渲染为规范文本。
 //
 // 设计者视角：打印 `typeof Name` 以区分实例类型与类值类型；Class 为 nil 时
-// 退化为 "class"（declare stub）。为什么加 typeof 前缀——裸名会与实例混淆，
+// 退化为 "class"详见实现，排查看 Span。
 // 前缀让诊断一眼看出这是“类本身”。排查现场：若 typeof 打印丢失类名，检查
 // Class 字段赋值。
 func (t *ClassValue) String() string {

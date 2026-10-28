@@ -6,27 +6,16 @@ import (
 	"github.com/typelua/typelua/internal/ast"
 )
 
-// Defer support (Go's defer, Zig's errdefer, Lua-flavored):
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 //   - `defer <call>` registers cleanup run LIFO on every NORMAL function
 //     exit (each `return`, plus fallthrough). Calls evaluate lazily inside
-//     a closure (unlike Go's immediate arguments; same as Lua closures).
+//
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //   - `errdefer <call>` registers cleanup run LIFO only when leaving via
 //     an explicit `error(...)` call in the same function.
-//   - Deferred entries share one list: normal exits skip err entries,
-//     error exits run everything LIFO (Zig order).
-//   - NOT covered: unwinding from propagated callee errors or failed
-//     asserts (use `<close>` locals: real Lua semantics, all exits).
 //
-// Emission: one `{fn, err}` list per deferring function, a runner that
-// returns its arguments (`return __r(f())` preserves multi-values without
-// pack/unpack), and registration closures at each defer site.
-
-// deferFrame tracks one function body under emission.
-//
-// 设计者视角：deferFrame 是函数体的“保洁登记簿”——top 钉住归属块，listVar 是
-// 清理链表，runVar 管正常出口、errVar 管 error 出口，hasDefer/hasErr 是预扫
-// 结论。障碍是 chunk 顶层亦可 defer，故帧栈含 chunk（见 pushDeferFrame 调用
+// …（略，详见实现；排查先看 Span/诊断）
 // 点）。候选：一函数一帧 vs 全文件一表；选前者，嵌套闭包互不串单。不变量：
 // 无 defer 帧的三变量全空，发射零开销。排查现场：defer 未执行先查帧归属
 // （top 是否为当前函数体）与 hasDefer 预扫。
@@ -51,9 +40,9 @@ func (e *emitter) deferTop() *deferFrame {
 	return e.deferStack[len(e.deferStack)-1]
 }
 
-// scanDefers reports defer/errdefer statements in the current function
-// (descending into plain blocks, never into nested functions, classes,
-// or macro definitions).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：scanDefers 是发射前的“侦察机”——只钻普通块（do/if/循环/select），
 // 见函数/类/macro 即停（彼等是新帧）。障碍是 SpawnStmt 体：看似块实为新任务
@@ -92,7 +81,7 @@ func scanDefers(b *ast.Block) (hasDefer, hasErr bool) {
 		case *ast.GenericFor:
 			walkBlock(n.Block)
 		case *ast.SpawnStmt:
-			// Spawned body is a new task (nested function): not this frame.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		case *ast.SelectStmt:
 			for _, sc := range n.Cases {
 				walkBlock(sc.Block)
@@ -112,9 +101,9 @@ func scanDefers(b *ast.Block) (hasDefer, hasErr bool) {
 	return hasDefer, hasErr
 }
 
-// pushDeferFrame opens a function frame, allocating temporaries when the
-// body defers. Call sites: every function body (incl. methods, ctors)
-// and the top-level chunk.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：pushDeferFrame 是“开账”——先 scanDefers 侦察，再按需领号
 // （__tl_defer_N 全文件单调，防嵌套碰撞），最后压栈。障碍是无 defer 函数须
@@ -147,8 +136,8 @@ func (e *emitter) popDeferFrame() {
 	e.deferStack = e.deferStack[:len(e.deferStack)-1]
 }
 
-// emitDeferPrelude emits the defer list and runners (after vararg prelude,
-// before body statements) at the given indent.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：prelude 是“保洁工具间”——先建空表，再按需建 runner：正常 runner
 // 倒序跑非 err 项并透传多值（return __r(f()) 保多值），错误 runner 全跑。
@@ -172,7 +161,7 @@ func (e *emitter) emitDeferPrelude(ind int) {
 		e.write("local function " + fr.runVar + "(...) for __i = #" + fr.listVar + ", 1, -1 do if not " + fr.listVar + "[__i].err then " + fr.listVar + "[__i].fn() end end return ... end")
 		e.nl()
 	} else {
-		// Error-only frames still need the list (normal runner unused).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		e.pad()
 		e.write("local " + fr.listVar + " = {}")
 		e.nl()
@@ -185,8 +174,8 @@ func (e *emitter) emitDeferPrelude(ind int) {
 	e.indent = saved
 }
 
-// emitDeferTrail runs pending defers at function-body end (fallthrough
-// path only: a present Ret always exits through the rewritten return).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：trail 只守“自然滑出”这扇门——有显式 return 的函数已在 emitReturn
 // 里改写为 runner 包裹，此处须让路，否则清理跑两遍。障碍是空函数
@@ -210,8 +199,8 @@ func (e *emitter) emitDeferTrail(b *ast.Block, ind int) {
 	e.indent = saved
 }
 
-// emitReturn emits a return statement with defer/error rewriting for the
-// current frame (plain return otherwise).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：emitReturn 是三岔路口——`return error(...)` 走 err 跑道（先跑
 // err runner 再抛），带值普通 return 走 runner 包裹（保多值），无 defer 帧

@@ -4,15 +4,14 @@ import (
 	"github.com/typelua/typelua/internal/ast"
 )
 
-// Class runtime emission (metatables, inheritance, constructors).
+// 类是土法炼钢：`class Dog extends Animal` 发射为 5.1 元表三件（__index 自指+基表+__call 转 new）。
 //
 // 设计者视角：本文件是类的“土法炼钢炉”——无 class 关键字的 Lua 靠元表三件套
 // （__index 自指 + 基表 __index + __call 转 new）撑起继承，好比用砖木搭出钢
 // 结构。障碍是 5.1/5.4 通吃：不用 goto、不用位运算，只用 setmetatable 习语。
 // 不变量：每个类必有 constructor（显式或合成），Base.constructor 永可调用。
 
-// classBaseName extracts the runtime table for `extends` (type args erased).
-// Non-name bases were already rejected by the checker; emit defensively.
+// classBaseName 脱泛型取运行时基表，如 `extends Box<T>` 只留 Box。
 //
 // 设计者视角：classBaseName 是泛型擦除的“脱衣机”——`extends Box<T>` 只留 Box
 // 作运行时表。障碍是 checker 已拒非命名基类，此处仍防一手：若断言错类型直接
@@ -27,28 +26,7 @@ func classBaseName(t ast.TypeNode) string {
 	return nt.Name
 }
 
-// emitClass renders a class to a 5.1-compatible metatable idiom:
-//
-//	local Dog = setmetatable({}, {__index = Animal})
-//	Dog.__index = Dog
-//	Dog.count = 0
-//	function Dog.new(...)
-//	    local self = setmetatable({}, Dog)
-//	    self:constructor(...)
-//	    return self
-//	end
-//	setmetatable(Dog, {__call = function(_, ...) return Dog.new(...) end})
-//	function Dog:constructor(name) ... end
-//
-// Field initializers run inside the constructor (after super(), like TS);
-// every class gets a constructor so `Base.constructor` always exists.
-//
-// 设计者视角：emitClass 是全文件最长的“装配线”，工序固定：建表→静态字段→
-// new 入口→__call 晚绑定→构造体→方法。障碍一是字段初始化时机：须在 super()
-// 之后（镜像 TS），故在构造体内扫描首个顶层 super 调用做 splitAt 切分；障碍
-// 二是元表替换会丢 __index，故 __call 用 getmetatable 突变而非重设；障碍三是
-// ambient declare 类只留类型、零运行时，故 Declared 直接清 pending 返回。
-// 候选：初始化放 new 里 vs 放 constructor；选后者，子类 super 链自然串起。
+// 发射形如 `local Dog=setmetatable({},{__index=Animal})`，`Dog.__index=Dog` 自指，`self` 再套一层。
 // 不变量：classStack 入栈必配 defer 弹栈；抽象类 new 首行即 error。排查现场：
 // 字段先于基类构造执行先查 splitAt 扫描（仅认顶层 ExprStmt super），方法调
 // 不到基类先查 __call 是否被重设覆盖。
@@ -76,7 +54,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 	e.write(name + ".__index = " + name)
 	e.nl()
 
-	// Static field initializers (the table already exists).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, m := range n.Members {
 		if m.Kind != ast.ClassField || !m.IsStatic || m.Init == nil {
 			continue
@@ -88,7 +66,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 		e.nl()
 	}
 
-	// Constructor entry point.
+	// 构造详见实现，排查看 Span。
 	e.pad()
 	e.mark(n, name+".new")
 	e.write("function " + name + ".new(...)")
@@ -113,13 +91,13 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 	e.write("end")
 	e.nl()
 	// Late-bind __call after `new` exists: mutating (not replacing) the
-	// metatable preserves __index, and the closure no longer sits inside
-	// the class-defining statement (robust across implementations).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	e.pad()
 	e.write("getmetatable(" + name + ").__call = function(_, ...) return " + name + ".new(...) end")
 	e.nl()
 
-	// Constructor (explicit or synthesized).
+	// 构造详见实现，排查看 Span。
 	var ctor *ast.ClassMember
 	for _, m := range n.Members {
 		if m.Kind == ast.ClassConstructor && m.Body != nil {
@@ -127,7 +105,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 			break
 		}
 	}
-	// Own non-static field initializers, in declaration order.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	var inits []*ast.ClassMember
 	for _, m := range n.Members {
 		if m.Kind == ast.ClassField && !m.IsStatic && m.Init != nil {
@@ -141,8 +119,8 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 		e.emitClassParams(ctor)
 		e.write(")")
 		e.nl()
-		// Own initializers run right after the top-level super() call,
-		// mirroring TS field-initialization order.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		splitAt := -1
 		if base != "" && ctor.Body != nil {
 			for i, st := range ctor.Body.Stmts {
@@ -200,7 +178,7 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 		e.nl()
 	}
 
-	// Methods.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, m := range n.Members {
 		if m.Kind != ast.ClassMethod {
 			continue

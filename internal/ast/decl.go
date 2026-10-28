@@ -4,9 +4,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Declaration nodes (types, interfaces, enums, macros).
-
-// Type declarations.
+// 声明节点：type/interface/enum/macro 四件套。
 
 // TypeAliasDecl 表示 `type Name = T` 类型别名声明；S 为源码 Span，用于诊断与定位。
 //
@@ -26,7 +24,7 @@ type TypeAliasDecl struct {
 
 func (*TypeAliasDecl) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：别名 Span 覆盖 `type Name<...> = T` 全句，循环别名报错圈整句，T 写错圈
 // Type 子段。排查现场：若泛型别名高亮只剩名字，检查 Generics 区间是否纳入 S。
@@ -34,7 +32,7 @@ func (n *TypeAliasDecl) Span() token.Span { return n.S }
 
 // InterfaceDecl 表示 `interface Name { ... }` 接口声明；S 为源码 Span，用于诊断与定位。
 //
-// 设计者视角：接口是“结构类型的草稿纸”——Fields 只记签名（Type/Optional/Readonly），
+// 设计者视角：接口是“结构类型的草稿纸”——Fields 只记签名详见实现，排查看 Span。
 // Extends 记多继承源（可空）。与 ClassDecl 的名义身份不同，接口只看形状，
 // class 实例能否赋给接口由 classObjectView 快照复用判定。Declared 同为 ambient 开关。
 // 不变量：Fields 可空（空接口即 `any` 除外皆可）。排查现场：若接口继承缺成员，检查
@@ -51,11 +49,11 @@ type InterfaceDecl struct {
 
 func (*InterfaceDecl) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：接口 Span 罩住 `interface Name ... { ... }` 全体，字段缺失圈缺失处，
 // 继承冲突圈 Extends 子段。排查现场：若字段报错圈到接口名，检查是否误用本 S 而非
-// InterfaceField.S。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 func (n *InterfaceDecl) Span() token.Span { return n.S }
 
 // InterfaceField 表示接口中的一个字段/方法签名；S 为源码 Span，用于诊断与定位。
@@ -72,7 +70,7 @@ type InterfaceField struct {
 	S        token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：字段 Span 覆盖 `name?: T` / `readonly name: T` 全段，`?` 漏写圈问号位。
 // 排查现场：若 readonly 误报，检查 Readonly 标志与 Span 修饰符区间是否一致。
@@ -94,7 +92,7 @@ type EnumDecl struct {
 
 func (*EnumDecl) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：枚举 Span 罩住 `enum Name { ... }` 全体，成员重复圈成员，值类型错圈 Value。
 // 排查现场：若成员报错圈整枚举，检查是否误用本 S 而非 EnumMember.S。
@@ -112,7 +110,7 @@ type EnumMember struct {
 	S     token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：成员 Span 只圈 `Name = Value` 本行，值非法圈 Value，名冲突圈 Name。
 // 排查现场：若自增枚举仍要求显式值，检查 checker 的字符串枚举分支。
@@ -120,9 +118,9 @@ func (n *EnumMember) Span() token.Span { return n.S }
 
 // MacroDef is a compile-time macro: `macro name(params) = expr` for
 // expressions, `macro name(params) do stmts end` for statements.
-// 尾部的 `...`（HasVarArg）收集额外调用实参；函数体内裸 `...` 仅在
+// 尾部的 `...`如 `...`/`...`，排查看 Span。
 // 调用实参位置展开它们.
-// Definitions are expanded (and erased) before type checking.
+// 定义先展开擦除再查型，如 `macro M=1` 展后复核。
 //
 // 设计者视角：宏是“检查前蒸发的糖”——IsExpr 分两道：Body（表达式宏 `= expr`）与
 // Block（语句宏 `do stmts end`），Params 为形参名表，HasVarArg 吞多余实参，体内裸
@@ -142,7 +140,7 @@ type MacroDef struct {
 
 func (*MacroDef) stmtNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：宏定义 Span 覆盖整段 `macro ...`，调用点错误圈调用处而非定义处；
 // 定义体内错误圈 Body/Block。排查现场：若宏错误全指回定义，检查展开是否丢失调用点

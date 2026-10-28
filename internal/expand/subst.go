@@ -5,7 +5,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Substitution (scope-aware: shadowed params are left alone).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：代入是“影子感知”的——shadow 计数记被绑走的形参，命中即留；
 // trail/checkpoint/unwind 管块域进出；dotsShadow 区分宏 ... 与函数 ...。
@@ -18,13 +18,13 @@ type substCtx struct {
 	shadow map[string]int      // param names currently shadowed (depth count)
 	trail  []string            // push order for block-scoped unwinding
 	// Variadic rest: extra call args spliced at an unshadowed bare `...`
-	// in call-argument position. Nil outside variadic-macro expansion.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	varArgs []ast.Expr
 	// dotsShadow counts enclosing function bodies: `...` inside one
-	// belongs to that function, never to the macro.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	dotsShadow int
 	// strayDots collects unshadowed `...` outside call arguments
-	// (reported as TL3706 by the expansion driver).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	strayDots []token.Span
 }
 
@@ -53,8 +53,8 @@ func (s *substCtx) unwindTo(cp int) {
 
 func (s *substCtx) isShadowed(name string) bool { return s.shadow[name] > 0 }
 
-// substBlock substitutes a block, unwinding block-local shadows at the end
-// so later siblings (and outer scopes) are unaffected.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：substBlock 给块拍快照、代入、退影子，保兄弟与外层干净。障碍是 Ret
 // 亦须代（尾 return 含参）。候选：调用方退 vs 内部退；选内部，配对不漏。不变量：
@@ -71,7 +71,7 @@ func substBlock(b *ast.Block, s *substCtx) {
 	s.unwindTo(cp)
 }
 
-// substCallArgs substitutes call arguments, splicing an unshadowed bare
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // `...` (variadic macro rest) into per-occurrence copies of the extras.
 //
 // 设计者视角：substCallArgs 是变参的“摊饼处”——唯 call-args 位裸 ... 方 splice，
@@ -92,8 +92,8 @@ func substCallArgs(args []ast.Expr, s *substCtx) []ast.Expr {
 	return out
 }
 
-// substExpr replaces unshadowed param references with per-occurrence copies
-// of the argument ASTs.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：substExpr 见 Ident 即换（影子则留），见 FuncLit 即压参影+dots++，
 // 见 VarArg 非 call 位即记 stray+产 nil 保可跑。障碍是参数 AST 须每用复印（同参
@@ -125,7 +125,7 @@ func substExpr(x ast.Expr, s *substCtx) ast.Expr {
 		return n
 	case *ast.VarArg:
 		// Stray `...` (variadic rest outside call arguments): the driver
-		// reports TL3706; substitute nil to keep output runnable.
+		// 报告TL，如 `tl` 例，排查看 Span。
 		if s.varArgs != nil && s.dotsShadow == 0 {
 			s.strayDots = append(s.strayDots, n.S)
 			return &ast.NilLit{S: n.S}
@@ -188,17 +188,17 @@ func substStmt(st ast.Stmt, s *substCtx) {
 		for i, v := range n.Values {
 			n.Values[i] = substExpr(v, s)
 		}
-		// Names bind after values evaluate and stay visible to later
-		// siblings; the enclosing substBlock unwinds at block end.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		for _, id := range n.Names {
 			s.pushShadow(id.Name)
 		}
 	case *ast.DeferStmt:
-		// Deferred calls substitute like normal calls (evaluated at exit,
-		// but with the call-site argument values, as written).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		n.Call = substExpr(n.Call, s)
 	case *ast.SpawnStmt:
-		// Spawned calls substitute like normal calls.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		n.Call = substExpr(n.Call, s)
 	case *ast.SelectStmt:
 		for _, sc := range n.Cases {
@@ -226,12 +226,12 @@ func substStmt(st ast.Stmt, s *substCtx) {
 			substBlock(n.Default, s)
 		}
 	case *ast.ImportStmt:
-		// The bound name shadows macro parameters from here on.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if n.Name != nil {
 			s.pushShadow(n.Name.Name)
 		}
 	case *ast.LocalFuncDef:
-		// Body sees the name (recursion); params shadow inside only.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		s.pushShadow(n.Name.Name)
 		cp := s.checkpoint()
 		for _, p := range n.Func.Params {
@@ -283,8 +283,8 @@ func substStmt(st ast.Stmt, s *substCtx) {
 		n.Cond = substExpr(n.Cond, s)
 		substBlock(n.Block, s)
 	case *ast.RepeatStmt:
-		// repeat..until condition sees loop locals: substitute the body
-		// first, then the condition, then unwind both together.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		cp := s.checkpoint()
 		for _, stmt := range n.Block.Stmts {
 			substStmt(stmt, s)
@@ -314,7 +314,7 @@ func substStmt(st ast.Stmt, s *substCtx) {
 		s.unwindTo(cp)
 	case *ast.GotoStmt, *ast.LabelStmt, *ast.EmptyStmt, *ast.BreakStmt,
 		*ast.TypeAliasDecl, *ast.InterfaceDecl:
-		// No value positions (labels handled by the rename pass).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	case *ast.EnumDecl:
 		for _, m := range n.Members {
 			if m.Value != nil {

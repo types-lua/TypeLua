@@ -9,7 +9,7 @@ import (
 	"github.com/typelua/typelua/internal/toml"
 )
 
-// ParseManifest parses tlua.toml content.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Decode→取 package 表（名+版，未知键拒）→取 dependencies（串=版询，
 // 内联表=version/url/path，裸 URL 追 latest）→path 依赖兼作 replace→禁 [replace] 表
@@ -68,13 +68,13 @@ func ParseManifest(src string) (*Manifest, error) {
 				return nil, fmt.Errorf("dependency %q must be a version string or inline table", path)
 			}
 			if dep.Query == "" && dep.Path == "" {
-				// A bare url tracks latest.
+				// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				dep.Query = "latest"
 			}
 			m.Deps[path] = dep
 		}
 	}
-	// Local path dependencies act as replacements.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for path, dep := range m.Deps {
 		if dep.Path != "" {
 			m.Replace[path] = dep.Path
@@ -83,8 +83,8 @@ func ParseManifest(src string) (*Manifest, error) {
 	if _, ok := d.Tables["replace"]; ok {
 		return nil, fmt.Errorf("the [replace] table was removed; use `{ path = ... }` inside [dependencies]")
 	}
-	// Reject unknown top-level tables (typo guard).
-	// Bare [dependencies] headers (empty sections) are allowed.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for key := range d.Tables {
 		if key == "" || key == "package" || key == "dependencies" {
 			continue
@@ -100,8 +100,8 @@ func ParseManifest(src string) (*Manifest, error) {
 	return m, nil
 }
 
-// EncodeManifest renders tlua.toml deterministically (Cargo-style single
-// [dependencies] table; version shorthands where possible).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：按 package→dependencies 定序（径排序），纯版询用糖串，余用内联表，
 // 保往返稳定 diff 小。障碍是 map 乱序：SortedKeys 定之。候选：多表 vs 单表；
@@ -147,7 +147,7 @@ func quoteToml(s string) string {
 	return strconv.Quote(s)
 }
 
-// ParseLock parses tlua.lock content.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：逐 [[module]] 取 path/version/commit/direct/dir（错型即错，未知键拒），
 // 去重+Set 排序，禁多余表，末 Validate。障碍是手改 lock：严拒。候选：宽 vs 严；
@@ -221,7 +221,7 @@ func hasOnlyRoot(d *toml.Doc) bool {
 	return true
 }
 
-// EncodeLock renders tlua.lock deterministically.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：按径排序逐 [[module]]，dir 非空方写，保 diff 稳。障碍是乱序：先排。
 // 不变量：Parse(Encode(l)) 往返。排查现场：lock 抖先查排序。

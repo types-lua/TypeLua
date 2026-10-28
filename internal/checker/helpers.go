@@ -7,7 +7,7 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
-// Small type predicates, field/index lookup shared by checking.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：helpers 是判定的“量具箱”——is*Like 全是宽容谓词（any 恒真、泛型透
 // 约束、union 全员），lookupField/indexResult 是字段/索引的双入口（声明 vs 计算）。
@@ -17,7 +17,7 @@ import (
 
 // ---------- helpers ----------
 
-// isAnyLike reports any/unknown (permissive escape hatch).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isAnyLike 是全检查的“放行闸”——any/unknown 所到之处X判皆放，避免
 // 动态代码刷屏。障碍是 Unknown 与 Any 语义微异（未知 vs 动态）：此处合并，
@@ -27,7 +27,7 @@ func isAnyLike(t types.Type) bool {
 }
 
 // unwrapGeneric returns the constraint for `T extends C`, or Any for unconstrained params
-// (permissive to avoid false positives on generic code).
+// isAnyLike如 `f(1)`，排查看 Span。
 //
 // 设计者视角：unwrapGeneric 是泛型的“透视镜”——有约束看约束，无约束看 Any（放行）。
 // 障碍是无约束泛型若判 false 会把所有泛型函数报红；故恒给活路。取舍：谓词内透视，
@@ -43,7 +43,7 @@ func unwrapGeneric(t types.Type) (types.Type, bool) {
 	return t, false
 }
 
-// isNumberLike reports numeric types (number/integer/float, literals, unions, enums).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isNumberLike 是算术的“验钞机”——原语三态、字面 Base、union 全员、
 // enum 看 Underlying，泛型透约束。障碍是 enum 数字底（如 integer 枚举）不透即误拦
@@ -70,7 +70,7 @@ func isNumberLike(t types.Type) bool {
 	return isAnyLike(t)
 }
 
-// isIntegerLike reports integer types (narrower than number-like, for bitops).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isIntegerLike 是位运算的“卡尺”——只认 integer（字面亦须 Base integer），
 // union 全员，泛型透视。障碍是 float 字面混入：Base 必须精判，否则 `1.0 & 2` 漏网。
@@ -95,7 +95,7 @@ func isIntegerLike(t types.Type) bool {
 	return isAnyLike(t)
 }
 
-// isConcatable reports string-concatenable types (string/number family).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isConcatable 管 `..`——串与数字两家可连（Lua 语义数字自动转串），
 // 字面/union/enum 透视。障碍是 boolean/table 混入：必须精拦。排查现场：连接误报
@@ -125,7 +125,7 @@ func isConcatable(t types.Type) bool {
 	return false
 }
 
-// isComparable reports whether < <= > >= are meaningful for (l, r).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isComparable 是大小比的“配对表”——any/泛型恒配，数字配数字，串配串，
 // 同形（指针或 String 等）亦配。障碍是跨族比较（串 vs 数）必须拦，而 `==` 恒放
@@ -141,14 +141,14 @@ func isComparable(l, r types.Type) bool {
 	if _, ok := r.(*types.GenericParam); ok {
 		return true
 	}
-	// Numbers compare with numbers, strings with strings.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if isNumberLike(l) && isNumberLike(r) {
 		return true
 	}
 	if isStringLike(l) && isStringLike(r) {
 		return true
 	}
-	// Literals of same base.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if l == r {
 		return true
 	}
@@ -158,7 +158,7 @@ func isComparable(l, r types.Type) bool {
 	return false
 }
 
-// isStringLike reports string types (primitive/literal/union/enum, generic-aware).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isStringLike 与数字镜像——只认 string 家族，供连接与比较复用。泛型
 // 透视、union 全员。排查现场：字面串误判先查 Base 是否 String。
@@ -214,7 +214,7 @@ func isLengthable(t types.Type) bool {
 	return false
 }
 
-// lookupField resolves a field on any host (union/object/enum/map/class/value/chan/table).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：lookupField 是字段的“万能查号台”，顺序即语义：union 须全员有（TS
 // 同款，缺一即无）并合并（类型并、optional/readonly 升格、Access 取严）；Object
@@ -229,8 +229,8 @@ func isLengthable(t types.Type) bool {
 func lookupField(ot types.Type, name string) (types.Field, bool) {
 	switch x := ot.(type) {
 	case *types.Union:
-		// Distribute: every member must declare the field (nil and
-		// field-less members fail the whole access, like TS).
+		// lookupField如 `f(1)`，排查看 Span。
+		// lookupField如 `f(1)`，排查看 Span。
 		var ts []types.Type
 		opt, ro := false, false
 		acc := types.Public
@@ -259,7 +259,7 @@ func lookupField(ot types.Type, name string) (types.Field, bool) {
 		if f, ok := x.Fields[name]; ok {
 			return f, true
 		}
-		// Indexer with string key?
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		for _, ix := range x.Indexers {
 			if ix.Key.Kind() == types.KString || ix.Key.Kind() == types.KAny {
 				return types.Field{Type: ix.Value}, true
@@ -268,10 +268,10 @@ func lookupField(ot types.Type, name string) (types.Field, bool) {
 				return types.Field{Type: ix.Value}, true
 			}
 		}
-		// Enum runtime tables are Objects; handled above.
+		// 枚举详见实现，排查看 Span。
 		return types.Field{}, false
 	case *types.Enum:
-		// Enum value access returns member literal.
+		// 枚举详见实现，排查看 Span。
 		if m, ok := x.Members[name]; ok {
 			return types.Field{Type: m}, true
 		}
@@ -283,7 +283,7 @@ func lookupField(ot types.Type, name string) (types.Field, bool) {
 		}
 		return types.Field{}, false
 	case *types.Class:
-		// Instance members (flattened to include inherited, minus privates).
+		// 实例详见实现，排查看 Span。
 		if f, ok := x.Fields[name]; ok {
 			return types.Field{Type: f.Type, Optional: f.Optional, Readonly: f.Readonly, Access: f.Access, Owner: f.Owner}, true
 		}
@@ -312,7 +312,7 @@ func lookupField(ot types.Type, name string) (types.Field, bool) {
 	return types.Field{}, false
 }
 
-// classDefOf extracts the ClassDef behind a ClassValue, if any.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：classDefOf 是静态侧 Owner 的“溯源”——ClassValue 的 Owner 取自其
 // Class.Def，供门禁比对。空/无类即 nil（调用方恒放行）。排查现场：静态越权未报
@@ -355,7 +355,7 @@ func indexResult(ot, kt types.Type) types.Type {
 			return types.NewUnion(x.Elems)
 		case *types.Primitive:
 			if x.K == types.KString {
-				// string[i]? Lua 5.4 no, but allow any? Return string? Actually string indexing not valid; return nil.
+				// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				return nil
 			}
 			if x.K == types.KTable {
@@ -392,13 +392,13 @@ func indexResult(ot, kt types.Type) types.Type {
 		}
 		return nil
 	case *types.Object:
-		// Literal string/number keys map to fields.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if lit, ok := kt.(*types.Literal); ok {
 			key := strings.Trim(lit.Value, `"'`)
 			if s, _, _, ok := unquoteKey(lit.Value); ok {
 				key = s
 			}
-			// Number literal for array-like indexers.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			if lit.Base == types.Number || lit.Base == types.Integer || lit.Base == types.Float {
 				for _, ix := range x.Indexers {
 					if ix.Key.Kind() == types.KInteger || ix.Key.Kind() == types.KNumber {

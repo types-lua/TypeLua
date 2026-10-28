@@ -4,7 +4,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Type nodes.
+// 类型详见实现，排查看 Span。
 
 // ---------- Types ----------
 
@@ -22,7 +22,7 @@ type NamedType struct {
 
 func (*NamedType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：命名类型 Span 覆盖 `Name<Args>` 全段，缺失实参圈尖括号，名错圈 Name。
 // 排查现场：若泛型实参报错圈整类型，检查 Args 子 Span 是否逐个可用。
@@ -41,7 +41,7 @@ type LiteralType struct {
 
 func (*LiteralType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：字面量类型 Span 即字面量原文区间，拼写错圈原文。排查现场：若引号计入与否
 // 不定，检查 S 是否含引号（应当含）。
@@ -59,7 +59,7 @@ type ArrayType struct {
 
 func (*ArrayType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：数组 Span 含后缀 `[]`，元素错圈 Elem，括号缺失圈后缀。排查现场：
 // 若 `T[]` 被切成 T 与空，检查后缀 Span 是否独立。
@@ -78,7 +78,7 @@ type UnionType struct {
 
 func (*UnionType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：联合 Span 横跨全 `A | B`，分支错圈对应 Types[i]，分隔符错圈 `|`。
 // 排查现场：若分支报错圈整联合，检查是否误用本 S 而非分支子 Span。
@@ -96,7 +96,7 @@ type IntersectionType struct {
 
 func (*IntersectionType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：交叉 Span 同联合，全包 `A & B`，员错误圈员。排查现场：同联合，先分清
 // 源/目标交集分流再看 Span。
@@ -114,7 +114,7 @@ type OptionalType struct {
 
 func (*OptionalType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：可选 Span 含尾部 `?`，`?` 漏写圈本体尾。排查现场：若 `!` 与 `?` 混淆，
 // 检查后缀链的 Question/Bang 分支。
@@ -132,7 +132,7 @@ type ParenType struct {
 
 func (*ParenType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：括号类型 Span 含括号，内层 Elem 另计。排查现场：若去括号后行号漂移，
 // 检查内外 Span 是否混用。
@@ -150,7 +150,7 @@ type TupleType struct {
 
 func (*TupleType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：元组 Span 覆盖 `[...]` 全段，员错圈员。排查现场：若空元组无坐标，
 // 检查 S 是否仍有括号区间。
@@ -169,7 +169,7 @@ type TableType struct {
 
 func (*TableType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：table 类型 Span 罩住 `{...}` 全体，字段错圈字段。排查现场：若空表类型
 // 无坐标，检查 S 括号区间。
@@ -177,7 +177,7 @@ func (n *TableType) Span() token.Span { return n.S }
 
 // TableTypeField 表示 table 类型中的一个字段/索引器/方法；S 为源码 Span，用于诊断与定位。
 //
-// 设计者视角：一个 struct 扛三活，好比万能插座——普通字段（Name+Type+Optional/Readonly）、
+// 设计者视角：一个 struct 扛三活，好比万能插座——普通字段详见实现，排查看 Span。
 // 索引器（IsIndexer 时看 IndexKey/IndexVal）、方法（IsMethod 时看 MethodSig）。
 // Name 存 string 而非 *Ident（省一次解引用），NameSpan 另存坐标供 rename 跳转。
 // 障碍是三态互斥：parser 按 `[`/`:`+`(` 外形一次分流，IsIndexer/IsMethod 双旗互斥。
@@ -197,7 +197,7 @@ type TableTypeField struct {
 	MethodSig *FuncType
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：字段 Span 覆盖本条全段（含 `readonly`/`?` 修饰），索引器含 `[K]: V`，
 // 方法含签名。NameSpan 只圈名，hover 圈全段、rename 圈名。排查现场：若修饰符报错圈不准，
@@ -221,7 +221,7 @@ type FuncType struct {
 
 func (*FuncType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：函数类型 Span 从首参/左括号到返回尾，参数错圈 Param，返回错圈 Returns。
 // 排查现场：若泛型函数高亮丢 Generics，检查 S 是否含 `<T>` 区间。
@@ -241,7 +241,7 @@ type FuncTypeParam struct {
 	S        token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：参数 Span 覆盖 `name?: T` / `...` 全段，匿名参数 S 即类型区间。
 // 排查现场：若匿名参数无坐标，检查 S 是否回退到 Type.Span()。
@@ -260,7 +260,7 @@ type TypeofType struct {
 
 func (*TypeofType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：typeof Span 从 typeof 到表达式尾，表达式错圈 Expr。排查现场：
 // 若 `typeof` 被当值，检查类型位与表达式位的上下文分流。
@@ -278,7 +278,7 @@ type KeyofType struct {
 
 func (*KeyofType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：keyof Span 全包 `keyof T`，T 错圈 Elem。排查现场：若 keyof 套 keyof
 // 嵌套错，检查右结合解析。
@@ -292,7 +292,7 @@ func (n *KeyofType) Span() token.Span { return n.S }
 // 设计者视角：映射类型是“类型的 for 循环”——Param（K）遍历 Constraint（Keys 域），
 // Value 为模板。`?`/`readonly` 修饰符各有三态：裸写、显式 `+`、移除 `-`（同态映射
 // `keyof T` 时继承/去掉原修饰）。障碍是域未具体时不可展开：AST 存形状，
-// checker 的 evalMapped 只在域具体（IsConcreteType）时展为 Object，否则保留延迟。
+// checker 的 evalMapped 只在域具体详见实现，排查看 Span。
 // 不变量：Param/Constraint/Value 永非 nil；OptMinus/RoMinus 为真则对应正旗亦真。
 // 排查现场：若映射展开丢修饰符，检查 Optional/OptMinus/Readonly/RoMinus 四旗。
 type MappedType struct {
@@ -308,7 +308,7 @@ type MappedType struct {
 
 func (*MappedType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：映射 Span 罩住 `{...}` 全体，域错圈 Constraint，值错圈 Value。
 // 排查现场：若 `in` 缺失仍有 Span，检查恢复锚点是否含括号。
@@ -328,7 +328,7 @@ type IndexedAccessType struct {
 
 func (*IndexedAccessType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：索引访问 Span 覆盖 `T[K]` 全段，键错圈 Index。排查现场：若括号缺失，
 // 检查 S.End 是否取到同步点。
@@ -350,7 +350,7 @@ type ConditionalType struct {
 
 func (*ConditionalType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：条件 Span 横跨 `Check extends Extends ? True : False`，分支错圈对应段。
 // 排查现场：若 `? :` 缺失，检查恢复后 S 是否含同步点。
@@ -368,7 +368,7 @@ type InferType struct {
 
 func (*InferType) typeNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：infer Span 即 `infer U` 全段，游离 infer 圈整段提示挪入 extends。
 // 排查现场：若 U 名冲突，检查 Name.S 与外层泛型名。

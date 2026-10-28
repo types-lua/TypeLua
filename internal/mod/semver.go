@@ -61,7 +61,7 @@ func ParseVersion(s string) (Version, error) {
 		if p == "" {
 			return Version{}, fmt.Errorf("invalid version %q", orig)
 		}
-		// No leading zeros (semver).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if len(p) > 1 && p[0] == '0' {
 			return Version{}, fmt.Errorf("invalid version %q", orig)
 		}
@@ -81,8 +81,8 @@ func ParseVersion(s string) (Version, error) {
 	return Version{Major: nums[0], Minor: nums[1], Patch: nums[2], Pre: pre, Raw: raw}, nil
 }
 
-// Compare orders versions: -1, 0, +1 (prerelease < release; prerelease
-// identifiers compare per semver: numeric < alphanumeric, numeric numerically).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：主次补逐比，末比 pre（空=正式胜）。障碍是数字 vs 字母 id：数字小。
 // 候选：字串比 vs semver 比；选后者。排查现场：选版错先查 pre 律。
@@ -147,7 +147,7 @@ func comparePre(a, b string) int {
 	return cmpInt(len(as), len(bs))
 }
 
-// QueryKind classifies a version query.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：四态——latest 追新、exact 钉死、caret 兼容、revision 分支/SHA 快照。
 // 障碍是 revision 与版串歧义：版解析成先判版，不成方 revision。排查现场：查询错类
@@ -161,21 +161,21 @@ const (
 	QueryRevision // branch name or commit SHA (resolved by the fetcher)
 )
 
-// Query is a parsed manifest version query.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Kind+Base/Rev+Text（Text 留 lock 保真）。障碍是 exact 钉死须留原串。
 // 不变量：Text 恒原。排查现场：lock 版串变先查 Text。
 type Query struct {
 	Kind QueryKind
-	// Exact/Caret base version.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	Base Version
-	// Raw revision for QueryRevision.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	Rev string
-	// Original text (for messages and lockfile fidelity of exact pins).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	Text string
 }
 
-// ParseQuery parses "latest", exact versions, carets, or revisions.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：`latest`→Latest，`^`→Caret（内版须合法），版串→Exact，余（无空白引号）
 // →Revision 交 fetcher。障碍是空/含空白：拒。候选：版优先 vs 修订优先；选版优先。
@@ -198,15 +198,15 @@ func ParseQuery(s string) (Query, error) {
 	if v, err := ParseVersion(t); err == nil {
 		return Query{Kind: QueryExact, Base: v, Text: t}, nil
 	}
-	// Otherwise a branch name or commit SHA; validated by the fetcher.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if strings.ContainsAny(t, " \t\n\"'") {
 		return Query{}, fmt.Errorf("invalid version query %q", s)
 	}
 	return Query{Kind: QueryRevision, Rev: t, Text: t}, nil
 }
 
-// Matches reports whether v satisfies a caret/exact query (latest and
-// revisions are resolved by the fetcher, never matched here).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：exact 等值，caret 下限+npm 上界（Major>0 锁主，0.Minor>0 锁次，
 // 0.0.x 锁补丁）。latest/rev 此处恒 false（fetcher 决）。障碍是 0 版上界特律。
@@ -219,7 +219,7 @@ func (q Query) Matches(v Version) bool {
 		if v.Compare(q.Base) < 0 {
 			return false
 		}
-		// npm-style upper bounds.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		switch {
 		case q.Base.Major > 0:
 			return v.Major == q.Base.Major
@@ -232,7 +232,7 @@ func (q Query) Matches(v Version) bool {
 	return false
 }
 
-// MaxVersion returns the highest version in vs (nil when empty).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：线性取大，空返 nil（latest 无版时上游定）。排查现场：空 panic 先查 nil。
 func MaxVersion(vs []Version) *Version {
@@ -248,7 +248,7 @@ func MaxVersion(vs []Version) *Version {
 	return &best
 }
 
-// SortVersions sorts ascending.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Compare 升序，供 MVS 取大。障碍是预发序：Compare 已含。排查现场：版序
 // 错先查 Compare。

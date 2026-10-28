@@ -41,13 +41,8 @@ type respError struct {
 // 障碍是通知无 id：respond 遇空 id 即弃。图：readFrame→dispatch→respond。不变量：
 // 单 goroutine。排查现场：响应丢失先查 id 空，退出码错先查 shutdown 握手。
 //
-// 物理布局：
+// …（略，详见实现；排查先看 Span/诊断）
 //
-//	Server
-//	├── in       *bufio.Reader // 输入帧读取
-//	├── out      io.Writer     // 输出帧写入
-//	├── docs     map[string]*document // URI -> 文档状态
-//	├── version  string        // 服务器版本
 //	├── shutdown bool          // 已收到 shutdown
 //	├── exited   bool          // 已收到 exit
 //	└── exitCode int           // 退出码
@@ -177,7 +172,7 @@ func (s *Server) dispatch(msg message) {
 	// 设计者视角：dispatch 是方法“总机”——空 Method（对我方请求的响应）丢弃；
 	// initialize/shutdown/exit 走握手，文本同步走 did*，查询走 hover/definition/
 	// completion/references/rename/symbols，未知报 MethodNotFound。障碍是 rename
-	// 三元返（result/code/msg）：须分支应答。候选：表驱动 vs switch；选 switch，
+	// 三元返详见实现，排查看 Span。
 	// 各法签名不一。不变量：未知法恒错应。排查现场：新能力无响应先查此表。
 	if msg.Method == "" {
 		// 对我们（从未发送）请求的响应；忽略。

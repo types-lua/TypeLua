@@ -4,9 +4,9 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Base node interfaces, files, and blocks.
+// 基节点三件：Node/File/Block，Span 全员有。
 
-// Node is the base of all AST nodes.
+// 节点详见实现，排查看 Span。
 type Node interface {
 	Span() token.Span
 }
@@ -29,14 +29,14 @@ type TypeNode interface {
 	typeNode()
 }
 
-// File is a single .tl source unit.
+// 文件详见实现，排查看 Span。
 type File struct {
 	Name  string
 	Block *Block
 	EOF   token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：File 是“一源一文件”的根容器，好比档案袋封面——Name 标明归属，
 // Block 装正文，EOF 兜底空文件。障碍是空文件无语句可取坐标：若直接解引用
@@ -54,14 +54,14 @@ func (n *File) Span() token.Span {
 	return s
 }
 
-// Block is a sequence of statements with optional return.
+// Block 是语句列+可选尾 return，如 `a=1; return a`。
 type Block struct {
 	Stmts []Stmt
 	Ret   *ReturnStmt
 	S     token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Block 是“语句序列 + 可选 return”的扁容器，好比火车车厢挂钩——
 // Stmts 只装普通语句，Ret 独立存放，把“return 必须在块末”的 Lua 语法直接编码

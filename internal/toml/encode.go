@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Builder emits deterministic TOML for fixed schemas (manifests, locks).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Builder 是清单的“排字机”——调用方按固定 schema 依次调 Table/Str/Int/Bool，
 // 产出字节确定的 TOML（锁文件 diff 可读）。障碍是 map 随机序：本机不收 map，只收定序调用，
@@ -18,8 +18,8 @@ type Builder struct {
 	sb strings.Builder
 }
 
-// String returns the built document (ends with exactly one newline,
-// or empty if nothing was written).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：它是出厂前的“切纸刀”——TrimRight 去多余空行再补一 \n，让文件恒以单换行收尾，
 // POSIX 友好、diff 不飘；空文档即空串，不硬补换行。取舍是每次现算，不缓存，调用方可续写后
@@ -53,7 +53,7 @@ func (b *Builder) ArrayTable(segs ...string) {
 	b.sb.WriteString("[[" + joinKey(segs) + "]]\n")
 }
 
-// Blank writes an empty line.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：它是排版的“换气口”——表间一空行，人读不挤。取舍是 String() 会把尾部多空行
 // 收成单换行，故表尾多 Blank 无害。不变量：恒写一 \n。排查现场：若空行丢了，先看是否被
@@ -84,7 +84,7 @@ func joinKey(segs []string) string {
 	return strings.Join(out, ".")
 }
 
-// KeyString renders one key segment, quoting when necessary.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：它是单段的“裸/引判决”——空串或含非裸字符（非 A-Z/a-z/0-9/_/-）即 Quote，
 // 否则裸写，让 `foo-bar` 裸行、`a.b` 与 `a b` 自动穿衣。障碍是与解码侧同口径：
@@ -110,7 +110,7 @@ func KeyString(s string) string {
 	return strconv.Quote(s)
 }
 
-// Raw writes a preformatted line verbatim.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：它是排字机的“后门”——调用方拼好的整行直塞，不经 KeyString/Quote，
 // 供固定 schema 的异形行应急。障碍是后门破确定性：手拼顺序、手拼引号错即 diff 飘，
@@ -169,10 +169,10 @@ func (b *Builder) StrArray(key string, vals []string) {
 	fmt.Fprintf(&b.sb, "%s = [%s]\n", KeyString(key), strings.Join(parts, ", "))
 }
 
-// SortedKeys returns sorted map keys (deterministic emission).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：它是确定性输出的“点名册”——Go map 迭代随机，直接 range 拼即每次字节不同，
-// 先 SortedKeys 定序再拼即稳。泛型收 map[string]V 任值类型，内联表渲染（Value.String）
+// 先 SortedKeys 定序再拼即稳。泛型收 map[string]V 任值类型，内联表渲染详见实现，排查看 Span。
 // 与 Builder 调用方共用此尺。取舍是每次分配+排序（n log n），换锁文件/文档 diff 稳定。
 // 不变量：返回为升序新切片，原 map 不动；空 map 返空非 nil。排查现场：若输出仍飘，
 // 先看是否全链路都经本函数排序（漏一处即飘），次看键是否含大小写（排序按字节序）。

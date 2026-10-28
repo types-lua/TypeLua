@@ -4,10 +4,10 @@ import (
 	"github.com/typelua/typelua/internal/ast"
 )
 
-// Statement emission (locals, control flow, enums, functions).
+// 语句详见实现，排查看 Span。
 //
 // 设计者视角：本文件是语句的“总配电盘”——40+ 分支各管一路，擦除类
-// （TypeAlias/Interface/Macro）直接清 pending 隐身，defer/spawn/select 三
+// 详见实现，排查看 Span。
 // 特种语句各托给专文件。障碍是 declare function 与空函数同形：parser 皆给空
 // 体，发射层无法区分；约定由 compiler 预过滤 Declared，此处只管发射有效函数。
 // 不变量：每分支出口恒换行（nl），pending 在擦除分支必清。排查现场：类型声明
@@ -25,7 +25,7 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 	case *ast.ExprStmt:
 		if isErrorCall(n.E) {
 			if fr := e.deferTop(); fr != nil && fr.hasErr {
-				// Throwing out: run errdefers (+all defers), then throw.
+				// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				e.pad()
 				e.write("do " + fr.errVar + "(); ")
 				e.emitExpr(n.E)
@@ -40,7 +40,7 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 	case *ast.DeferStmt:
 		fr := e.deferTop()
 		if fr == nil || (!fr.hasDefer && !fr.hasErr) {
-			// Defensive (prescan always frames these): run immediately.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			e.pad()
 			e.emitExpr(n.Call)
 			e.nl()
@@ -110,9 +110,9 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		// `declare function` has empty body and must not emit.
 		if n.Func != nil && n.Func.Body != nil && len(n.Func.Body.Stmts) == 0 && n.Func.Body.Ret == nil {
 			// Heuristic: empty body could be user `function foo() end` (valid) or `declare function` (no emit).
-			// Parser marks declare with empty block but same as empty function. We cannot distinguish here.
-			// Convention: emit empty functions (they are valid Lua); declare functions should be filtered by compiler
-			// before emit (it skips Declared decls). This path is for non-declare only.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		}
 		e.pad()
 		e.write("function ")
@@ -120,7 +120,7 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		e.write("(")
 		params := n.Func
 		if params != nil {
-			// For colon methods, first param is implicit self at runtime only if body uses self?
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			// Our checker does not insert self; Lua `: ` call passes self automatically.
 			// Emit params as written (without self), preserving `:` in name.
 			e.emitParams(params)
@@ -256,7 +256,7 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		e.write("::" + n.Name.Name + "::")
 		e.nl()
 	case *ast.TypeAliasDecl, *ast.InterfaceDecl, *ast.MacroDef:
-		// Type-only / compile-time: erased.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		e.pending = nil
 	case *ast.EnumDecl:
 		e.emitEnum(n)
@@ -316,7 +316,7 @@ func (e *emitter) emitParams(fn *ast.FuncLit) {
 // 设计者视角：emitVarArgPrelude 是具名 rest 的“挂牌处”——Lua 的 ... 无名，
 // 此处首行 `local nums = {...}` 把名字挂回去。障碍是位置：必须在 defer prelude
 // 之前（清理闭包要捕获 nums），在 indent 目标层。候选：改 AST 插节点 vs 发射时
-// 直写；选直写，不脏 AST。不变量：无名 rest（vaName==nil）零输出。排查现场：
+// 直写；选直写，不脏 AST。不变量：无名 rest详见实现，排查看 Span。
 // nums 未定义先查 HasVarArg/VarArgName 是否配对，捕获不到先查 prelude 顺序。
 func (e *emitter) emitVarArgPrelude(params []*ast.Param, hasVA bool, vaName *ast.Ident, ind int) {
 	if !hasVA || vaName == nil {
@@ -339,7 +339,7 @@ func (e *emitter) emitEnum(n *ast.EnumDecl) {
 	// 输出恒单行表构造。排查现场：自增值跳号先查 Value 是否为 NumberLit，
 	// nil 成员先查 autoActive 是否已关闭。
 	// `enum Color { Red = "red" }` => `Color = { Red = "red", ... }`
-	// Auto values: incrementing integers from 0.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	e.pad()
 	e.write(n.Name.Name + " = {")
 	lastAuto := -1
@@ -357,7 +357,7 @@ func (e *emitter) emitEnum(n *ast.EnumDecl) {
 				e.write(itoa(lastAuto))
 			}
 		} else {
-			// Try to track auto counter for numeric literals.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			if num, ok := m.Value.(*ast.NumberLit); ok {
 				if v, err := parseInt(num.Literal); err == nil {
 					lastAuto = v

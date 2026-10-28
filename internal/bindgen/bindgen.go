@@ -5,18 +5,12 @@ package bindgen
 // 总而全且防御性：未知构造从不报错，退化为 `any` 并附
 // `-- skipped` 注释，因此输出始终可解析。支持：
 //
-//	typedef struct { ... } Name;  struct Name { ... };
-//	typedef enum { A, B = 5 } Name;  enum Name { ... };
-//	typedef <type> Alias;  (scalar -> mapped, else any/cdata)
-//	<ret> <name>(<params>);  (prototypes -> interface methods)
-//	#define NAME <int|string>  (-> interface readonly field)
-//	function pointers: typedef R (*Cb)(P...) -> type Cb = (…)->R
-//
-// Mapping (C -> TypeLua): integers -> integer, float/double -> number,
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// …（略，详见实现；排查先看 Span/诊断）
 // char*/const char* -> string, other * / arrays -> cdata, void -> void,
 // bool -> boolean, known struct/enum names stay nominal, unknown by-value
 // custom types -> any (permissive, no false positives like stdlib shims).
-
 import (
 	"fmt"
 	"regexp"
@@ -317,7 +311,7 @@ func (p *parser) handleDecl(d string) {
 		return
 	}
 	if strings.HasPrefix(t, "struct") || strings.HasPrefix(t, "enum") || strings.HasPrefix(t, "union") {
-		// 前向声明（`struct Foo;`）无字段；静默跳过，
+		// 前向声明如 `struct Foo;`，排查看 Span。
 		// 除非它命名某物（映射为 cdata 别名以供名义使用）。
 		if name := forwardDeclName(t); name != "" && !p.known[name] {
 			p.addAlias(name, fmt.Sprintf("type %s = cdata", name))
@@ -350,7 +344,7 @@ func (p *parser) handleTypedef(t string) {
 	if t == "" {
 		return
 	}
-	// typedef struct/enum {...} Name;
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if strings.Contains(t, "{") {
 		if strings.Contains(t, "struct") {
 			if name, body := parseStructDecl("typedef "+t, true, p.known); name != "" {

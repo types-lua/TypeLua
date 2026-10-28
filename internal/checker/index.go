@@ -9,7 +9,7 @@ import (
 // 设计者视角：索引记录是 best-effort，永远不参与诊断；StructOwner 只追踪
 // 直接变量流，别名/参数/表值不追踪，避免误合并。
 
-// Position index recording for language servers (best-effort, never affects diagnostics).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：索引是“只记不判”的考勤簿——所有 record* 先判 Index==nil 即返，永不
 // errorf；名义成员须 lookupNamedField 命中（有定义点）才记，索引器解出的无名场不记；
@@ -17,7 +17,7 @@ import (
 // 直流（别名不追）。取舍：漏记优于误并。排查现场：跳转缺失先查是否索引器解出，
 // 误合并先查 union 是否异主。
 
-// recordUse records a value use (definition linkage via symRoot).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordUse 是变量使用的“打卡”——Span 记处，Sym 记户，Root 经 symRoot
 // 归定义。障碍是影子 Symbol（窄化）若记影不记根，引用聚类分裂；故恒记 Root。
@@ -29,7 +29,7 @@ func (c *Checker) recordUse(span token.Span, s *Symbol) {
 	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, Sym: s, Root: symRoot(s)})
 }
 
-// recordDef records a value definition (IsDef mark for goto/rename).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordDef 与 recordUse 对偶——定义处多 IsDef 旗，供跳转着陆与重命名
 // 锚点。bindVar 与此处成对（先落户后打卡）。排查现场：跳转无着陆先查是否漏调此处
@@ -41,7 +41,7 @@ func (c *Checker) recordDef(span token.Span, s *Symbol) {
 	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, Sym: s, Root: symRoot(s), IsDef: true})
 }
 
-// recordTypeUse records a type-name reference (alias/interface/enum/class).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordTypeUse 是类型引用的“描红”——resolveNamed 每解一名即记，
 // Entry 指针即身份。障碍是泛型实参内层亦需记（resolve 递归自带）。取舍：与值
@@ -54,8 +54,8 @@ func (c *Checker) recordTypeUse(span token.Span, e *typeEntry) {
 	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, Entry: e})
 }
 
-// recordDefEntry records a value definition that twins a type declaration
-// (class/enum names), so rename can cover both namespaces at once.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordDefEntry 是类/枚举名的“双户口”——值册与类型册同名共生，
 // 一次打卡记 Sym+Entry 双轨，重命名一次改两处。障碍是单轨会漏一半（只改值不改
@@ -69,10 +69,10 @@ func (c *Checker) recordDefEntry(span token.Span, s *Symbol, e *typeEntry) {
 	c.Index.Uses = append(c.Index.Uses, SymUse{Span: span, Sym: s, Root: symRoot(s), IsDef: true, Entry: e})
 }
 
-// recordMemberDef records a member definition of a nominal owner.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordMemberDef 是成员定义的“钉桩”——类/接口/枚举每成员记 Owner+名+
-// 种（method/field/member），供引用按指针聚类。障碍是合成 new 无定义点：
+// 种详见实现，排查看 Span。
 // lookupNamedField 对其 false，故从不记（见注释）。取舍：定义必记，使用方严验。
 // 排查现场：成员重命名无着陆先查此处 Kind 是否错。
 func (c *Checker) recordMemberDef(span token.Span, e *typeEntry, name, kind string) {
@@ -83,8 +83,8 @@ func (c *Checker) recordMemberDef(span token.Span, e *typeEntry, name, kind stri
 		Member: &MemberRef{Owner: e, OwnerName: e.name, Name: name, Kind: kind}})
 }
 
-// lookupNamedField resolves a DECLARED member (no indexer fallback), for
-// member tracking (references/rename) which needs a definition site.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：lookupNamedField 是成员追踪的“验桩器”——只认声明字段（Object/
 // Class/静态/Enum），索引器解出的不认（无桩可钉）。障碍是与 lookupField 混用会
@@ -114,14 +114,14 @@ func lookupNamedField(ot types.Type, name string) (types.Field, bool) {
 	return types.Field{}, false
 }
 
-// recordMemberUse records a member access on a resolved owner type.
-// Unknown owners (structural objects, maps, any) are skipped, as are
-// indexer-only resolutions (no definition site to unify).
-// Union bases record only on unanimous ownership: every member must
-// declare the field under the SAME entry, otherwise the use stays
-// untracked (access itself still checks via lookupField).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 联合详见实现，排查看 Span。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// 设计者视角：recordMemberUse 是成员使用的“点名”——先严验桩（lookupNamedField），
+// 设计者视角：recordMemberUse 是成员使用的“点名”——先严验桩详见实现，排查看 Span。
 // 再经 ownerEntry 回 Entry，union 须全员同主才记（异主即弃，防 A.x 与 B.x 误并）。
 // 障碍是结构表/any 无主：跳过即对（检查仍走宽版）。取舍：宁缺（untracked）勿滥。
 // 不变量：记即有桩有主。排查现场：成员引用缺失先查是否索引器解出或 union 异主。
@@ -165,8 +165,8 @@ func (c *Checker) recordMemberUse(span token.Span, objT types.Type, name string)
 }
 
 // recordStringIndex records `obj["field"]` with a quoted literal key as a
-// member occurrence (inner span, quotes preserved for edits), when the
-// owner declares the field. Indexer-only resolutions stay untracked.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordStringIndex 让方括号串键享受点访问同等待遇——经 stringKeyName
 // 切内 Span（保引号），有桩有主才记。障碍是动态键与长串：切不出即弃。取舍：
@@ -196,10 +196,10 @@ func (c *Checker) recordStringIndex(key ast.Expr, objT types.Type) {
 }
 
 // recordStructIndex records `obj["field"]` through a plain variable with
-// a tracked literal field (inner span, quotes preserved for edits).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordStructIndex 是结构表的方括号版——经 structRoot 回根变量，
-// 有桩（hasStructDef）才记。匿名表无 Entry，故走 StructOwner 轨。障碍是别名/深
+// 有桩详见实现，排查看 Span。
 // 基无根：structRoot 仅认 Ident，余者弃。排查现场：结构串键未记先查根是否为直量。
 func (c *Checker) recordStructIndex(key, obj ast.Expr) {
 	if c.Index == nil {
@@ -218,9 +218,9 @@ func (c *Checker) recordStructIndex(key, obj ast.Expr) {
 	}
 }
 
-// ownerEntry resolves a value type back to its nominal type declaration,
-// if any (class instance/value, named object such as an interface or enum
-// table, enum). Scope-aware: the name resolves at the use site.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：ownerEntry 是值型到声明的“返乡证”——按名（Class/Value/Object/Enum
 // 之 Name）在用点层回查 Entry。障碍是遮蔽：同名类型内外层不同，必须用点查
@@ -250,8 +250,8 @@ func (c *Checker) ownerEntry(t types.Type) *typeEntry {
 	return c.cur().lookupType(name)
 }
 
-// recordStructLiteral records named keys of a table literal as structural
-// definitions under root (see recordStructDef).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordStructLiteral 是匿名字面的“分户”——Named 与 ["k"] 双式逐键
 // 记 StructOwner=根变量。障碍是名义所属（ownerEntry 非 nil）须让路（走名义轨，
@@ -286,8 +286,8 @@ func (c *Checker) recordStructLiteral(root *Symbol, lit *ast.TableLit) {
 	}
 }
 
-// recordStructDef records an anonymous literal field under its root
-// variable (definition side of structural member tracking).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordStructDef 是结构成员的“钉桩”（定义侧）——OwnerName 取根变量名，
 // StructOwner 取根指针，Kind 恒 "field"。与 recordStructUse 配对（桩与点）。
@@ -300,7 +300,7 @@ func (c *Checker) recordStructDef(root *Symbol, name string, span token.Span) {
 		Member: &MemberRef{OwnerName: root.Name, Name: name, Kind: "field", StructOwner: root}})
 }
 
-// hasStructDef reports a recorded structural definition.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：hasStructDef 是结构引用的“验桩”——线性扫 Uses 找同根同名 IsDef。
 // 用前必验（recordStructUse 内），无桩不记点，防 `p.q` 在 q 未字面定义时误并。
@@ -318,10 +318,10 @@ func (c *Checker) hasStructDef(root *Symbol, name string) bool {
 	return false
 }
 
-// recordStructUse records a member access through a plain variable whose
-// root holds a tracked literal field. Only direct flows unify (aliases,
-// params, and table values stay untracked); callers must resolve the base
-// identifier themselves.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordStructUse 是结构成员的“点名”（使用侧）——有桩才记，无桩即弃；
 // 只认直流（同变量直达），别名/参数/表值一律不追（防 `q=p; q.x` 误并）。障碍是
@@ -339,8 +339,8 @@ func (c *Checker) recordStructUse(span token.Span, root *Symbol, name string) {
 		Member: &MemberRef{OwnerName: root.Name, Name: name, StructOwner: root}})
 }
 
-// structRoot resolves a member-access base to its variable root symbol
-// (Ident only: deeper bases have no variable identity).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：structRoot 是结构追踪的“寻根”——只认 Ident 直量（`p.q` 之 p），
 // `a.b.c` 之深基无变量身份即 nil。经 symRoot 归定义（窄化影子亦归）。障碍是
@@ -357,7 +357,7 @@ func structRoot(c *Checker, obj ast.Expr) *Symbol {
 	return nil
 }
 
-// recordScope pins a live scope to its owning block span (for ScopeAt).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：recordScope 是户型图的“钉钉子”——层与块 Span 配对入 Scopes，
 // ScopeAt 按偏移找最深含层。障碍是层忘钉即查无此层（补全失灵）；故 checkBlock/

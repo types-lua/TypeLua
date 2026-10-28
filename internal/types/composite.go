@@ -50,7 +50,6 @@ var (
 //
 // 物理布局：
 //
-//	Literal
 //	├── Value string   // 源码拼写，含引号/前缀
 //	└── Base  Type     // String/Number/Boolean/Nil 原语
 type Literal struct {
@@ -75,12 +74,11 @@ func (t *Literal) String() string { return t.Value }
 //
 // 为什么必须范式化：展平嵌套、去掉 never、去重、排序，让子类型判定与缓存键
 // 稳定——同一类型只有一种文本形式，避免“Structurally same but textually
-// different”导致的缓存失效。代价是构造时多一次规范化（NewUnion），换来
+// different”导致的缓存失效。代价是构造时多一次规范化详见实现，排查看 Span。
 // 热路径 O(1) 比较与 map key 稳定。
 //
 // 物理布局：
 //
-//	Union
 //	└── Types []Type   // 已展平、去 never、去重、按 String() 排序
 type Union struct {
 	Types []Type
@@ -93,10 +91,10 @@ type Union struct {
 // 构造时已范式化，这里只做鉴别、不做范式化校验。排查现场：无。
 func (t *Union) Kind() Kind { return KUnion }
 
-// typeString formats t with a visited set: shared *Object nodes reached
-// twice (recursive declarations) collapse to their name (or "{...}"),
-// so printing a cyclic type terminates. Only objects can recur
-// structurally (classes print nominally); containers forward the set.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：打印是“照镜子”，镜子里的人不能再举一面镜子，否则无限反射。
 // 递归接口 `type N = { next: N }` 若朴素递归打印，栈会先爆掉。候选有三：
@@ -177,7 +175,6 @@ func (t *Union) stringSeen(seen map[Type]bool) string {
 //
 // 物理布局：
 //
-//	Intersection
 //	└── Types []Type   // 已展平、去 any、never 吸收、去重、排序
 type Intersection struct {
 	Types []Type
@@ -216,7 +213,6 @@ func (t *Intersection) stringSeen(seen map[Type]bool) string {
 //
 // 物理布局：
 //
-//	Array
 //	└── Elem Type   // 元素类型
 type Array struct {
 	Elem Type
@@ -252,7 +248,6 @@ func (t *Array) stringSeen(seen map[Type]bool) string {
 //
 // 物理布局：
 //
-//	Map
 //	├── Key   Type   // 键类型
 //	└── Value Type   // 值类型
 type Map struct {
@@ -289,7 +284,6 @@ func (t *Map) stringSeen(seen map[Type]bool) string {
 //
 // 物理布局：
 //
-//	Tuple
 //	└── Elems []Type   // 位置类型；可含 `...T` rest 元素
 type Tuple struct {
 	Elems []Type
@@ -325,12 +319,11 @@ func (t *Tuple) stringSeen(seen map[Type]bool) string {
 // Chan 是 `chan<T>`：承载 Elem 类型值的 CSP 通道。
 //
 // 为什么类型系统里有 channel：TypeLua 提供 coroutine/channel 并发原语，
-// 通道必须可类型化才能做 send/recv 的类型检查。T 不变（invariant）：chan<A>
+// 通道必须可类型化才能做 send/recv 的类型检查。T 不变详见实现，排查看 Span。
 // 与 chan<B> 仅在 A、B 互相可赋值时兼容，避免协变导致的数据竞争 unsoundness。
 //
 // 物理布局：
 //
-//	Chan
 //	└── Elem Type   // 通道承载的值类型
 type Chan struct {
 	Elem Type
@@ -338,7 +331,7 @@ type Chan struct {
 
 // Kind 返回 Chan 的类型分类标签。
 //
-// 设计者视角：Chan 是独立 struct，分类恒定 KChan；通道不变（invariant）——
+// 设计者视角：Chan 是独立 struct，分类恒定 KChan；通道不变详见实现，排查看 Span。
 // `chan<A>` 与 `chan<B>` 仅双向可赋值时兼容，协变会引入数据竞争的 unsound。
 // 独立 Kind 让这条“双向检查”分支不被数组/映射的协变分支淹没。排查现场：无。
 func (t *Chan) Kind() Kind { return KChan }

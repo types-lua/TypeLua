@@ -47,9 +47,7 @@ const (
 //
 // 物理布局：
 //
-//	Change
 //	├── Path   string     // 绝对/清理后的路径
-//	├── Kind   ChangeKind  // added/removed/modified
 //	└── Config bool       // 是否为配置文件（tlua.json/toml/lock）
 type Change struct {
 	Path string
@@ -68,9 +66,7 @@ type Change struct {
 //
 // 物理布局：
 //
-//	FileMeta
 //	├── Size    int64 // 字节数
-//	├── ModTime int64 // UnixNano
 //	└── Config  bool  // 是否配置文件
 type FileMeta struct {
 	Size    int64
@@ -85,7 +81,8 @@ type FileMeta struct {
 //
 // 物理布局（概念）：
 //
-//	Snapshot (map)
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+//
 //	└── path -> FileMeta{Size, ModTime, Config}
 type Snapshot map[string]FileMeta
 
@@ -152,7 +149,7 @@ func configPaths(cfg *config.Config) []string {
 
 // Collect 快照当前监视集。无法 stat 的文件被省略，
 // 其消失读作 Removed（重建会暴露底层 TL4001）；
-// 瞬态读取竞争在下个周期解决。原生资产（*.lua shim、*.so/*.dylib/*.dll/*.a）
+// 瞬态读取竞争在下个周期解决。原生资产详见实现，排查看 Span。
 // 加入 .tl 源，使 shim/二进制编辑重触发直通复制。
 //
 // 设计者视角：Collect 快照“输入全集”——ListFiles+ListNativeAssets 去重，跳输出
@@ -251,7 +248,6 @@ func HasConfigChange(changes []Change) bool {
 //
 // 物理布局：
 //
-//	Watcher
 //	├── Poll    time.Duration  // 轮询间隔（<50ms 钳到 50ms）
 //	├── Debounce time.Duration  // 防抖窗口
 //	└── Collect func() (Snapshot, error) // 快照采集（默认 Collect(cfg)）

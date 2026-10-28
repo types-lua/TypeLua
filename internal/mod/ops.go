@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Project is a directory with a manifest and optional lock.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Project 是包操作的“工作台”——Dir 定根，Manifest 必有，Lock 可无，
 // HasLock 记 lock 是否曾在。障碍是无 manifest 目录：LoadProject 报错指 init。
@@ -19,11 +19,11 @@ type Project struct {
 	Dir      string
 	Manifest *Manifest
 	Lock     *Lock
-	// HasLock reports whether tlua.lock existed on load.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	HasLock bool
 }
 
-// FindManifest searches dir upward for tlua.toml.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：向上溯至根，首命中即项目根（类 go）。障碍是 Abs 失败：退原径。
 // 候选：当前目录 vs 上溯；选上溯，子目录可跑。不变量：空即无项目。排查现场：
@@ -46,7 +46,7 @@ func FindManifest(dir string) string {
 	}
 }
 
-// LoadProject loads the manifest (required) and lock (optional) for dir.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：manifest 必有（缺即指 init），lock 有则解、无则空（HasLock 记之）。
 // 障碍是坏 toml：包路径指错因。候选：缺 lock 报错 vs 空；选空，新项目可跑。
@@ -76,7 +76,7 @@ func LoadProject(dir string) (*Project, error) {
 	return p, nil
 }
 
-// SaveManifest writes tlua.toml.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：EncodeManifest 定序写，覆写原子由 OS 保。障碍是并发写：调用方串行。
 // 排查现场：diff 抖先查 Encode。
@@ -84,7 +84,7 @@ func (p *Project) SaveManifest() error {
 	return os.WriteFile(filepath.Join(p.Dir, ManifestName), []byte(EncodeManifest(p.Manifest)), 0o644)
 }
 
-// SaveLock writes tlua.lock.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：EncodeLock 定序写，fetch/get 后落盘。障碍是空 lock：仍写头注。
 // 排查现场：lock 抖先查 Encode。
@@ -92,7 +92,7 @@ func (p *Project) SaveLock() error {
 	return os.WriteFile(filepath.Join(p.Dir, LockName), []byte(EncodeLock(p.Lock)), 0o644)
 }
 
-// replaceDir resolves a local replace target to an absolute directory.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：相对拼 Dir，绝对直返。障碍是旧 lock 无 Replace 表：localSourceDir
 // 另兜。排查现场：本地径错先查拼基。
@@ -107,8 +107,8 @@ func (p *Project) replaceDir(path string) (string, bool) {
 	return tgt, true
 }
 
-// pinsForFetch seeds exact pins from the lock for requirements the lock
-// still satisfies (so fetch reproduces instead of upgrading).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：fetch 保守——lock 中仍满足 query 者钉 exact，余走升级。障碍是本地条目：
 // 跳过（无版可钉）。候选：全升 vs 钉住；选钉住复现。不变量：本地不钉。排查现场：
@@ -157,7 +157,7 @@ func equalVersion(tag string, v Version) bool {
 	return o.Compare(v) == 0
 }
 
-// registryFor builds the resolving registry (replace-aware).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：GitRegistry 外包 ReplaceRegistry，根 replace+传递链统一。障碍是空
 // replace：仍包（见 ReplaceRegistry）。排查现场：本地不生效先查包。
@@ -165,7 +165,6 @@ func (p *Project) registryFor(cache *Cache) Registry {
 	return ReplaceRegistry(&GitRegistry{Cache: cache}, p.Manifest.Replace, p.Dir)
 }
 
-// Get adds/updates requirements, resolves, downloads, and writes the lock.
 // 每个 spec 为 `path` 或 `path@query`（默认：保留 manifest query，否则
 // latest）。无 spec 时，所有直接依赖重新解析（升级）。
 //
@@ -202,8 +201,8 @@ func Get(ctx context.Context, p *Project, cache *Cache, specs []string) (*Lock, 
 	if err := p.SaveManifest(); err != nil {
 		return nil, err
 	}
-	// Locked pins elsewhere (reproduce); named modules (or all, when no
-	// specs) resolve fresh.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	pins := pinsForFetch(p.Manifest, p.Lock)
 	if upgradeAll {
 		pins = map[string]string{}
@@ -217,7 +216,7 @@ func Get(ctx context.Context, p *Project, cache *Cache, specs []string) (*Lock, 
 		return nil, err
 	}
 	if !upgradeAll {
-		// Pinned bystanders must not drift either (only named modules move).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		locked := NewLock()
 		for _, e := range p.Lock.Entries {
 			keep := true
@@ -245,12 +244,12 @@ func Get(ctx context.Context, p *Project, cache *Cache, specs []string) (*Lock, 
 	return l, nil
 }
 
-// resolveLocked resolves with pins, returning the lock and the fetch
-// source (explicit URL or "") per path. Locally-forced content (root
-// replaces and discovered transitive path links) bypasses lookup inside
-// the resolver; backfillLockDirs records where it came from.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// 设计者视角：钉住版（exact pin）交 resolver 保复现，本地直通（见 selectLocal）。
+// 设计者视角：钉住版详见实现，排查看 Span。
 // 障碍是 URL 覆：pinSource 记源供下载。排查现场：复现变升级先查 pins。
 func (p *Project) resolveLocked(ctx context.Context, cache *Cache, pins map[string]string) (*Lock, map[string]string, error) {
 	reg := p.registryFor(cache)
@@ -272,8 +271,8 @@ func (p *Project) resolveLocked(ctx context.Context, cache *Cache, pins map[stri
 	return l, sources, nil
 }
 
-// backfillLockDirs records project-relative source dirs for local entries
-// (portable across checkouts; standalone vendor/graph need no resolver).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：本地条目录 Dir 相对化（相对 Dir 斜杠），跨机可携。障碍是绝对残留：
 // 相对化之。排查现场：跨检出 vendor 错先查 Dir。
@@ -307,8 +306,8 @@ func splitSpec(s string) (string, string) {
 	return s, ""
 }
 
-// Fetch re-resolves (respecting lock pins), verifies upstream commits,
-// downloads everything, and writes the lock.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：fetch 是“复现键”——pinsForFetch 钉住可复现者，resolveLocked 重解，
 // verifyLockCommits 防上游 tag 漂（漂即错，须显式 get 升），下载+写盘。障碍是 tag
@@ -335,7 +334,7 @@ func Fetch(ctx context.Context, p *Project, cache *Cache) (*Lock, error) {
 	return l, nil
 }
 
-// verifyLockCommits fails when a locked module's upstream tag moved
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // (explicit `get` upgrades; fetch reproduces).
 //
 // 设计者视角：新旧 lock 同径 tag 版而 commit 异即上游改写，fetch 拒。障碍是 commit
@@ -366,8 +365,8 @@ func shortSHA(s string) string {
 	return s
 }
 
-// localSourceDir resolves a locked local entry to an absolute directory:
-// the lock's recorded dir first, then the root replace table (old locks).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：本地源两阶——lock Dir（新）优先，根 replace（旧）兜，非 local 拒。
 // 障碍是旧 lock 无 Dir：replace 兜。排查现场：本地缺先查两阶。
@@ -385,8 +384,8 @@ func (p *Project) localSourceDir(e LockEntry) (string, bool) {
 	return p.replaceDir(e.Path)
 }
 
-// downloadAll ensures every locked module tree is present.
-// sources maps paths to explicit fetch URLs (may be empty per path).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：逐条本地验存、已存验指纹跳过、缺者定源 EnsureTree。障碍是离线现存树：
 // 免 URL（见 Present 跳）。候选：全下 vs 按需；选按需。不变量：本地不进缓存。
@@ -399,7 +398,7 @@ func (p *Project) downloadAll(ctx context.Context, cache *Cache, l *Lock, source
 			}
 			continue // vendored/copied on demand; nothing cached
 		}
-		// Present trees need no URL (keeps offline vendor working).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if dst := cache.TreeDir(e.Path, e.Version); cache.TreeCommit(dst) == e.Commit {
 			continue
 		}
@@ -418,7 +417,7 @@ func (p *Project) downloadAll(ctx context.Context, cache *Cache, l *Lock, source
 	return nil
 }
 
-// sourceURL returns the fetch URL for a locked path.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：显式 URL 优先，余重探（传递依赖无 manifest 条，lock 不存 URL，故
 // 确定性重探）。障碍是传递源：须重探。排查现场：源漂移先查重探。
@@ -426,13 +425,13 @@ func (p *Project) sourceURL(ctx context.Context, cache *Cache, path string) (str
 	if d := p.Manifest.Deps[path]; d != nil && d.URL != "" {
 		return d.URL, nil
 	}
-	// Re-derive (probing). Transitive deps have no manifest entry;
-	// the lock does not store URLs, so rediscover deterministically.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	reg := &GitRegistry{Cache: cache}
 	return reg.urlFor(ctx, path, Dep{})
 }
 
-// VendorDir returns the project's vendor directory.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：`Dir/tlua_modules`，构建与 LSP 同源。障碍是相对：拼 Dir 绝对化。
 // 排查现场：vendor 错位先查 Dir。
@@ -440,14 +439,14 @@ func (p *Project) VendorDir() string {
 	return filepath.Join(p.Dir, VendorDir)
 }
 
-// Vendor copies locked module sources into tlua_modules/<path>/ plus a
-// modules.txt manifest. Vendored assets: *.tl (incl. *.d.tl type contracts),
-// *.lua shims (the cross-language runtime contract: init.lua hides
-// ffi.load/C-module/IPC differences), and native libraries (*.so/*.dylib/
-// *.dll shared, *.a static). Headers and other files stay in the module
-// cache only.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// 设计者视角：vendor 是“随行粮”——先保树现存（downloadAll），清旧 vendor 全量重铺
+// 设计者视角：vendor 是“随行粮”——先保树现存详见实现，排查看 Span。
 // （保删文件消失），本地拷、远程树拷，末写 modules.txt。障碍是旧 vendor 残留：
 // 全清重铺；障碍是点文件/.git：copyTlTree 滤之。候选：增量 vs 全量；选全量简单准。
 // 不变量：vendor 恒 lock 全量。排查现场：残留文件先查清铺，陈旧先查下载。
@@ -484,7 +483,7 @@ func (p *Project) Vendor(ctx context.Context, cache *Cache) error {
 	return os.WriteFile(filepath.Join(vdir, "modules.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }
 
-// SortedEntries returns lock entries ordered by path.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：拷 lock 按径排，保 vendor/graph 输出稳。障碍是原序手改：重排。
 // 排查现场：输出抖先查此。
@@ -494,9 +493,9 @@ func SortedEntries(l *Lock) []LockEntry {
 	return out
 }
 
-// copyTlTree copies module runtime assets (preserving layout) from src to dst:
-// *.tl (incl. *.d.tl), *.lua shims, and native libs (*.so/*.dylib/*.dll shared,
-// *.a static).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：仅四类运行时资产可 vendor（点文件/.git/头文档全留缓存），Walk 保
 // 布局，文件 644、目录 755。障碍是点文件：跳；头文件：跳。候选：全拷 vs 白名单；
@@ -557,7 +556,7 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// Graph describes locked modules and their inter-edges.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Nodes 为 lock 序，Edges 径→依赖径（排好）。障碍是图须离线可画：
 // 只读缓存树/本地，不触网。排查现场：边缺先查 manifest 读。
@@ -567,8 +566,8 @@ type Graph struct {
 	Edges map[string][]string
 }
 
-// ModuleGraph loads each locked module's manifest (from cache trees or
-// replace dirs) to describe the dependency graph offline.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：逐 lock 条读 manifest（本地直读、远程读树），缺树即指 fetch，坏
 // manifest 跳（叶视）。障碍是未下载：显错指 fetch。候选：联网补 vs 离线；选离线。

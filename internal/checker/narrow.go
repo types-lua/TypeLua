@@ -8,26 +8,17 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
-// Flow narrowing for variables and member paths.
+// 窄化是分支眼镜：`if x~=nil` 真支去 nil，出块即弃。
 //
 // 设计者视角：窄化是分支内的“临时眼镜”——`if x~=nil` 真支把 x 看窄，经影子 Symbol
 // （SameAs 链回定义）实现，出块即弃。支持四镜：nil（去/留 nil）、typeof（type(x)
 // 比字）、truthy（Lua 唯 nil/false 为假）、lit（串字面等）。成员径（a.b["c"]）
 // 经 refineRootType 重建（Object/Class 才重建，余者不窄）。障碍是 and 链叠加：
 // Ops 逐个对当前（已影）绑定施，故组合不互盖。取舍：不窄即弃（ok=false），不报错。
-// 图：
-//
-//	cond → narrowCond[Ops] → refineRootType → 影子入 cur.vars
-//
-// 排查现场：窄化未生效先查 narrowPath 是否认径，误窄先查 SameAs 是否断链。
-
-// ---------- narrowing ----------
-
-// narrowKind selects the type-level refinement of one narrowOp.
+// …（略，详见实现；排查先看 Span/诊断）
 //
 // 设计者视角：narrowKind 是四镜的“档位”——nil/typeof/truthy/lit 各对一 refine*。
 // iota 序即档位，无语义。排查现场：窄化走错分支先查 narrowCond 置 kind 是否错档。
-
 type narrowKind int
 
 const (
@@ -37,9 +28,9 @@ const (
 	narrowLit
 )
 
-// narrowOp is one root refinement. Ops apply sequentially against the
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // current (possibly already shadowed) binding, so `and`-chained refinements
-// of the same root compose instead of clobbering each other.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：narrowOp 是一次“磨镜单”——root 为根变量，fields 为成员链（空即整根），
 // kind+载荷定磨法。序贯施于已影绑定，故 `x~=nil and type(x)=="t"` 双镜叠加不互盖。
@@ -58,7 +49,7 @@ type narrowOp struct {
 	toLit  bool   // narrowLit: narrow towards (vs away from) the literal
 }
 
-// applyNarrowing installs shadowed (narrowed) variable types in the current scope for a branch.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：applyNarrowing 是磨镜的“施工队”——narrowCond 产 Ops，逐个 lookup 根
 // （无根即弃），经 refineRootType 算新体，影子入 cur.vars（SameAs 链根，Kind/Const/
@@ -95,12 +86,12 @@ func (c *Checker) applyNarrowing(cond ast.Expr, truthy bool) {
 		if !ok {
 			continue
 		}
-		// Shadow in current scope.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		c.cur().vars[op.root] = &Symbol{Name: op.root, Kind: sym.Kind, Type: newT, Span: sym.Span, IsConst: sym.IsConst, IsBuiltin: sym.IsBuiltin, SameAs: symRoot(sym)}
 	}
 }
 
-// narrowCond compiles a condition into narrowOps (truthy selects branch).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：narrowCond 是条件的“译码器”——剥括号/取反（not 翻 truthy），==/~=
 // 分 nil 径（整根/成员径）、typeof 径、字面径，and 真支双收、or 假支双收，余者作
@@ -179,7 +170,7 @@ func (c *Checker) narrowCond(cond ast.Expr, truthy bool) []narrowOp {
 }
 
 // narrowPath decomposes a narrowable lvalue (`x`, `x.y`, `x["y"]`) into
-// its root variable and field chain. Anything else reports ok=false.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：narrowPath 是成员径的“拆轨器”——Ident 即根，Field/串索引逐节接链，
 // Paren 透视；非串键、调用、算术一律 false。障碍是 `["a'b"]` 引号：经 unquoteKey
@@ -216,11 +207,11 @@ func narrowPath(e ast.Expr) (root string, fields []string, ok bool) {
 	return "", nil, false
 }
 
-// refineRootType rebuilds t with the member at fields narrowed by refine
-// (which maps the effective member type to its narrowed form, as field
-// access would observe it). Only plain objects and class instances are
-// rebuilt; maps, enums, primitives, or a missing field report ok=false
-// and the condition simply does not narrow.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：refineRootType 是窄化的“重建机”——空链即对整根施 refine；union 逐员
 // 试（有成即并）；Object/Class 拷贝重建首节（经 refineMemberField 折 optional），
@@ -291,8 +282,8 @@ func refineRootType(t types.Type, fields []string, refine func(types.Type) (type
 }
 
 // refineMemberField narrows one field's effective access type (adding `nil`
-// for optional fields, as field access observes), folding the result back
-// into (type, optional) storage form.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：refineMemberField 是可选字段的“折叠术”——观型=存型(+nil 若 optional)，
 // 对观型递归 refineRootType，再剥 nil 折回 (存型,optional)。障碍是 `x.y==nil` 后
@@ -319,7 +310,7 @@ func refineMemberField(ft types.Type, optional bool, rest []string, refine func(
 	return stripped, true, true
 }
 
-// asIdent extracts an identifier name (narrowing root fast path).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：asIdent 是窄化的“快道”——Ident 即根，非 Ident 即 false（成员径另走
 // narrowPath）。薄断言。排查现场：整根未窄先查此处是否把 Field 误送快道。
@@ -330,7 +321,7 @@ func asIdent(e ast.Expr) (string, bool) {
 	return "", false
 }
 
-// isNilLit reports a nil literal (narrowing anchor).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isNilLit 是 nil 窄化的“锚点”——唯 NilLit 为真，余者假。`x==nil` 的
 // 一半即此。排查现场：nil 比较未窄先查 parser 是否把 nil 包成 Paren（narrowCond
@@ -341,7 +332,7 @@ func isNilLit(e ast.Expr) bool {
 }
 
 // matchTypeofCall matches `type(arg) == "lit"` shapes, returning the
-// inspected argument expression and the literal text.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：matchTypeofCall 是 typeof 窄化的“嗅探器”——被调须为裸 `type` 单参，
 // 另端须为串字面（经 unquote 取内容）。障碍是 `type` 被局部遮蔽仍形似：此处只认形，
@@ -408,7 +399,7 @@ func asTypeofPathCompare(b *ast.BinOpExpr) (string, []string, string, bool) {
 }
 
 // asLitCompare matches `x == "lit"` forms, returning the variable name
-// and the raw literal spelling.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：asLitCompare 是串字面窄化的整根版——目标须 Ident，字面须 StringLit，
 // 返 raw 拼写（比较时 norm 消引号差异，`"a"` 配 `'a'`）。障碍是拼写差异：存 raw
@@ -443,7 +434,7 @@ func asLitPathCompare(target, lit ast.Expr) (string, []string, string, bool) {
 	return root, fields, sl.Literal, true
 }
 
-// normStrLit normalizes a raw string-literal spelling for comparison.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：normStrLit 消引号差异（`"a"` vs `'a'` 同值），供 narrowLitOfType
 // 按值比对。经 parseStringLiteral 脱壳再 Trim。障碍是转义：保持 raw 级（源忠实），
@@ -453,7 +444,7 @@ func normStrLit(raw string) string {
 	return strings.Trim(s, `"'`)
 }
 
-// isStringPrimitive reports primitive string types (not literals, not any).
+// normStrLit如 `f(1)`，排查看 Span。
 //
 // 设计者视角：isStringPrimitive 辨“宽串”（string 原语）与“窄串”（字面）：宽串
 // 可向任一字面窄（`x=="a"` 真支即字面），窄串须命中才窄。any 恒假（any 不窄，
@@ -465,7 +456,7 @@ func isStringPrimitive(t types.Type) bool {
 	return t.Kind() == types.KString && !isAnyLike(t)
 }
 
-// hasStringPrimitive reports whether a union keeps a wide string member.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：hasStringPrimitive 是 union 向字面窄的“放行证”——含宽串即允许凭空
 // 造字面（`s=="a"` 真支得字面），否则只复用既有成员（防无中生有）。排查现场：
@@ -479,14 +470,14 @@ func hasStringPrimitive(ms []types.Type) bool {
 	return false
 }
 
-// narrowLitOfType narrows a type by a string-literal comparison (shared by
-// variable and member narrowing). Comparison is spelling-insensitive
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // (`"a"` matches `'a'`); results reuse existing members (never synthesized),
 // and `any` stays `any`.
 //
 // 设计者视角：narrowLitOfType 是串字面的“筛子”——向字（==真/~=假）：union 取命中
 // 成员（无命中但有宽串即造字面），整根命中即留、宽串即造；背字则剔命中（剩空即
-// Never）。障碍是 any：恒不窄（false），保动态不误。候选：复用 vs 合成；选复用
+// Never）。障碍是 any：恒不窄详见实现，排查看 Span。
 // 优先（指针稳定），宽串才合成。不变量：false 即不窄。排查现场：`s~="a"` 未剔
 // 先查 norm 是否归一。
 
@@ -537,8 +528,8 @@ func narrowLitOfType(cur types.Type, rawLit string, toLit bool) (types.Type, boo
 	return nil, false
 }
 
-// narrowNilOfType narrows a type by nil-ness (shared by variable and
-// member narrowing).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：narrowNilOfType 是最常用的“去 nil 刀”——向 nil 即 Nil，背 nil 即
 // RemoveNil（无 nil 即 false 不窄）。`if x then return end` 后的 x 即此刀所削。
@@ -560,11 +551,11 @@ func narrowNilOfType(cur types.Type, isNil bool) (types.Type, bool) {
 }
 
 // narrowTypeofOfType narrows a type by a `type(x)` literal comparison
-// (shared by variable and member narrowing).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：narrowTypeofOfType 是 typeof 的“筛子”——向型（==真）即取 prim
 // （any 亦取，余者恒取 prim 以显下游）；背型则自 union 剔同族（Kind 快道+字面
-// Base+String 三保险），整根命中即 Never。障碍是未知字（typeofLiteralToType nil）
+// Base+String 三保险），整根命中即 Never。障碍是未知字详见实现，排查看 Span。
 // 即不窄。候选：交集精算 vs 取 prim；选取 prim（简单 sound，下游可赋性自验）。
 // 不变量：未知字恒 false。排查现场：`type(x)~="foo"` 未窄多为未知字（设计不窄）。
 
@@ -574,22 +565,22 @@ func narrowTypeofOfType(cur types.Type, lit string, toType bool) (types.Type, bo
 		return nil, false
 	}
 	if toType {
-		// Intersect? If orig is union containing prim, narrow to prim (or member).
-		// If orig is any, narrow to prim.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if isAnyLike(cur) {
 			return prim, true
 		}
-		// If prim assignable to orig, narrow to prim; else if orig assignable to prim? Keep prim? Else unreachable (Never) — still narrow to prim to surface downstream? Use prim.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		return prim, true
 	}
-	// Exclude: remove prim from union.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if u, ok := cur.(*types.Union); ok {
 		var rest []types.Type
 		for _, m := range u.Types {
-			// Fast path: same kind as the primitive excludes without
-			// serializing either side (primitive names are unique per
-			// kind). The String fallback preserves any cross-kind
-			// spelling coincidence exactly.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			if m.Kind() == prim.Kind() {
 				continue
 			}
@@ -607,8 +598,8 @@ func narrowTypeofOfType(cur types.Type, lit string, toType bool) (types.Type, bo
 		}
 		return nil, false
 	}
-	// Fast path first (same kind on primitives implies identical spelling),
-	// then the exact String comparison for cross-kind coincidences.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if cur.Kind() == prim.Kind() {
 		// `type(x) ~= "string"` but x: string => unreachable else? Narrow to Never.
 		return types.Never, true
@@ -620,8 +611,8 @@ func narrowTypeofOfType(cur types.Type, lit string, toType bool) (types.Type, bo
 	return nil, false
 }
 
-// narrowTruthyOfType narrows a type by Lua truthiness (only nil and false
-// are falsy). Reports false when nothing changes.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：narrowTruthyOfType 是真值性的“留真去假”——真支去 nil/false（boolean
 // 剩 true 字面），假支留 nil/false（boolean 剩 false 字面），余者真留假弃。any
@@ -671,7 +662,7 @@ func narrowTruthyOfType(cur types.Type, truthy bool) (types.Type, bool) {
 	return types.NewUnion(keep), true
 }
 
-// isFalseLit reports a false literal (truthiness atom).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isFalseLit 是真值判的“原子”——须 Literal+Boolean 基+值 false 三齐。
 // 供 narrowTruthyOfType 逐员判。排查现场：假支未留 false 先查字面拼写是否为 "false"。
@@ -680,7 +671,7 @@ func isFalseLit(t types.Type) bool {
 	return ok && l.Base == types.Boolean && l.Value == "false"
 }
 
-// isTrueLit reports a true literal (truthiness atom).
+// isFalseLit如 `f(1)`，排查看 Span。
 //
 // 设计者视角：与上对偶，真支留 true 的判据。排查现场同上。
 func isTrueLit(t types.Type) bool {

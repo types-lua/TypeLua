@@ -4,7 +4,7 @@ import (
 	"github.com/typelua/typelua/internal/token"
 )
 
-// Expression nodes.
+// 表达式详见实现，排查看 Span。
 
 // ---------- Expressions ----------
 
@@ -23,7 +23,7 @@ type Ident struct {
 
 func (*Ident) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Ident 的 Span 是 rename/引用链的唯一门牌，LSP 跳转全靠它；
 // 直接返回 S 不做拼接，保证 O(1)。排查现场：若重命名只改一半，检查宏展开
@@ -52,7 +52,7 @@ type NumberLit struct {
 
 func (*NumberLit) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：字面量 Span 即其原文区间，类型错误（如溢出、非法进制）直接圈原文，
 // 无需回溯。排查现场：若数字高亮偏一位，检查词法切分时 Start/End 是否含前后空格。
@@ -71,7 +71,7 @@ type StringLit struct {
 
 func (*StringLit) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：字符串 Span 含两侧引号，圈选即整串，未闭合字符串的 Span 延至行尾/EOF，
 // 供“缺右引号”恢复。排查现场：若多行长字符串定位跳行，检查 Pos 的行列是否按 rune
@@ -81,7 +81,7 @@ func (n *StringLit) Span() token.Span { return n.S }
 // BoolLit 表示布尔字面量表达式节点；Value 为真值，S 为源码 Span，用于诊断与定位.
 //
 // 设计者视角：布尔只有 true/false 两张脸，直接存 Value 省去字符串比对，checker 的
-// 窄化（narrow）可按 Value 一步折叠。障碍是 `true` 曾是关键字 token：AST 统一为
+// 窄化如 `true`，排查看 Span。
 // BoolLit 后，后续阶段不再关心它曾经是哪个 Kind。不变量：Value 与源码拼写一致。
 // 排查现场：若条件恒真/恒假误报，检查 parser 是否把非字面量误装成 BoolLit。
 type BoolLit struct {
@@ -91,7 +91,7 @@ type BoolLit struct {
 
 func (*BoolLit) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：BoolLit 的 Span 让“if true then”这类恒定分支能圈出条件词，提示
 // 死分支。排查现场：无多余状态可查，Span 对即对。
@@ -107,7 +107,7 @@ type NilLit struct{ S token.Span }
 
 func (*NilLit) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：nil 的 Span 让“不可赋 nil 给非空”能圈住那个 nil 字，而非整行。
 // 排查现场：若圈选为空，检查合成的 NilLit（如缺省补 nil）是否带了零值 Span。
@@ -127,7 +127,7 @@ type VarArg struct {
 
 func (*VarArg) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：VarArg 的 Span 只有三个点，报错圈三点即够；宏展开时 `...` 仅在实参
 // 位置展开，Span 指向宏调用处而非定义处。排查现场：若展开后定位飞回定义处，
@@ -148,7 +148,7 @@ type ParenExpr struct {
 
 func (*ParenExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：ParenExpr 的 Span 含两侧括号，外层诊断圈括号、内层诊断圈 E，大小
 // 坐标分工明确。排查现场：若去括号后行号不变但列漂移，检查 S 是否含括号而 E.S 不含。
@@ -167,7 +167,7 @@ type TableLit struct {
 
 func (*TableLit) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：TableLit 的 S 覆盖 `{...}` 全括号，空表 `{}` 靠它才有坐标可报；
 // 单个字段的 Span 另计，外圈内圈各司其职。排查现场：若缺右括号的恢复位置飘了，
@@ -208,7 +208,7 @@ type TableField struct {
 	S    token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：TableField 的 S 只圈本字段（含逗号前的全部），让“重复字段”“类型不匹配”
 // 能点名到行；TableLit.S 圈全表，两级坐标配合。排查现场：若字段报错圈到整表，检查
@@ -240,7 +240,7 @@ type FuncLit struct {
 
 func (*FuncLit) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：FuncLit 的 S 从 function/async 关键字横跨到 end/}，是折叠与跳转的
 // 大门牌；参数/返回各自有小门牌。花括号体与 end 体在此同形，Span 抹平二者差异。
@@ -259,7 +259,7 @@ type Param struct {
 	S    token.Span
 }
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：Param 的 S 以 Name 为主、含类型注记区间，hover 时圈整段 `x: T`，
 // rename 时只用 Name.S。排查现场：若重命名圈到类型，检查 LSP 是否误用了 Param.S
@@ -280,7 +280,7 @@ type IndexExpr struct {
 
 func (*IndexExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：IndexExpr 的 S 从 Obj.Start 到 `]`，让“索引越界/键不存在”圈出整段
 // `a[b]` 而非仅 b。排查现场：若报错只圈括号内，检查 S.End 是否取到 RBrack 而非 Key.End。
@@ -300,7 +300,7 @@ type FieldExpr struct {
 
 func (*FieldExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：FieldExpr 的 S 同样首尾全包，`a.b.c` 的链式访问逐层嵌套，外层 S 含整链，
 // 内层 S 含前缀，悬停时由小到大逐级放大。排查现场：若链式报错圈不全，检查嵌套时外层
@@ -314,20 +314,20 @@ func (n *FieldExpr) Span() token.Span { return n.S }
 // 印章：未被遮蔽的 `error(...)` 才盖章，emitter 见章才在周围跑 errdefer（见 emitter/defer.go）。
 // 障碍是 AST 默认不可变 vs 此处可变回填：ErrorCall 是唯一的“检查期铅笔批注”，
 // 发射前只写一次，不破坏“形状稳定”的大原则。排查现场：若 errdefer 未触发，检查
-// checker 是否因局部遮蔽（local error）而故意未盖章。
+// checker 是否因局部遮蔽详见实现，排查看 Span。
 type CallExpr struct {
 	Func     Expr
 	TypeArgs []TypeNode // explicit generic arguments: f<T>(x)
 	Args     []Expr
 	// ErrorCall marks a call to the `error` builtin (set by the checker
-	// when unshadowed); the emitter runs errdefers around it.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	ErrorCall bool
 	S         token.Span
 }
 
 func (*CallExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：CallExpr 的 S 从被调函数起始到右括号，参数错误圈整调用，函数不存在圈
 // Func 子段——大小坐标配合。TypeArgs 的尖括号区间含在 S 内但另有子 Span。排查现场：
@@ -351,7 +351,7 @@ type MethodCallExpr struct {
 
 func (*MethodCallExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：MethodCallExpr 的 S 同样全包 `obj:m(args)`，方法名缺失的诊断圈冒号处。
 // 排查现场：若冒号与点调用混淆，先看 parser 后缀链的 Colon 分支是否产出本节点。
@@ -373,7 +373,7 @@ type BinOpExpr struct {
 
 func (*BinOpExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：BinOpExpr 的 S 横跨 `L op R`，操作数类型不匹配时圈整式，操作符拼写问题
 // 圈 Op 区间（由 checker 切子 Span）。排查现场：若报错只圈一半，检查 S 是否取了
@@ -393,7 +393,7 @@ type UnOpExpr struct {
 
 func (*UnOpExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：UnOpExpr 的 S 从操作符到操作数尾，长度操作符（如 `#t`）报错圈整段。
 // 排查现场：若 `not` 被当标识符，检查 parser 是否在表达式开头优先尝试前缀。
@@ -413,7 +413,7 @@ type CastExpr struct {
 
 func (*CastExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：CastExpr 的 S 覆盖 `E as T` 全段，断言失败圈整段，T 写错圈 T 子段。
 // 排查现场：若 as 诊断只圈 E，检查 T 的 Span 是否独立可用。
@@ -433,7 +433,7 @@ type NonNullExpr struct {
 
 func (*NonNullExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：NonNullExpr 的 S 含尾部 `!`，漏写 `!` 与误写 `!` 的诊断都能定位到
 // 感叹号本身。排查现场：若 `!!` 嵌套解析异常，检查后缀循环是否消费了两个 Bang。
@@ -441,8 +441,8 @@ func (n *NonNullExpr) Span() token.Span { return n.S }
 
 // AwaitExpr is `await <expr>` (soft keyword): marks a suspension point
 // inside an `async` function (or the top-level chunk). It erases to the
-// inner expression: blocking runtime calls yield by themselves, await is
-// the explicit marker the checker validates.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：await 是“显式让出标记”而非运行时指令，好比马拉松打卡点——真正让出由
 // 阻塞调用自己 yield，await 只让 checker 検証“是否身处 async 上下文”。障碍是软关键字：
@@ -458,7 +458,7 @@ type AwaitExpr struct {
 
 func (*AwaitExpr) exprNode() {}
 
-// Span returns the source span of this node.
+// Span 取源码区间，如 `x=1` 圈整句供诊断画线。
 //
 // 设计者视角：AwaitExpr 的 S 从 await 起到内层表达式尾，让“await 套 await”逐层可圈；
 // checker 报“不在 async 内”圈 await 关键字，类型错误圈 X。排查现场：若 await 高亮

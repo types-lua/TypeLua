@@ -5,7 +5,7 @@ import (
 	"github.com/typelua/typelua/internal/diag"
 )
 
-// Text synchronization (open/change/close) and diagnostic publishing.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：同步三件——open 全量建档+推诊，change 逐 patch（全量无 Range 即替，
 // 余经 offsetAt 换算拼接）重析+推诊，close 删档。publish 按 Error 1/Warn 2 推，空恒

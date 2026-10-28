@@ -8,30 +8,18 @@ import (
 
 // 设计者视角：语句检查维护 retStack/labelStack/gotoList 三栈；if 的
 // 分支发散信息用于流敏感窄化（return 后条件翻转）。
-
-// Statement checking (locals, assignment, control flow, return).
+// 语句详见实现，排查看 Span。
 //
 // 设计者视角：语句是三栈协同——retStack 管返回契约、labelStack/gotoList 管跳转
 // （函数级配对，见 func/class 体），if/while 携窄化（分支影子+发散翻转，见
 // checkIf）。障碍是恢复节点（nil Stmt）与未知语句：前者静返，后者报
-// CheckerUnsupportedStmt。取舍：do/if/for 各开层（变量不外泄），while 先验条件
-// 后窄体。图：
-//
-//	checkStmt →(local/assign/func)→ 符号+类型 →(if/loop)→ 窄化+块 →(return)→ 契约
-//
-// 排查现场：变量外泄先查 push/pop，发散窄化失效先查 blockDiverges。
-
-// ---------- statements ----------
-
-// checkStmt dispatches one statement (nil-safe, exhaustive switch).
-//
-// 设计者视角：checkStmt 是语句的“总盘”——Empty 静过，Expr 直验，Local/Global
+// …（略，详见实现；排查先看 Span/诊断）
 // 分流，Do/If/Loop 各有层与窄，类型声明转 typedecl/class，宏残留报内部错，
 // import/defer/spawn/select 各专函。障碍是新语法漏分支：default 报不支持而非
 // panic，保全量。取舍：nil 早返（恢复）。排查现场：某语句无检查先查 switch 是否缺分支。
 func (c *Checker) checkStmt(st ast.Stmt) {
 	if st == nil {
-		// Recovery artifact (parser already reported); never crash.
+		// 恢复占位：parser 已报永不崩，如坏表回空表。
 		return
 	}
 	switch n := st.(type) {
@@ -73,7 +61,7 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 	case *ast.GenericFor:
 		c.checkGenericFor(n)
 	case *ast.BreakStmt:
-		// TODO: verify inside loop; we track loosely.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	case *ast.GotoStmt:
 		if len(c.gotoList) > 0 {
 			c.gotoList[len(c.gotoList)-1] = append(c.gotoList[len(c.gotoList)-1], gotoRef{name: n.Label.Name, span: n.Span()})
@@ -96,7 +84,7 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 	case *ast.ClassDecl:
 		c.checkClass(n)
 	case *ast.MacroDef:
-		// Unreachable via CheckFile (expansion runs first); defensive.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		c.errorf(diag.UnexpandedMacro, st.Span(), "internal error: unexpanded macro '%s'", n.Name.Name)
 	case *ast.ImportStmt:
 		c.checkImport(n)
@@ -117,7 +105,7 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 // 留 want），无标注即推（纯列表 Tuple→Array+ widenInferred 防过窄，余 widen）。
 // 缺省尾值补 Nil，无值无标即 Nil。障碍是同层重定义（Lua 允但多为 bug）：报
 // Redefinition（内置豁免），仍 bind 续流；表字面另描名义键（recordTableKeys）与
-// 结构桩（recordStructLiteral）。close 无值另报。图：
+// 结构桩详见实现，排查看 Span。
 //
 //	标注?验:推 → 重定义查 → bind+打卡 → 表键/结构记
 //
@@ -155,8 +143,8 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 		} else if want != nil {
 			final = want
 		} else if got != nil {
-			// Unannotated inference: list literals become growable arrays (not fixed tuples),
-			// and literal members are widened to avoid over-narrowing.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			if i < len(n.Values) {
 				if lit, ok := n.Values[i].(*ast.TableLit); ok && isPureList(lit) {
 					if tup, ok := got.(*types.Tuple); ok {
@@ -168,7 +156,7 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 					final = widenInferred(got)
 				}
 			} else {
-				// Multi-expanded value beyond single node (e.g. from call): widen.
+				// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				final = widenInferred(got)
 			}
 		} else {
@@ -176,8 +164,8 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 		}
 		isConst := i < len(n.Attrs) && n.Attrs[i] == "const"
 		if existing := c.cur().vars[name.Name]; existing != nil && !existing.IsBuiltin {
-			// Shadowing in same scope: error (Lua allows, but likely bug).
-			// Builtins (print/next/...) may be localized, so exempt them.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			c.errorf(diag.RedefinitionOfLocal, name.Span(), "redefinition of local '%s'", name.Name)
 		}
 		if i < len(n.Values) {
@@ -187,8 +175,8 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 		}
 		bound := c.bindVar(name.Name, &Symbol{Name: name.Name, Kind: symVar, Type: final, Span: name.Span(), IsConst: isConst})
 		c.recordDef(name.Span(), bound)
-		// Anonymous literals also define structural members under the
-		// variable (unless a nominal type owns them; see recordTableKeys).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if i < len(n.Values) {
 			if tl, ok := n.Values[i].(*ast.TableLit); ok && c.ownerEntry(final) == nil {
 				c.recordStructLiteral(symRoot(bound), tl)
@@ -196,9 +184,9 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 		}
 	}
 	if len(valTypes) > len(n.Names) && len(n.Names) > 0 {
-		// Extra values dropped: allowed in Lua, no error.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	}
-	// Check const/close misuse: <close> must have a value? Lua requires? Just warn if no value.
+	// 检查Lua/Just，如 `lua` 例，排查看 Span。
 	for i, a := range n.Attrs {
 		if a == "close" && len(n.Values) == 0 && i < len(n.Names) {
 			c.errorf(diag.CloseVarUninitialized, n.Names[i].Span(), "to-be-closed variable '%s' must be initialized", n.Names[i].Name)
@@ -206,7 +194,7 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 	}
 }
 
-// widen strips one literal to its base (shallow, for legacy paths).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：widen 是浅展宽——字面取 Base，余原样。深展宽用 widenInferred。
 // 留此薄函供旧径复用。排查现场：展宽不彻底先查是否误调此浅版。
@@ -217,7 +205,7 @@ func widen(t types.Type) types.Type {
 	return t
 }
 
-// widenInferred deep-widens literals for unannotated inference to avoid over-narrowing.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：widenInferred 是推断的“防过窄网”——无标注 `local x=1` 应得 number
 // 而非字面 1，故深展（字面→基，union/数组/元组/映射/对象/类参递归，ClassValue
@@ -268,7 +256,7 @@ func widenInferred(t types.Type) types.Type {
 	}
 }
 
-// isPureList reports a list-only table literal (all ExprFields).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：isPureList 是 Tuple→Array 的“扳道”——纯列表才可作可增长数组推断
 // （见 checkLocalAssign），含命名即对象。空表亦纯（调方按空对象/数组分流）。
@@ -284,8 +272,8 @@ func isPureList(lit *ast.TableLit) bool {
 
 // checkImport binds `import Name [: Type] from "path"` like
 // `local Name [: Type] = require("path")`. Without an annotation the
-// driver-resolved module type applies (any when unresolved); with one,
-// the resolved type must satisfy it.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkImport 是 import 的“等价桥”——无标注即取模块型（any 兜底），
 // 有标注即验模块型可赋标注（any 跳验）。重定义规同 local（内置豁免）。障碍是
@@ -312,11 +300,11 @@ func (c *Checker) checkImport(n *ast.ImportStmt) {
 	c.recordDef(n.Name.Span(), c.bindVar(n.Name.Name, &Symbol{Name: n.Name.Name, Kind: symVar, Type: want, Span: n.Name.Span()}))
 }
 
-// checkDefer checks a deferred call like a normal call (argument checking
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 // included). Bare `...` cannot cross into the deferred closure (it would
-// bind the closure's nonexistent varargs); copy into a local first.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// 设计者视角：checkDefer 是延迟调用的“直验”——按常验参，另查裸 `...`（hasBareVarArg）
+// 设计者视角：checkDefer 是延迟调用的“直验”——按常验参，另查裸 `...`如 `...`，排查看 Span。
 // 并指路存局部。障碍是 defer 体无变参可绑：`...` 会绑到不存在的闭包变参。取舍：
 // 验后查（错误并存）。排查现场：defer 内 `...` 未报先查 hasBareVarArg 是否透嵌套函数
 // （FuncLit 内即 false，属对）。
@@ -402,7 +390,7 @@ func (c *Checker) checkLocalFunc(n *ast.LocalFuncDef) {
 	c.checkFuncBody(n.Func, n.Generics, ft)
 }
 
-// genericNames lists generic parameter names for function symbols (LSP hover).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：genericNames 是函数符号的“泛型名片”——只存名（约束/默认存 Func
 // TypeParams），供悬停展示。薄抽取。排查现场：悬停泛型缺失先查此处与 TypeParams 是否同步。
@@ -429,28 +417,28 @@ func (c *Checker) checkGlobalFunc(n *ast.FuncDefStmt) {
 	if len(n.Name.Prefix) == 1 && n.Name.Method == nil {
 		name := n.Name.Prefix[0].Name
 		if g := c.cur().lookupVar(name); g != nil {
-			// Redefinition of function: allow (Lua pattern), but update type.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			g.Type = ft
 			c.recordDef(n.Name.Prefix[0].Span(), g)
 		} else {
-			// Define as global in current scope (modules use locals+return, globals rare).
+			// 定义，排查先看 Span/诊断。
 			sym := c.bindVar(name, &Symbol{Name: name, Kind: symFunc, Type: ft, Span: n.Span(), GenericNames: genericNames(n.Generics), FuncDecl: n.Func})
 			c.recordDef(n.Name.Prefix[0].Span(), sym)
 		}
 	} else {
-		// a.b.c or a:b — verify base exists.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		base := n.Name.Prefix[0].Name
 		sym := c.cur().lookupVar(base)
 		if sym == nil {
 			c.errorf(diag.UndefinedTableInFuncDef, n.Name.Span(), "undefined table '%s' in function definition", base)
 		} else {
-			// If base is an object, record method field for later lookups.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			if obj, ok := sym.Type.(*types.Object); ok {
 				fieldName := n.Name.Prefix[len(n.Name.Prefix)-1].Name
 				if n.Name.Method != nil {
 					fieldName = n.Name.Method.Name
 				} else if len(n.Name.Prefix) > 1 {
-					// a.b.c defines c in... we only track one level; keep simple.
+					// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				}
 				if obj.Fields == nil {
 					obj.Fields = map[string]types.Field{}
@@ -467,7 +455,7 @@ func (c *Checker) checkGlobalFunc(n *ast.FuncDefStmt) {
 // 设计者视角：checkAssign 是赋值的“逐靶验”——值先铺多（末位展开），靶分三式：
 // Ident（查值册+const 门+打卡）、Field（lookup+门禁+名义/结构双记，表值直流另钉桩）、
 // Index（indexResult+串键双记）。readonly 另拦。逐靶验 IsAssignable（错即报）。
-// 表值对名义 want 另描键（recordTableKeys），Ident 表值对非名义另分户。障碍是
+// 表值对名义 want 另描键详见实现，排查看 Span。
 // 缺值补 Nil、无值取 Any（`f()=...` 形）。取舍：错靶仍验余靶。图：
 //
 //	铺值 → 逐靶(查型+门禁+打卡) → 验赋 → 表键/结构记
@@ -512,7 +500,7 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 						c.recordStructUse(t.Field.Span(), root, t.Field.Name)
 					}
 					// Structural definition for `p.q = {...}` direct
-					// flows (nominally owned bases stay nominal).
+					// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 					if c.ownerEntry(ot) == nil {
 						if i < len(n.Values) {
 							if _, ok := n.Values[i].(*ast.TableLit); ok {
@@ -565,7 +553,7 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 			if tl, ok := n.Values[i].(*ast.TableLit); ok {
 				c.recordTableKeys(tl, want)
 				// Structural definition for direct flows (`p = {...}`;
-				// nominally owned vars stay nominal).
+				// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				if _, ok := tgt.(*ast.Ident); ok && sym != nil && c.ownerEntry(sym.Type) == nil {
 					c.recordStructLiteral(symRoot(sym), tl)
 				}
@@ -575,7 +563,7 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 	}
 }
 
-// checkIf checks if/elseif/else with branch narrowing and divergence flip.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkIf 是流敏感的“眼镜店”——条件先验，Then 开层+真窄，elseif 各验
 // 各窄，Else 开层+假窄（只反首条件，elseif 链不反——近似）。发散翻转：Then 发散
@@ -608,7 +596,7 @@ func (c *Checker) checkIf(n *ast.IfStmt) {
 		c.pop()
 		elseDiv = blockDiverges(n.Else)
 	}
-	// Flow narrowing after if: if one branch diverges (return), the other condition holds after.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	// `if x == nil then return end; use(x as non-nil)`
 	if thenDiv && n.Else == nil && len(n.Elseifs) == 0 {
 		c.applyNarrowing(n.Cond, false)
@@ -617,7 +605,7 @@ func (c *Checker) checkIf(n *ast.IfStmt) {
 	}
 }
 
-// blockDiverges reports whether a block always exits (return-terminated).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：blockDiverges 是发散的“探针”——有 Ret 即散，末句 if 须 Then/Else/
 // elseif 全散，Do 透视，while 保守假，余者假。障碍是 `do return end` 包裹与
@@ -633,10 +621,10 @@ func blockDiverges(b *ast.Block) bool {
 	if len(b.Stmts) == 0 {
 		return false
 	}
-	// Last statement determines divergence for our purposes.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	switch n := b.Stmts[len(b.Stmts)-1].(type) {
 	case *ast.IfStmt:
-		// Both branches must diverge.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if n.Else == nil {
 			return false
 		}
@@ -673,7 +661,7 @@ func (c *Checker) checkNumericFor(n *ast.NumericFor) {
 	if n.Step != nil {
 		c.checkExpr(n.Step)
 	}
-	// Bounds should be numbers.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, t := range []types.Type{s, e} {
 		if !isAnyLike(t) && !types.IsAssignable(t, types.Number, c.opt.toTypes()) {
 			c.errorf(diag.NumericForBoundNotNum, n.Span(), "numeric for bounds must be numbers, got '%s'", t.String())
@@ -714,7 +702,7 @@ func (c *Checker) checkGenericFor(n *ast.GenericFor) {
 	c.pop()
 }
 
-// checkReturn checks return values against the function contract.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkReturn 是返回的“对账”——值先铺多，顶层（retStack 空，模块出口）
 // 只验不判；未标注（nil 哨兵）收 infer 备推断；void（空非 nil）多值即报；余者逐位
@@ -731,12 +719,12 @@ func (c *Checker) checkReturn(r *ast.ReturnStmt) {
 		vals = c.checkExprListMulti(r.Exprs)
 	}
 	if len(c.retStack) == 0 {
-		// Top-level return (module): just check exprs, no signature.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		return
 	}
 	want := c.retStack[len(c.retStack)-1]
 	if want == nil {
-		// Unannotated: collect for potential inference (currently any, so no check).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if len(c.inferStack) > 0 {
 			c.inferStack[len(c.inferStack)-1] = append(c.inferStack[len(c.inferStack)-1], vals...)
 		}
@@ -746,7 +734,7 @@ func (c *Checker) checkReturn(r *ast.ReturnStmt) {
 		return
 	}
 	if len(want) == 0 && len(vals) > 0 {
-		// Returning values from void function.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		// Allow `return` bare only.
 		c.errorf(diag.VoidFunctionReturns, r.Span(), "function returns no values, but %d value(s) returned", len(vals))
 		return

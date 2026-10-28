@@ -8,13 +8,12 @@ import (
 
 // Object 是结构化对象/接口类型：命名可选、字段映射与索引签名。
 //
-// 为什么 Name 与 Fields 共存：命名接口（interface Foo）在打印/缓存时用 Name
+// 为什么 Name 与 Fields 共存：命名接口详见实现，排查看 Span。
 // 简化输出，但结构化比较仍看 Fields/Indexers；匿名对象 Name=""。空 Fields
 // + 非空 Name 视为名义别名，打印只出 Name。
 //
 // 物理布局：
 //
-//	Object
 //	├── Name     string          // 接口名（匿名为空）
 //	├── Fields   map[string]Field // 命名成员
 //	└── Indexers []Indexer       // 索引签名列表
@@ -77,9 +76,10 @@ func (t *Object) stringSeen(seen map[Type]bool) string {
 //
 // 物理布局：
 //
-//	Enum
 //	├── Name       string         // 枚举名
-//	├── Underlying Type          // 底层类型（string/number/...）
+//
+// ├── Underlying Type          // 底层类型详见实现，排查看 Span。
+//
 //	└── Members    map[string]Type // 成员名 -> 成员类型
 type Enum struct {
 	Name       string

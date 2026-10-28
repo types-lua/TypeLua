@@ -9,21 +9,12 @@ import (
 
 // 设计者视角：方法体检查时把 self/super 注入当前作用域，并用 retDepth
 // 守卫 super 只在方法入口层生效；构造器的 self-before-super 顺序单独校验。
-
-// Class body checking, instantiation, and super calls.
+// 类二遍装修：落户+验 init 与体，super 仅入口层生效。
 //
 // 设计者视角：此类文件是二遍的“装修队”——checkClass 登记值名并触发 ensureClassDef，
 // checkClassBodies 验字段初始化与方法体（self/super 入栈），实例化与 super 分流在
 // checkClassInstantiate/checkSuperCall/checkSuperMethod。障碍是 super 只在方法入口层
-// 生效（闭包内失效，靠 retDepth 快照）与构造器 self-before-super 顺序。候选：
-// 一遍全算 vs 两遍；选两遍，签名先行。排查现场：super 误放行先查 retDepth，构造器
-// 漏报先查 baseNeedsConstruction。
-
-// checkClass registers the class value and triggers body checking.
-//
-// 设计者视角：checkClass 是类的“落户口+开工单”——先以 typeEntry 身份确保定义态
-// （ensureClassDef 失败即记 Any 续流），再把 ClassValue 落入值册（重定义另报），
-// 逐成员为 LSP 留定义打卡，最后非 Declared 才开二遍。障碍是重复声明：typeEntry
+// …（略，详见实现；排查先看 Span/诊断）
 // 指针必须与本节点同一，否则是重名副本，直接退（错误已在 collectTypes 报）。
 // 取舍：值/类型双登记，一次覆盖类名的两册。不变量：Declared 文件无体不进二遍。
 // 排查现场：类值取到 Any 先查 ensureClassDef 是否返 nil（循环继承）。
@@ -56,8 +47,8 @@ func (c *Checker) checkClass(n *ast.ClassDecl) {
 	}
 }
 
-// checkClassBodies is pass 2: field initializers (inferring unannotated
-// fields) and method/constructor bodies with self/super in scope.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkClassBodies 是二遍的“三道工序”——静态初值（无 self）→实例初值
 // （self+classCtx 入栈，基类约束兜底）→方法/构造体→构造器规则（必填字段、super
@@ -72,7 +63,7 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 	baseInst := def.inst.Base
 	var baseVal *types.ClassValue
 	if n.Extends != nil {
-		// Already resolved during build; re-derive cheaply for context.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if nt, ok := n.Extends.(*ast.NamedType); ok {
 			if be := c.cur().lookupType(nt.Name); be != nil && be.classDecl != nil {
 				if bd := c.ensureClassDef(be); bd != nil {
@@ -85,7 +76,7 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 		}
 	}
 
-	// Field initializers (statics have no self; instance fields do).
+	// 字段详见实现，排查看 Span。
 	for _, m := range n.Members {
 		if m.Kind != ast.ClassField || m.Init == nil {
 			continue
@@ -116,7 +107,7 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 		got := c.checkExpr(m.Init)
 		want := sig.fieldType
 		if want == nil && baseInst != nil {
-			// Overriding an inherited field: the base type governs.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			if bf, ok := baseInst.Fields[m.Name.Name]; ok && bf.Access != types.Private && bf.Type != nil {
 				want = bf.Type
 			}
@@ -134,7 +125,7 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 		c.pop()
 	}
 
-	// Method and constructor bodies.
+	// 方法详见实现，排查看 Span。
 	for _, m := range n.Members {
 		if m.Kind == ast.ClassField || m.Body == nil {
 			continue
@@ -146,8 +137,8 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 		c.checkClassMethodBody(n, m, sig.funcType, def, baseInst, baseVal)
 	}
 
-	// Constructor rules (explicit constructors only; synthesized ones
-	// forward to base by construction).
+	// 构造详见实现，排查看 Span。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	var ctor *ast.ClassMember
 	for _, m := range n.Members {
 		if m.Kind == ast.ClassConstructor && m.Body != nil {
@@ -195,7 +186,7 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 	}
 }
 
-// baseNeedsConstruction reports whether a derived constructor must call super().
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：baseNeedsConstruction 是 super 必调的“点火判据”——基构造有必填参
 // 或显式非空体即需 super，让基体有机会跑。障碍是无参/全可选/变参基构造：无需强制
@@ -213,13 +204,13 @@ func baseNeedsConstruction(e *typeEntry, baseInst *types.Class, baseVal *types.C
 		if baseVal.Constructor.HasVarArg {
 			return false
 		}
-		// Explicit non-trivial constructor still needs the call so its body runs.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		return len(baseVal.Constructor.Params) > 0
 	}
 	return false
 }
 
-// checkClassMethodBody checks one method/constructor body with self/super.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：checkClassMethodBody 是单个方法的“无菌室”——压值层、标签/goto、
 // 形参、vararg、返回、推断、async、classCtx（retDepth 快照）八件套，开体、验
@@ -314,7 +305,7 @@ func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, s
 	}
 	if cv.Abstract {
 		c.errorf(diag.InstantiateAbstract, span, "cannot instantiate abstract class %s", name)
-		// Don't cascade arity noise on top of the root cause.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		for _, a := range args {
 			c.checkExpr(a)
 		}
@@ -399,7 +390,7 @@ func (c *Checker) checkSuperCall(n *ast.CallExpr) []types.Type {
 // checkSuperMethod checks `super:method(...)` (base method on self).
 //
 // 设计者视角：checkSuperMethod 是基方法的“直通梯”——沿 Base 链找首个同名实例方法，
-// 私有即拦，静态同名则指路（StaticViaInstance），无果报 NoMethod。障碍是静态与
+// 私有即拦，静态同名则指路详见实现，排查看 Span。
 // 实例重名：必须先实例链、后静态提示，否则指错路。取舍：显式泛型透传（方法级泛型
 // 允许，与 super() 构造禁显式不同）。失败返 [Any] 续流。不变量：inStatic 恒拒。
 // 排查现场：基方法找不到先查链上是否为 private（被跳过）或 static（走错分支）。
@@ -419,7 +410,7 @@ func (c *Checker) checkSuperMethod(n *ast.MethodCallExpr) []types.Type {
 		}
 		return []types.Type{types.Any}
 	}
-	// Walk the base chain for the method (instance methods only).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for b := ctx.base; b != nil; b = b.Base {
 		if f, ok := b.Fields[n.Method.Name]; ok && f.IsMethod {
 			if f.Access == types.Private {
@@ -435,7 +426,7 @@ func (c *Checker) checkSuperMethod(n *ast.MethodCallExpr) []types.Type {
 			return []types.Type{types.Any}
 		}
 	}
-	// Static with the same name? Point the user at it.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if ctx.baseVal != nil {
 		if _, ok := ctx.baseVal.Statics[n.Method.Name]; ok {
 			c.errorf(diag.StaticViaInstance, n.Span(), "'%s' is static; call it on the base class by name", n.Method.Name)

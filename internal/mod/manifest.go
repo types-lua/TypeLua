@@ -1,6 +1,6 @@
-// Package mod implements the TypeLua package system: a decentralized,
-// git-based module manager with a TOML manifest (tlua.toml) and an exact
-// lockfile (tlua.lock), in the spirit of go.mod/go.sum.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 package mod
 
 import (
@@ -9,19 +9,18 @@ import (
 	"strings"
 )
 
-// Manifest file names.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 const (
 	ManifestName = "tlua.toml"
 	LockName     = "tlua.lock"
-	// VendorDir holds vendored module sources for builds.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	VendorDir = "tlua_modules"
 )
 
-// pathRe validates module paths: host-like first segment plus slashes.
 // 第一段必须包含点（去中心化托管），除非依赖覆盖了拉取 URL。
 var pathRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~%-]*/[A-Za-z0-9._~%-]+(/[A-Za-z0-9._~%-]+)*$`)
 
-// ValidPath reports whether p is a plausible module path.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：径须 `host/x` 形（首段字母数起，段字符集限），`..` 禁。障碍是单段：
 // pathRe 强制含 `/`。候选：正则 vs 手判；选正则稳。不变量：`..` 恒 false。排查现场：
@@ -36,9 +35,9 @@ func ValidPath(p string) bool {
 	return true
 }
 
-// ValidHostPath additionally requires a dotted first segment.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// 设计者视角：去中心化要求首段带点（`example.com/x`），显式 URL/path 可豁（见
+// 设计者视角：去中心化要求首段带点如 `example.com/x`，排查看 Span。
 // Validate）。障碍是自托管：URL 覆可无点。排查现场：自托管被拒先查覆写。
 func ValidHostPath(p string) bool {
 	if !ValidPath(p) {
@@ -51,23 +50,23 @@ func ValidHostPath(p string) bool {
 	return strings.Contains(first, ".")
 }
 
-// Dep is one manifest dependency (Cargo-style):
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Dep 三选一源——Query 版询、URL 源覆、Path 本地替（互斥，后两者与版
 // 关系见 Validate）。障碍是三源混填：URL+Path 互斥。候选：多源 vs 单源；选显式互斥。
 // 不变量：URL 与 Path 互斥。排查现场：源错先查互斥。
 //
-//	"example.com/greet" = "^v1.0.0"                          (version shorthand)
-//	"example.com/notes" = { version = "^v0.2.0" }             (explicit)
-//	"example.com/words" = { version = "^v1.0.0", url = "..." } (self-hosted fetch source)
-//	"example.com/local" = { path = "./deps/local" }           (local directory, versions bypassed)
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 type Dep struct {
 	Query string // "latest", exact "v1.2.3", caret "^v1.2.0", branch, or commit SHA
 	URL   string // optional fetch-source override
 	Path  string // optional local directory (replaces fetching entirely)
 }
 
-// Manifest is tlua.toml.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：Name+Version+Deps+Replace 四件，Deps 径→求，Replace 径→本地。障碍是
 // 空 Deps nil 图：NewManifest 给空图防 nil 写。排查现场：nil map 写 panic 先查构造。
@@ -78,7 +77,7 @@ type Manifest struct {
 	Replace map[string]string
 }
 
-// NewManifest creates an empty manifest.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：空 Deps/Replace 双图，免调用方判 nil。障碍是零值 Manifest：Deps nil 写
 // 即 panic；故构造。排查现场：map 写 panic 先查此。
@@ -86,7 +85,7 @@ func NewManifest(name string) *Manifest {
 	return &Manifest{Name: name, Deps: map[string]*Dep{}, Replace: map[string]string{}}
 }
 
-// Validate checks manifest invariants.
+// 校验，排查先看 Span/诊断。
 //
 // 设计者视角：五律——名非空、径合法、无点径须 URL/Path 覆、URL⊕Path、版询合法
 // （裸 URL 可追 latest，裸 Path 免版）。障碍是自托管无点径：URL 覆即放。候选：严 vs
@@ -107,7 +106,7 @@ func (m *Manifest) Validate() error {
 		}
 		if d.Path == "" {
 			if strings.TrimSpace(d.Query) == "" {
-				// A bare url without version tracks latest.
+				// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 				if d.URL == "" {
 					return fmt.Errorf("module %q needs a version query", p)
 				}

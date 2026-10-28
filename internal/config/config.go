@@ -33,17 +33,11 @@ type CompilerOptions struct {
 //
 // 物理布局：
 //
-//	Config
 //	├── CompilerOptions  // 目标/严格/输出/根目录/SourceMap/TreeShake/Types/TypeRoots
 //	├── Include []string // 包含 glob
 //	├── Exclude []string // 排除 glob
-//	├── Files   []string // 显式文件列表（优先）
-//	├── Dir     string   // 配置文件所在目录（不序列化）
-//	└── Path    string   // 配置文件绝对路径（不序列化）
 //
-// 设计者视角：Config 是纯数据“图纸”，不是施工队——它只描述想要什么，从不校验目录存否、
-// 从不装配 Program，校验留给 compiler/Open（只有打开时才知 comparator 对不对得上）。
-// 障碍是同一图纸在不同打开场景语义不同：把校验塞进来会让单测造个 Config 都得拖半个编译器。
+// …（略，详见实现；排查先看 Span/诊断）
 // 取舍是 Dir/Path 打 json:"-" 不序列化，让落盘与内存解耦。不变量：零值经访问方法仍得默认；
 // Files 非空时优先于 Include/Exclude。排查现场：若配置改了不生效，先看读的是 Dir 相对路径
 // 还是 CWD 相对路径，次看 Files 是否劫持了 include。
@@ -62,7 +56,7 @@ type Config struct {
 	Path string `json:"-"`
 }
 
-// Default 返回一个带默认值的 Config（target 5.4、strict、outDir dist、rootDir .）。
+// Default 返回一个带默认值的 Config详见实现，排查看 Span。
 //
 // 设计者视角：它是“开箱即用的毛坯房”——Load 先以 Default 打底再 Unmarshal 覆盖，
 // 让缺字段的 tlua.json 仍得完整语义。障碍是 Strict 为 *bool：此处取局部变量地址装 true，
@@ -263,7 +257,7 @@ func Load(path string) (*Config, error) {
 // FindUp 从 dir 向上搜索 tlua.json。
 //
 // 设计者视角：它是“上楼找房本”——从 dir 逐层上楼，每层看有无 tlua.json，有即返，
-// 到根（parent==abs）即空串收工。障碍是相对 dir：先 Abs 化再爬，避免 Join 后漂移；
+// 到根详见实现，排查看 Span。
 // Abs 失败则退守原串继续爬，宁可慢不停摆。取舍是只判存在（Stat 成功即返），不读不验，
 // 权限错当不存在继续上楼。不变量：返回非空恒为 Join 后的 tlua.json 路径；空即全树无配置。
 // 排查现场：若子目录配置被父级劫持，先看搜索起点是否传成了父目录，次看中间层是否有误放的空 tlua.json。
@@ -292,13 +286,7 @@ func FindUp(dir string) string {
 // 设计者视角：它是源码的“点名册”——Files 显式名单优先（点谁谁上，外加类型根声明）；
 // 否则 Walk(RootDir) 全捡 .tl，再按 Exclude 剔、Include 留，末了拼上 typeRoots 的 .d.tl。
 // 障碍有三：一是 outDir/dist/.git/node_modules 默认跳过防自吞（Exclude 为空也跳）；
-// 二是 Walk 中途 err（如权限）当空跳过而非整单失败，保证点名永有交代；
-// 三是 .d.tl 只经 listTypeRootDecls 追加、从不发射（声明只参审不出版）。
-//
-//	root(Dir+RootDir) ─Walk→ *.tl ─Exclude剔→ ─Include留→ 主名单
-//	                                                     ＋ typeRoots *.d.tl
-//
-// 取舍是调用方去重（本处不 dedup 主名单），换多 Config 叠加灵活。不变量：返回路径恒为
+// …（略，详见实现；排查先看 Span/诊断）
 // Join 后的形态（含 Dir 前缀）；缺失根静默忽略。排查现场：若文件忽多忽少，先看 Files
 // 是否非空劫持（非空即无视 include），次看 Exclude 的 glob 是否误杀，末看 typeRoots 声明
 // 是否被当成了待发射文件。
@@ -487,7 +475,7 @@ func (c *Config) listTypeRootDecls(have []string) []string {
 
 // matchAny 报告相对路径是否命中任一 glob，是 Exclude/Include 的总闸。
 //
-// 设计者视角：好比安检门过一排模板——任一命中即拦（Exclude）或留（Include），
+// 设计者视角：好比安检门过一排模板——任一命中即拦详见实现，排查看 Span。
 // 空模板集恒 false。障碍是斜杠形态：此处统一 ToSlash 后再比，让 windows 径也走 POSIX 模板。
 // 不变量：纯只读，patterns 为空恒 false。排查现场：若排除不生效，先打印 rel 是否带 "./" 前缀
 // （本处不剪，模板侧须一致），次看模板是否用了系统分隔符而 rel 已归一。

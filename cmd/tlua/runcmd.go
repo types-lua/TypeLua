@@ -21,14 +21,7 @@ import (
 // 传 --check 获得构建级严格性。
 //
 // 两种运行时，由标志切换：
-//   - 嵌入式 golua（默认）：零外部依赖，纯 Lua。
-//     此处不支持 FFI（require "ffi"）与 C 模块（.so/.dll/.a）——
-//     golua 设计上没有 Lua C 模块加载器。
-//   - 外部（--lua <bin>）：发射到临时目录并执行解释器
-//     （lua5.4、luajit 等）。发射的 bootstrap 前导从脚本目录设置
-//     package.path/cpath，因此与 `lua dist/main.lua` 相同。用于 ffi/C 扩展。
-//
-// 设计者视角：run=配载→Load→（check 或 parse 守门）→Emit 落临时→内/外执行。
+// …（略，详见实现；排查先看 Span/诊断）
 // 默认 parse 即跑（快），--check 方严。障碍是 .d.tl 入口：拒；障碍是 FFI：
 // 内嵌必败，须 --lua 外置。候选：常驻 dist vs 临时；选临时零残留。不变量：
 // 错诊先印。排查现场：FFI 失败先查 --lua，入口错先查 OutputForFile。

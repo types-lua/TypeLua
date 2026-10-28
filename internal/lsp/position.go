@@ -6,16 +6,16 @@ import (
 	"unicode/utf8"
 )
 
-// Line/column conversions between UTF-16 LSP positions and byte offsets.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：三制翻译官——token(1 起 rune)、LSP(0 起 UTF-16)、文档(byte)。
-// 代理对（emoji）占 2 units，须 utf16.Encode 计；行首表+d.lineText 逐 rune 走。
+// 代理对详见实现，排查看 Span。
 // 障碍是中文/emoji：byte 列全偏。候选：rune vs UTF-16；选按协议 UTF-16。不变量：
 // 越界钳制。排查现场：跳转偏先查此换算。
 
 // ---------- positions ----------
 
-// lineText returns the raw line (without trailing newline).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：取行裸串供列换算，末行无 `\n` 即到文末。障碍是行越界：返 ""。排查现场：
 // 空行列错先查行表。
@@ -31,7 +31,7 @@ func (d *document) lineText(line int) string {
 	return d.content[start:end]
 }
 
-// utf16Col converts our 1-based rune column to an LSP 0-based UTF-16 column.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：rune 列→UTF-16 列逐字 Encode 累 units，<1 钳 0。障碍是代理对：
 // len(Encode) 2。排查现场：中文列偏先查此处。
@@ -61,7 +61,7 @@ func (d *document) offsetAt(line, colUTF16 int) int {
 		return len(d.content)
 	}
 	text := d.lineText(line)
-	// UTF-16 column back to byte offset.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	units, i := 0, 0
 	for i < len(text) && units < colUTF16 {
 		r, size := utf8.DecodeRuneInString(text[i:])

@@ -4,25 +4,17 @@ import (
 	"github.com/typelua/typelua/internal/ast"
 )
 
-// Hygiene: scope-aware renaming of macro-introduced bindings.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：卫生改名是“全员换证”——体拷贝内每个局部绑 fresh 新名，引用经
 // save/restore 影子栈消解，label 另预扫（goto 可前跳）。障碍是遮参：影子绑与
 // 其域引用须同新名；跨函数同名 label 永不交互故可统改；fresh 须避实参全拼。
 // 图：prescan(labels)→rename(绑+引)→subst(参换实)。
-
 // ---------- hygiene: scope-aware renaming ----------
-//
-// 复制体中的每个局部绑定都获得新名字；引用
-// resolve through save/restore maps, so shadowing (including shadowing a
-// macro parameter) stays coherent: the shadowing binding and exactly its
-// scope's references share one fresh name.
-// Labels are pre-scanned per body (gotos may precede their label);
-// distinct functions' same-named labels never interact, so uniform
-// renaming is sound for them.
-// Fresh names avoid every caller-argument spelling, so capture is
-// impossible short of adversarial hand-written identical names.
-
+// …（略，详见实现；排查先看 Span/诊断）
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 type renameCtx struct {
 	e      *expander
 	vars   map[string]string
@@ -40,7 +32,7 @@ func copyStrMap(m map[string]string) map[string]string {
 	return out
 }
 
-// scoped runs fn with a restored variable map afterwards.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：scoped 给闭包拍 vars 快照、跑后恢复，保 for/select/函数形参域不泄。
 // 障碍是忘恢复即兄弟串名。候选：checkpoint 计数 vs 全拷；选全拷，简单。不变量：
@@ -58,7 +50,7 @@ func (r *renameCtx) bindVar(orig string) {
 	r.avoid[r.vars[orig]] = true
 }
 
-// prescanLabels assigns one fresh name per label spelling in the body.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：label 须预扫——goto 可在 label 前，故一遍綁名、二遍改写，保前后跳
 // 同名。障碍是函数边界：不同函数同名 label 互不干扰，此处全体綁亦 sound（见注释）。
@@ -239,13 +231,13 @@ func (r *renameCtx) renameStmt(st ast.Stmt) {
 			id.Name = r.vars[id.Name]
 		}
 	case *ast.ImportStmt:
-		// The bound name is macro-local like any local.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if n.Name != nil {
 			r.bindVar(n.Name.Name)
 			n.Name.Name = r.vars[n.Name.Name]
 		}
 	case *ast.DeferStmt:
-		// The deferred call resolves names like any other call.
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		r.renameExpr(n.Call)
 	case *ast.SpawnStmt:
 		r.renameExpr(n.Call)
@@ -370,8 +362,8 @@ func (r *renameCtx) renameStmt(st ast.Stmt) {
 	}
 }
 
-// renameExpr resolves references through the current maps. Note it takes
-// only the expression: label positions never appear inside expressions.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：renameExpr 只换 Ident（查 vars 表），FuncLit 开域，余者下钻；label
 // 永不在表达式内故无分支。障碍是 Field 名（`a.foo` 的 foo）非变量须留。候选：全换
@@ -422,8 +414,8 @@ func (r *renameCtx) renameExpr(x ast.Expr) {
 	}
 }
 
-// collectIdents gathers every identifier spelling in an expression
-// (over-approximate and safe: extra avoid-names only bump the counter).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：collectIdents 为 avoid 采“全拼过近似”——宁多采（counter 多跳）不漏采
 // （捕获）。障碍是 FuncLit 体与 Field 名：体须下钻采，字段名亦采（保 fresh 避之）。

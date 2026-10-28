@@ -2,8 +2,8 @@ package types
 
 // ---------- conditional types ----------
 
-// IsConcreteType reports whether a type is free of unbound type parameters
-// (and deferred conditionals), i.e. ready for conditional evaluation.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：条件类型 `T extends U ? X : Y` 只有在 T 具体时才能求值；若 T
 // 仍含泛型参数/未实例化的 Ref/deferred Conditional，求值会把泛型函数的条件
@@ -17,9 +17,9 @@ func IsConcreteType(t Type) bool {
 	if t == nil {
 		return true
 	}
-	// Fast paths without a visited-set allocation: leaves and
-	// always-deferred nodes decide immediately; only potentially cyclic or
-	// composite nodes fall through to the full traversal.
+	// IsConcreteType如 `f(1)`，排查看 Span。
+	// IsConcreteType如 `f(1)`，排查看 Span。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	switch x := t.(type) {
 	case *GenericParam, *InferParam, *Conditional, *Ref:
 		return false
@@ -29,8 +29,8 @@ func IsConcreteType(t Type) bool {
 		if x.Base == nil {
 			return true
 		}
-		// Literal bases are always primitives in practice; recurse without
-		// a set (no cycle possible through a primitive base).
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+		// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 		if _, ok := x.Base.(*Primitive); ok {
 			return true
 		}
@@ -52,7 +52,7 @@ func IsConcreteType(t Type) bool {
 //
 // 设计者视角：复合类型可能循环引用（如 `interface Node { next: Node<T> }`），
 // 朴素递归会栈溢出。候选：全局 visited vs 按类型族 visited；选按族 visited，
-// 仅对可能自引用的指针类型（Class/ClassValue/Object/Union/Intersection）入栈，
+// 仅对可能自引用的指针类型详见实现，排查看 Span。
 // 叶节点与容器不入栈，避免漏判或误判。GenericParam/InferParam/Conditional/Ref
 // 任一出现即 true。排查现场：若递归类型误报"含参数"，检查 seen 的入栈条件
 // 是否把某类型族遗漏。
@@ -60,7 +60,7 @@ func hasTypeParams(t Type, seen map[Type]bool) bool {
 	if t == nil {
 		return false
 	}
-	// Pointers (classes, possibly cyclic) terminate via seen.
+	// hasTypeParams如 `f(1)`，排查看 Span。
 	switch t.(type) {
 	case *Class, *ClassValue, *Object, *Union, *Intersection:
 		if seen[t] {

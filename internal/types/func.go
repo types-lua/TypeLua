@@ -10,7 +10,6 @@ import (
 //
 // 物理布局：
 //
-//	FuncParam
 //	├── Name     string  // 参数名，可空
 //	├── Type     Type    // 参数类型
 //	└── Optional bool    // `?`
@@ -27,15 +26,8 @@ type FuncParam struct {
 // 是“剩余参数”语义，打印与匹配逻辑不同。
 //
 // IsAsync 是运行时契约标记：async 函数/内建在非 async 任务中调用会因无
-// 调度器而 yield 失败，检查器报 TL3805；它不参与可赋值性，避免把异步
-// 性质混入子类型判定。
+// …（略，详见实现；排查先看 Span/诊断）
 //
-// 物理布局：
-//
-//	Func
-//	├── Params     []FuncParam     // 形参列表（含名字/类型/可选）
-//	├── HasVarArg  bool           // 是否有 `...`
-//	├── VarArg     Type           // vararg 元素类型（HasVarArg 时有效）
 //	├── Returns    []Type         // 返回类型列表（0 => void）
 //	├── TypeParams []*GenericParam // 泛型声明（约束/默认完整保留）
 //	└── IsAsync    bool           // async 标记（不参与 assignability）
@@ -44,13 +36,13 @@ type Func struct {
 	HasVarArg bool
 	VarArg    Type
 	Returns   []Type
-	// TypeParams records a generic declaration (constraints/defaults
-	// intact) so explicit type arguments can bind positionally.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	TypeParams []*GenericParam
 	// IsAsync marks `async` functions and async builtins (sleep, channel
-	// send/recv, WaitGroup wait, Mutex lock): calling one outside an
-	// async task errors at runtime (yield with no scheduler), so the
-	// checker reports TL3805. Marker only: ignored by assignability.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	IsAsync bool
 }
 

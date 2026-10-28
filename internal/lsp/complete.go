@@ -10,11 +10,11 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
-// Completion: scope names, keywords, and member-aware dot/colon lists.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：补全两路——成员位（`a.`/`a:b:`）走类型成员，余者走作用域名+关键字。
 // 障碍是 any/unknown 基：成员不可列，退 plain；私成员须 insideOwner。候选：前缀
-// 过滤客户端 vs 服务端；选服务端全列（isIncomplete=false），客户端再滤。不变量：
+// 过滤客户端 vs 服务端；选服务端全列详见实现，排查看 Span。
 // 恒返排序。排查现场：成员缺失先查基类型与私有权。
 
 // ---------- completion ----------
@@ -29,7 +29,7 @@ var luaKeywords = []string{
 }
 
 func completionKind(kind string) int {
-	// 设计者视角：kind 译 LSP 数字（Function 3/Method 2/...），未知兜 6（Variable）。
+	// 设计者视角：kind 译 LSP 数字详见实现，排查看 Span。
 	// 障碍是客户端图标依赖数字：须稳。排查现场：图标错先查此表。
 	switch kind {
 	case "function":
@@ -59,8 +59,8 @@ var dotCompleteRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.:]*)([.:])\s*$`)
 
 // memberCompletion answers `a.` / `a.b:` completion from the base type:
 // a single identifier or a member chain (`a.b.c.`). Private members show
-// only inside their owner's declaration. ok=false means "not a member
-// position": fall back to plain completion.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：成员补全四步——行尾正则嗅 `x./:`，链按 ./: 切，首名沿 ScopeAt 上爬
 // 定基，后段 LookupFieldType 逐跳，末 addMembers 展成员（union 归并、私有过滤）。
@@ -85,7 +85,7 @@ func (d *document) memberCompletion(pos lspPos) ([]any, bool) {
 		return nil, false
 	}
 	chain := strings.Split(m[1], ".")
-	// A colon inside the chain (method calls) splits further.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	var parts []string
 	for _, seg := range chain {
 		for _, s := range strings.Split(seg, ":") {
@@ -147,8 +147,8 @@ func (d *document) memberCompletion(pos lspPos) ([]any, bool) {
 	return items, true
 }
 
-// insideOwner reports whether off sits inside the owner's declaration
-// (private members complete there; unknown owners stay visible).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：私有权判经 ScopeAt 上爬找类型条目，比 DeclRange 含 off；零值范围
 // （无位）放行。障碍是影子同名类：就近条目为准。候选：名比 vs 指针；选就近名，
@@ -173,7 +173,7 @@ func (d *document) insideOwner(off int, owner string) bool {
 	return false
 }
 
-// addMembers lists directly visible members of a value type (unions merge).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：按值类型展成员——Object 直列，Class 分字段/方法，ClassValue 列静态
 // +`new`，Enum 列子，Union 递归归并（seen 去重在外）。障碍是类型位擦除：ClassValue

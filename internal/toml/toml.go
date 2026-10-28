@@ -41,17 +41,11 @@ const (
 //
 // 物理布局：
 //
-//	Value
-//	├── Kind  Kind           // String/Integer/Float/Boolean/Array/Inline
 //	├── Str   string         // 字符串值
 //	├── Int   int64          // 整数值
 //	├── Float float64        // 浮点值
-//	├── Bool  bool           // 布尔值
-//	├── Arr   []*Value       // 数组元素
-//	└── Map   map[string]*Value // 内联表
 //
-// 设计者视角：Value 是“按章取货的货箱”——Kind 定读哪格，其余格置零，让调用方一次 switch
-// 即取对。障碍是 Go 无代数类型：用扁平 struct + Kind 判别模拟联合，换零接口断言、零反射。
+// …（略，详见实现；排查先看 Span/诊断）
 // 取舍是 Arr/Map 在标量品时为 nil，调用方须先看 Kind 再取格。不变量：Kind 与有效格一一对应；
 // Inline 的 Map 永非 nil（空表即空 map）。排查现场：若 Float 取到 0，先确认 Kind 是 Float
 // 还是 Integer（1 与 1.0 在 TOML 里是两品），次看 parseNumber 的 isFloat 分支。
@@ -116,7 +110,6 @@ type Table struct {
 //
 // 物理布局：
 //
-//	Doc
 //	├── Tables map[string]*Table  // [table] 主体
 //	└── Arrays map[string][]*Table // [[array]] 条目序列
 //
@@ -134,7 +127,7 @@ type Doc struct {
 // table 取或建指定内径的表，是档案柜的懒建抽屉器。
 //
 // 设计者视角：好比找抽屉——有即拿，无即现钉一个（Values 空 map），让顶表与超集表
-// 无需预声明。取舍是调用方（parseHeader）负责判重（重复 [table] 报错），本函数只管
+// 无需预声明。取舍是调用方详见实现，排查看 Span。
 // “有则返、无则建”。不变量：返回永非 nil，Tables map 懒初始化。排查现场：若重复表未报错，
 // 先看 parseHeader 的 dup 分支是否被绕过（直接调了本函数），次看径 Join 是否一致。
 func (d *Doc) table(key string) *Table {
@@ -302,7 +295,7 @@ func (p *parser) parseHeader() error {
 
 // parseDottedKey 把 `a.b."c.d".'e'` 解析为段。
 //
-// 设计者视角：它是表径的“切刀”——裸键（isBareKeyChar）直切，引号键经 parseBasicRaw/
+// 设计者视角：它是表径的“切刀”——裸键详见实现，排查看 Span。
 // parseLiteralRaw 解出（含转义），点号分段。障碍是 `"c.d"` 里的点不是分隔：引号段整体
 // 一段，Join 时才用 \x00 粘，避免与真分隔撞车。取舍是空段、尾点（如 `a.`）在此不特判，
 // 下轮循环遇非法字符即报 invalid key，让报错收敛一处。不变量：成功段数 >=1，游标停在
@@ -360,7 +353,7 @@ func isBareKeyChar(c byte) bool {
 
 // parsePair 解析 `key = value`。
 //
-// 设计者视角：它是键值行的“装配工”——取键（parseDottedKey）、验 '='、取值（parseValue）、
+// 设计者视角：它是键值行的“装配工”——取键详见实现，排查看 Span。
 // 验行尾（只许空白/注释/换行）、落抽屉（cur.Values，重复即错）五步。障碍是点键：
 // `a.b = 1` 在完整 TOML 合法，但在此子集故意拒收（让用户改用 [table] 头），
 // 把嵌套语义收敛到一处，报错即指路。取舍是行尾尾料零容忍（`k = 1 x` 即错），

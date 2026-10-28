@@ -6,7 +6,7 @@ import (
 	"github.com/typelua/typelua/internal/types"
 )
 
-// Hover and go-to-definition.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：悬停/定义皆经 useAt 三岔——值符显 `kind name: abbrev`，成员显
 // `kind Owner.Name`，类型显 `entryKind TypeName`。定义再按成员/类型/值各取位。

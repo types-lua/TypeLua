@@ -32,11 +32,7 @@ import (
 // 先确认调的是 parseType 还是 parseUnion 等内部层。
 func (p *Parser) parseType() ast.TypeNode { return p.parseConditional() }
 
-// parseConditional parses `Check extends Extends ? True : False`
-// (right-associative on both branches, like TS). The `?` collides with
-// the Optional postfix `T?`; isConditionalQ disambiguates.
-//
-// 设计者视角：parseConditional 是条件类型的“三段论”——Check 先行（parseUnion），
+// parseConditional 是条件三段论：`A extends B ? C : D` 双支右结合，`?` 与 Optional 同形靠 isConditionalQ 裁决。
 // 无 extends 即回（非条件）；有则 extendsDepth++ 后收 Extends（供 infer 判定作用域），
 // 再 expect('?')、右结合收 True/False 双支（TS 同款）。障碍是 `?` 与 Optional 后缀
 // 同形：`T? : U` 里 `?` 的归属全靠 isConditionalQ 试探，后缀层见条件问号即让路。
@@ -72,13 +68,7 @@ func (p *Parser) parseConditional() ast.TypeNode {
 	return &ast.ConditionalType{Check: check, Extends: ext, True: trueBranch, False: falseBranch, S: token.Span{Start: check.Span().Start, End: p.prevEnd(), File: p.file}}
 }
 
-// isConditionalQ reports whether the current `?` opens conditional branches
-// (`? True :`) rather than forming Optional `T?`. Speculative and side
-// effect free: restores position and diagnostics either way. A depth trip
-// inside speculation just means "not a conditional" (the real parse takes
-// the shallower Optional path).
-//
-// 设计者视角：isConditionalQ 是问号的“验钞机”——`?` 可能是 Optional 的尾巴，
+// isConditionalQ 是问号验钞机：试吃 `? True` 后有 `:` 即条件岔口，否则是 `T?` 可选尾，零副作用回退。
 // 也可能是条件的岔口，只能试探（吃 `?` 后 parseType，看后是否跟 ':'）。
 // 障碍是朴素试探为 O(n^2)（`A?|B?|C?` 每问号都全量试）：快速路径先看 peek(1)
 // 能否开类型（Ident/`(`/`[`/`{`/字面量/keyof/typeof/infer/`...` 才值得试，
@@ -90,15 +80,12 @@ func (p *Parser) isConditionalQ() (ok bool) {
 	if !p.at(token.Question) {
 		return false
 	}
-	// Fast path: `? True :` requires True to start a type. When the token
-	// after `?` cannot open a type (e.g. `|` in `A?|B?`, `,`/`]`/`)`/EOF`),
-	// this is plain Optional — skip the full speculative parse entirely.
-	// This turns the common `A?|B?|C?` chain from O(n^2) into O(n).
+	// 快道：`?` 后 `|`/`,`/`)`/`]`/EOF 开不了类型即 Optional，如 `A?|B?` 跳过全量试探把 O(n²) 降到 O(n)。
 	switch p.peek(1).Kind {
 	case token.Ident, token.LParen, token.LBrack, token.LBrace,
 		token.String, token.Number, token.True, token.False, token.Nil,
 		token.DotDotDot, token.KeyofKw, token.TypeofKw, token.InferKw:
-		// May open a type; fall through to speculation.
+		// 能开类型才进试探。
 	default:
 		return false
 	}
@@ -182,7 +169,7 @@ func (p *Parser) parseTypePostfix() ast.TypeNode {
 	}
 	for {
 		if p.at(token.Question) {
-			// `? True :` belongs to an enclosing conditional, not Optional.
+			// 条件岔口 `? A:` 让外层收，此处不包 Optional。
 			if p.isConditionalQ() {
 				break
 			}
@@ -197,7 +184,7 @@ func (p *Parser) parseTypePostfix() ast.TypeNode {
 			continue
 		}
 		if p.at(token.LBrack) {
-			// Indexed access `T[K]` (empty brackets stay Array above).
+			// 索引访问 `T[K]`，空 `[]` 已在上支判数组。
 			p.next() // [
 			idx := p.parseType()
 			p.expect(token.RBrack, "']'")
@@ -252,8 +239,7 @@ func (p *Parser) parsePrimaryType() ast.TypeNode {
 		p.next()
 		return &ast.NamedType{Name: "nil", S: c.Span}
 	case token.DotDotDot:
-		// `...T` rest marker (tuple patterns, vararg positions).
-		// Takes a full postfix type so `...unknown[]` means rest-of-unknown.
+		// `...T` 余参标记，吃全后缀故 `...unknown[]` 即余下 unknown 数组。
 		p.next()
 		elem := p.parseTypePostfix()
 		return &ast.NamedType{Name: "...", Args: []ast.TypeNode{elem}, S: token.Span{Start: c.Span.Start, End: p.prevEnd(), File: p.file}}
@@ -278,7 +264,7 @@ func (p *Parser) parsePrimaryType() ast.TypeNode {
 		return p.parseNamedType()
 	default:
 		p.errorf(diag.ParseExpectedType, c.Span, "expected type, got %s", c.Kind)
-		// Synthesize any to continue.
+		// 合成 any 占位续解，如 `local x: ???` 后文不崩。
 		p.next()
 		return &ast.NamedType{Name: "any", S: c.Span}
 	}
@@ -295,7 +281,7 @@ func (p *Parser) parsePrimaryType() ast.TypeNode {
 func (p *Parser) parseNamedType() ast.TypeNode {
 	first := p.next()
 	name := first.Literal
-	// Qualified a.b.C
+	// 限定名 `a.b.C` 点链拼接。
 	for p.at(token.Dot) && p.peek(1).Kind == token.Ident {
 		p.next()
 		n := p.next()
@@ -335,7 +321,7 @@ func (p *Parser) parseNamedType() ast.TypeNode {
 //	  └── 回退 ── type (, type)* ──[-> R]──► Paren/Tuple/FuncType(无名)
 func (p *Parser) parseParenOrFuncType() ast.TypeNode {
 	start := p.next() // (
-	// Empty () => void-ish unit.
+	// 空 `()` 即 void 单元，有 `-> R` 即无参函数。
 	if p.at(token.RParen) {
 		p.next()
 		if p.at(token.Arrow) {
@@ -345,7 +331,7 @@ func (p *Parser) parseParenOrFuncType() ast.TypeNode {
 		}
 		return &ast.ParenType{Elem: &ast.NamedType{Name: "void", S: start.Span}, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
-	// Tentatively parse as func params.
+	// 先按具名参数试探，如 `(x: T)`。
 	save := p.saveCursor()
 	ndiags := len(p.diags)
 	params, hasVA, vaTy, ok := p.tryParseFuncTypeParams()
@@ -356,7 +342,7 @@ func (p *Parser) parseParenOrFuncType() ast.TypeNode {
 			ret := p.parseReturnType()
 			return &ast.FuncType{Params: params, HasVarArg: hasVA, VarArgType: vaTy, Returns: returnTypeToList(ret), S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 		}
-		// Not a func type; fall through to plain types. If params were all unnamed, we can reuse.
+		// 非函数即普通类型，全匿名可复用已收珠。
 		allUnnamed := !hasVA
 		var elems []ast.TypeNode
 		for _, pr := range params {
@@ -373,7 +359,7 @@ func (p *Parser) parseParenOrFuncType() ast.TypeNode {
 			return &ast.TupleType{Elems: elems, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 		}
 	}
-	// Backtrack and parse as plain type list.
+	// 回退按普通类型列重走，如 `(A, B)`。
 	p.restoreCursor(save)
 	p.diags = p.diags[:ndiags]
 	var elems []ast.TypeNode
@@ -386,7 +372,7 @@ func (p *Parser) parseParenOrFuncType() ast.TypeNode {
 	}
 	p.expect(token.RParen, "')'")
 	if p.at(token.Arrow) {
-		// `(A, B) -> R` with unnamed params.
+		// 无名 `(A, B) -> R` 即多参函数。
 		p.next()
 		ret := p.parseReturnType()
 		var params []*ast.FuncTypeParam
@@ -417,10 +403,9 @@ func (p *Parser) tryParseFuncTypeParams() ([]*ast.FuncTypeParam, bool, ast.TypeN
 		if p.at(token.DotDotDot) {
 			p.next()
 			hasVA = true
-			// ...name? : T  or ...T
+			// `...名: T` 具名或 `...T` 匿名。
 			if p.at(token.Ident) || isSoftKw(p.cur().Kind) {
-				// Could be `...T` (unnamed vararg of type T) or `...rest: T`.
-				// Lookahead: if next is Colon/Comma/RParen, it's a name.
+				// 次 Token 是 `:`/`,`/`)` 即具名 `...rest`，否则按类型吃 `...T`。
 				n := p.cur()
 				if p.peek(1).Kind == token.Colon || p.peek(1).Kind == token.Comma || p.peek(1).Kind == token.RParen {
 					p.next()
@@ -448,9 +433,9 @@ func (p *Parser) tryParseFuncTypeParams() ([]*ast.FuncTypeParam, bool, ast.TypeN
 			}
 			break
 		}
-		// name: T  |  name?: T  |  T (unnamed)
+		// `名: T`/`名?: T` 具名，裸 `T` 无名。
 		if p.at(token.Ident) || isSoftKw(p.cur().Kind) {
-			// Lookahead for Colon or Question+Colon => named.
+			// 后跟 `:`/`?` 即具名，如 `(x: T)`。
 			isNamed := false
 			if p.peek(1).Kind == token.Colon || p.peek(1).Kind == token.Question {
 				isNamed = true
@@ -469,8 +454,7 @@ func (p *Parser) tryParseFuncTypeParams() ([]*ast.FuncTypeParam, bool, ast.TypeN
 				ty := p.parseType()
 				params = append(params, &ast.FuncTypeParam{Name: name, Type: ty, Optional: optional, S: tySpan(name, ty)})
 			} else {
-				// Unnamed: parse a full type. But an Ident alone could be either a name without colon (invalid) or a type.
-				// Treat as type.
+				// 无名位：裸 Ident 按类型吃，如 `(string, number)`。
 				ty := p.parseType()
 				params = append(params, &ast.FuncTypeParam{Type: ty, S: ty.Span()})
 			}
@@ -524,8 +508,7 @@ func (p *Parser) parseFuncTypeParams() ([]*ast.FuncTypeParam, bool, ast.TypeNode
 // 先看 isMappedStart 的 peek(i+2)==In 是否生效。
 func (p *Parser) parseTableType() ast.TypeNode {
 	start := p.next() // {
-	// Mapped type: `{ [K in Keys]?: V }` (optional readonly prefix).
-	// Committed once `[Ident in` is seen; errors after that are real.
+	// 映射 `{[K in Keys]?: V}` 见 `[Ident in` 即提交，后错为真错。
 	if p.isMappedStart() {
 		return p.parseMappedType(start)
 	}
@@ -549,10 +532,7 @@ func (p *Parser) parseTableType() ast.TypeNode {
 	return &ast.TableType{Fields: fields, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
-// isMappedStart peeks `[K in` (optional `+`/`-` + readonly prefix)
-// without consuming.
-//
-// 设计者视角：isMappedStart 是映射类型的“试纸”——`{` 后 `[`+Ident+`in` 三连
+// isMappedStart 是映射试纸：`{` 后 `[K in` 三连（可带 +/-readonly）即映射，`[string]:` 索引器靠 `in` 一词区分。
 // （前可带 +/`-` readonly）即映射，否则索引器/普通字段。纯前瞻零消费，
 // 命中后调用方提交（不回退）。障碍是索引器 `[string]:` 亦以 `[` 开：`in` 一词
 // 即分水岭。排查现场：若 `{ [K in V]: T }` 未进映射，先打印 peek(0..2) 的 Kind。
@@ -653,7 +633,7 @@ func (p *Parser) parseTableTypeField() *ast.TableTypeField {
 		ty := p.parseType()
 		return &ast.TableTypeField{Name: name.Name, NameSpan: name.Span(), Type: ty, Optional: optional, Readonly: true, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
-	// Indexer [K]: V
+	// 索引器 `[K]: V`，如 `{[string]: number}`。
 	if p.at(token.LBrack) {
 		p.next()
 		k := p.parseType()
@@ -662,14 +642,14 @@ func (p *Parser) parseTableTypeField() *ast.TableTypeField {
 		v := p.parseType()
 		return &ast.TableTypeField{IsIndexer: true, IndexKey: k, IndexVal: v, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 	}
-	// Method shorthand or property.
+	// 方法糖 `m(x): R` 或属性 `name: T`。
 	if (p.at(token.Ident) || isSoftKw(p.cur().Kind)) && (p.peek(1).Kind == token.LParen || p.peek(1).Kind == token.Lt) {
 		name := p.next()
 		lit := name.Literal
 		if lit == "" {
 			lit = name.Kind.String()
 		}
-		// Optional generics on methods: keep for explicit type arguments.
+		// 方法泛型 `m<T>(x)` 留给显式实参，无 `(` 即回退。
 		var mgen []*ast.GenericParam
 		if p.at(token.Lt) {
 			save := p.saveCursor()
@@ -724,10 +704,7 @@ func (p *Parser) parseTableTypeField() *ast.TableTypeField {
 	return &ast.TableTypeField{Name: name.Name, NameSpan: name.Span(), Type: ty, Optional: optional, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
-// tryParseTypeArgs parses `<T, ...>` explicit generic arguments.
-// Returns ok=false without consuming on failure (caller restores).
-//
-// 设计者视角：tryParseTypeArgs 是显式泛型的“试吃”——`<` 后逗号列收 parseType，
+// tryParseTypeArgs 是泛型试吃：`<A,B>` 逗号列+consumeGt 收尾，失败回 false 由调用方 restore，`f<T>(` 有括号才提交。
 // consumeGt 收尾（含 `>>` 拆分），成败只回 ok，失败由调用方 restore+截断诊断。
 // 障碍是 `<` 与比较同形：调用方（parseSuffix 的 `f<T>(` 与 `:m<T>(`）必须以后接
 // '(' 为提交条件，否则按比较回退。取舍：空 `<>` 即零参成功（atGt/EOF 短路），

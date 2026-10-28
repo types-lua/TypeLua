@@ -13,23 +13,11 @@ import (
 // 设计者视角：resolveTypeWithSub 是类型语法到 types.Type 的唯一入口；
 // generic substitution 通过 sub 表传播，conditional/mapped/indexed access
 // 尽量在具体类型上求值，其余保留为延迟节点。
-
-// Type-node resolution (named, table, function, conditional, mapped, keyof, ...).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：类型解析是语法到语义的“唯一关口”——resolveTypeWithSub 按节点分流，
-// sub 表携泛型实参下行；conditional/mapped/indexed 具体可算即算（TryEval），
-// 余者留延迟节点（permissive）。障碍是恢复节点（nil）与递归（类/别名）：前者返
-// Any 不崩，后者靠 entry 的 inflight/shell（见 entry.go）。图：
-//
-//	Named→(原语/泛型/特殊map/array/chan/用户entry)→Table/Func/Union/…→延迟求值
-//
-// 取舍：错即报、型即 Any 续流。排查现场：类型错位先查 sub 是否透传，递归悬空先查
-// entry 壳。
-
-// ---------- type resolution ----------
-
-// resolveType resolves a type node with an empty substitution (top entry).
-//
+// sub 表携泛型实参下行；conditional/mapped/indexed 具体可算即算详见实现，排查看 Span。
+// …（略，详见实现；排查先看 Span/诊断）
 // 设计者视角：resolveType 是对外便门——空 sub 启程，逻辑全在 WithSub。顶层无泛型
 // 语境，sub 空即对。排查现场：泛型内解类型误用此处（丢 sub）会把 T 解成形参拷贝，
 // 应调 WithSub。
@@ -37,7 +25,7 @@ func (c *Checker) resolveType(n ast.TypeNode) types.Type {
 	return c.resolveTypeWithSub(n, map[string]types.Type{})
 }
 
-// resolveTypeWithSub resolves a type node under substitution sub.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：见上关口注释——nil 即 Any（恢复），Paren 透视，Optional 升 nil|T，
 // Tuple/Union/Intersection 逐员，Table/Func 另函，Typeof/Keyof/Mapped/Indexed/
@@ -46,7 +34,7 @@ func (c *Checker) resolveType(n ast.TypeNode) types.Type {
 // 永不返 nil。排查现场：某语法无型先查 switch 是否缺分支。
 func (c *Checker) resolveTypeWithSub(n ast.TypeNode, sub map[string]types.Type) types.Type {
 	if n == nil {
-		// Recovery artifact (parser already reported); never crash.
+		// 恢复占位：parser 已报永不崩，如坏表回空表。
 		return types.Any
 	}
 	switch t := n.(type) {
@@ -106,16 +94,16 @@ func (c *Checker) resolveTypeWithSub(n ast.TypeNode, sub map[string]types.Type) 
 	}
 }
 
-// resolveNamed resolves a named type (primitives/generics/specials/user entries).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：resolveNamed 是命名分流的“五道闸”——原语（无参裸名）→限定名拒
 // （v1 不支模块限定）→`...T` 剩标记→sub/tparam 泛型→map/Array/chan 特殊→用户
 // Entry（类镜面短路+patch，余走 resolveTypeEntryWithArgs）。障碍是类构建中自引：
-// 镜面（isIdentityClassArgs）直绑壳，非镜面另起空实例+patch 回填（指针先稳）。
+// 镜面详见实现，排查看 Span。
 // 候选：复用通用实例化 vs 手工镜面；选手工（递归不断）。不变量：用户径恒打卡
 // recordTypeUse。排查现场：递归类悬空先查镜面判据，泛型 T 解错先查 sub/tparam 序。
 func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) types.Type {
-	// Primitive lookup (unqualified only).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if len(t.Args) == 0 {
 		switch t.Name {
 		case "any":
@@ -152,7 +140,7 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 			return types.Function
 		}
 	}
-	// Qualified names: not supported in v1 (modules).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if strings.Contains(t.Name, ".") && t.Name != "..." {
 		c.errorf(diag.QualifiedTypeUnsupported, t.Span(), "qualified type '%s' is not supported", t.Name)
 		return types.Any
@@ -165,7 +153,7 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 		}
 		return &types.Ref{Name: "...", Args: []types.Type{c.resolveTypeWithSub(t.Args[0], sub)}}
 	}
-	// Generic param substitution.
+	// 泛型详见实现，排查看 Span。
 	if s, ok := sub[t.Name]; ok && len(t.Args) == 0 {
 		return s
 	}
@@ -173,10 +161,10 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 		if s, ok := sub[t.Name]; ok {
 			return s
 		}
-		// Return a copy to avoid aliasing.
+		// 返回，排查先看 Span/诊断。
 		return &types.GenericParam{Name: gp.Name, Constraint: gp.Constraint, Default: gp.Default}
 	}
-	// Special generics: map<K,V>, Array<T>, table<K,V>?
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if t.Name == "map" || t.Name == "table" {
 		if len(t.Args) == 0 {
 			return types.Table
@@ -201,16 +189,16 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 		}
 		return &types.Chan{Elem: c.resolveTypeWithSub(t.Args[0], sub)}
 	}
-	// User type.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	e := c.cur().lookupType(t.Name)
 	if e == nil {
 		c.errorf(diag.UndefinedType, t.Span(), "undefined type '%s'", t.Name)
 		return types.Any
 	}
 	c.recordTypeUse(t.Span(), e)
-	// Self-reference while a class definition is being built: bind to the
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	// shell so recursive types (e.g. `next: Box<T> | nil`) keep working.
-	// The shell is filled in place, so later reads see complete members.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if e.classDecl != nil && e.resolving && e.classShell != nil {
 		var sargs []types.Type
 		for _, a := range t.Args {
@@ -236,7 +224,7 @@ func (c *Checker) resolveNamed(t *ast.NamedType, sub map[string]types.Type) type
 	return c.resolveTypeEntryWithArgs(e, args, t.Span())
 }
 
-// resolveLiteral resolves a literal type annotation (bool/nil/string/number).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：resolveLiteral 是字面标注的“直译”——true/false→Boolean 字面，nil→Nil，
 // 引号/长括号→String 字面，余者→Number 字面（整数性交判定）。Trim 消空格。排查现场：
@@ -252,17 +240,17 @@ func (c *Checker) resolveLiteral(t *ast.LiteralType) types.Type {
 	if strings.HasPrefix(v, "\"") || strings.HasPrefix(v, "'") || strings.HasPrefix(v, "[") {
 		return &types.Literal{Value: v, Base: types.String}
 	}
-	// Number literal.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	return &types.Literal{Value: v, Base: types.Number}
 }
 
-// resolveTableType resolves a table type literal into an Object.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：resolveTableType 是表型的“装配”——索引器直装，方法简写取 MethodSig，
 // 余取 Type，optional/readonly 照搬。表型不引入泛型（不压栈）。障碍是方法简写与
 // 字段同名：以后者 MethodSig 为准。排查现场：表方法类型错先查 IsMethod 分支。
 func (c *Checker) resolveTableType(t *ast.TableType, sub map[string]types.Type) types.Type {
-	// Push dummy tparams? Table types don't introduce params.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	obj := &types.Object{Fields: map[string]types.Field{}}
 	for _, f := range t.Fields {
 		if f.IsIndexer {
@@ -280,7 +268,7 @@ func (c *Checker) resolveTableType(t *ast.TableType, sub map[string]types.Type) 
 	return obj
 }
 
-// resolveFuncType resolves a function type literal (params/varargs/returns/generics).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：resolveFuncType 是函数型的“小全套”——tparam 先压（签名内泛型可见），
 // 形参无名即空串（占位），IsVarArg 转 vararg（`...: T[]` 退元），返回逐个解，
@@ -300,7 +288,7 @@ func (c *Checker) resolveFuncType(t *ast.FuncType, sub map[string]types.Type) ty
 			name = p.Name.Name
 		}
 		if p.IsVarArg {
-			// Vararg param in func type: treat as vararg, not regular param.
+			// 变参详见实现，排查看 Span。
 			continue
 		}
 		ps = append(ps, types.FuncParam{Name: name, Type: pt, Optional: p.Optional})
@@ -314,7 +302,7 @@ func (c *Checker) resolveFuncType(t *ast.FuncType, sub map[string]types.Type) ty
 			va = arr.Elem
 		}
 	}
-	// Also check Params for IsVarArg (from tryParse).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	for _, p := range t.Params {
 		if p.IsVarArg {
 			hasVA = true
@@ -347,13 +335,13 @@ func (c *Checker) resolveFuncType(t *ast.FuncType, sub map[string]types.Type) ty
 }
 
 // resolveConditional resolves `Check extends Extends ? True : False`.
-// Distributive evaluation mirrors TS: a naked type-parameter check
-// distributes over unions once instantiated; anything still generic
-// stays deferred (permissive in assignability until then).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：条件型是“TS 式分配”——Check/Extends 先解（extends 内开 extendsDepth
-// 放 infer），infer 名绑 InferParam 仅入真支 sub，真/假支各解，裸参（isNakedTypeParam）
-// 标 Distributive，能算（TryEval）即算否留延迟。障碍是 infer 作用域：只真支可见
+// 放 infer），infer 名绑 InferParam 仅入真支 sub，真/假支各解，裸参详见实现，排查看 Span。
+// 标 Distributive，能算详见实现，排查看 Span。
 // （TS 同款），假支用原 sub。取舍：延迟一律 permissive（判定放行）。图：
 //
 //	Check → Extends(infer开) → 真支(含infer)/假支 → TryEval?即值:延迟
@@ -400,9 +388,9 @@ func isNakedTypeParam(n ast.TypeNode, c *Checker, sub map[string]types.Type) boo
 }
 
 // resolveMapped resolves `{ [K in Keys]?: V }`, expanding concrete
-// domains eagerly and deferring the rest.
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
-// 设计者视角：映射型是“批量印章”——约束先解，键变量压栈后解值，同态基（keyof T）
+// 设计者视角：映射型是“批量印章”——约束先解，键变量压栈后解值，同态基详见实现，排查看 Span。
 // 无错才取（保静默），能展（TryEval）即展，具体不可展才报，否则留延迟。障碍是
 // 定义处泛型未填（约束为 Any/Unknown）：此为常态，不报（defer）。候选： Halk 全展
 // vs 具体展；选具体展。取舍：诊断数快照（nd）保同态重解静默。排查现场：映射恒延迟
@@ -411,14 +399,14 @@ func isNakedTypeParam(n ast.TypeNode, c *Checker, sub map[string]types.Type) boo
 func (c *Checker) resolveMapped(n *ast.MappedType, sub map[string]types.Type) types.Type {
 	nd := len(c.diags)
 	constraint := c.resolveTypeWithSub(n.Constraint, sub)
-	// The key variable is visible inside the value type (shadows outer).
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	c.pushTParams([]*ast.GenericParam{{Name: n.Param}})
 	value := c.resolveTypeWithSub(n.Value, sub)
 	c.popTParams()
 	m := &types.Mapped{Param: n.Param.Name, Constraint: constraint, Optional: n.Optional, OptMinus: n.OptMinus, Readonly: n.Readonly, RoMinus: n.RoMinus, Value: value}
 	// Homomorphic base: `{[K in keyof T]...}` inherits T's field modifiers
 	// unless an explicit `?`/`-?`/`readonly`/`-readonly` overrides them.
-	// Only when nothing errored so far, so the re-resolution stays silent.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if kn, ok := n.Constraint.(*ast.KeyofType); ok && len(c.diags) == nd {
 		if base := c.resolveTypeWithSub(kn.Elem, sub); base != nil {
 			if o, ok := base.(*types.Object); ok {
@@ -429,9 +417,9 @@ func (c *Checker) resolveMapped(n *ast.MappedType, sub map[string]types.Type) ty
 	if r, ok := types.TryEvalMapped(m, c.opt.toTypes()); ok {
 		return r
 	}
-	// Only report unmappable concrete domains; Any/Unknown arise from
-	// unfilled generic parameters (definition check) or dynamic code,
-	// both of which stay deferred.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	if types.IsConcreteType(constraint) && !isAnyLike(constraint) {
 		c.errorf(diag.CannotMapOverType, n.Span(), "cannot map over type '%s'", constraint.String())
 		return types.Any
@@ -441,7 +429,7 @@ func (c *Checker) resolveMapped(n *ast.MappedType, sub map[string]types.Type) ty
 
 // resolveIndexedAccess resolves `T[K]`.
 //
-// 设计者视角：resolveIndexedAccess 是类型级索引——Obj/Index 各解，能算（TryEval）
+// 设计者视角：resolveIndexedAccess 是类型级索引——Obj/Index 各解，能算详见实现，排查看 Span。
 // 即取（含 errStr 报错），否留延迟节点。障碍是非法索引的报错与延迟之分：可判定
 // 即报 IndexedAccessInvalid，泛型未定则留。排查现场：`T[K]` 恒延迟先查 Obj 是否泛型。
 func (c *Checker) resolveIndexedAccess(n *ast.IndexedAccessType, sub map[string]types.Type) types.Type {
@@ -470,7 +458,7 @@ func (c *Checker) resolveTypeof(t *ast.TypeofType) types.Type {
 		c.errorf(diag.TypeofUndefinedVariable, t.Span(), "typeof: undefined variable '%s'", id.Name)
 		return types.Any
 	}
-	// General expr: check it.
+	// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 	return c.checkExpr(t.Expr)
 }
 
@@ -488,7 +476,7 @@ func (c *Checker) resolveKeyof(e types.Type, sp token.Span) types.Type {
 			ms = append(ms, &types.Literal{Value: strconv.Quote(name), Base: types.String})
 		}
 		for _, ix := range x.Indexers {
-			// keyof of indexer: key type itself.
+			// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 			ms = append(ms, ix.Key)
 		}
 		if len(ms) == 0 {
@@ -526,7 +514,7 @@ func (c *Checker) resolveKeyof(e types.Type, sp token.Span) types.Type {
 	}
 }
 
-// resolveTypeEntry resolves a non-generic entry (empty args, zero span).
+// 排查看 Span/诊断，如 `local x=1` 错圈整句。
 //
 // 设计者视角：resolveTypeEntry 是旧径的“薄别名”——泛型维度恒空（非泛型登记时调，
 // 见 typedecl.go）。sub 参数实未用（历史遗留），统一走 WithArgs。排查现场：
