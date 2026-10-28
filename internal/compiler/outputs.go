@@ -13,6 +13,12 @@ import (
 // stale-output cleanup, so both must agree on every input (relative or
 // absolute source paths, custom rootDir/outDir). ok=false for `.d.tl`
 // inputs, which are checked but never emitted.
+//
+// 设计者视角：OutputForFile 是输出布局的“唯一门牌办”——Emit 与 watch 清理同问
+// 此处，杜绝两套算法分叉。障碍是相对/绝对混杂：outDir 非绝对即相对 Dir 拼，
+// Rel 失败退 Base；非 .tl 显式 files 条目保留名加 .lua。候选：各处自算 vs 集中；
+// 选集中。不变量：.d.tl 恒 false。排查现场：输出错位先查 RootDir/OutDir，
+// 清理误删先查此处与 Emit 是否同源。
 func OutputForFile(cfg *config.Config, src string) (dst string, ok bool) {
 	if strings.HasSuffix(src, ".d.tl") {
 		return "", false

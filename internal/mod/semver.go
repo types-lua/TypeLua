@@ -8,6 +8,10 @@ import (
 )
 
 // Version is a parsed semantic version (leading `v` optional).
+//
+// 设计者视角：三数+预发+Raw（规范 `vM.m.p[-pre][+build]`，build 不参比但留 Raw）。
+// 障碍是前导零：semver 禁（`01` 非法）。候选：宽 vs 严；选严合 semver。不变量：
+// Raw 恒规范。排查现场：版被拒先查前导零/三段。
 type Version struct {
 	Major, Minor, Patch int
 	Pre                 string // prerelease, "" when absent
@@ -16,6 +20,10 @@ type Version struct {
 
 // ParseVersion parses strict `vMAJOR.MINOR.PATCH[-prerelease]` (`v` optional,
 // `+build` ignored for precedence but preserved in Raw).
+//
+// 设计者视角：去 `v`→切 build→切 pre（逐 id 字符集验）→三数验（非空、无前导零、
+// 非负）→拼 Raw。障碍是空 pre 段（`v1-`）：拒；build 只留不比。候选：lenient vs
+// strict；选 strict。不变量：错恒带原串。排查现场：版错先查段数。
 func ParseVersion(s string) (Version, error) {
 	orig := s
 	s = strings.TrimSpace(s)
@@ -75,6 +83,9 @@ func ParseVersion(s string) (Version, error) {
 
 // Compare orders versions: -1, 0, +1 (prerelease < release; prerelease
 // identifiers compare per semver: numeric < alphanumeric, numeric numerically).
+//
+// 设计者视角：主次补逐比，末比 pre（空=正式胜）。障碍是数字 vs 字母 id：数字小。
+// 候选：字串比 vs semver 比；选后者。排查现场：选版错先查 pre 律。
 func (v Version) Compare(o Version) int {
 	if v.Major != o.Major {
 		return cmpInt(v.Major, o.Major)
@@ -89,6 +100,7 @@ func (v Version) Compare(o Version) int {
 }
 
 func cmpInt(a, b int) int {
+	// 设计者视角：三值比小件。排查现场：符号反先查此。
 	switch {
 	case a < b:
 		return -1
@@ -99,6 +111,8 @@ func cmpInt(a, b int) int {
 }
 
 func comparePre(a, b string) int {
+	// 设计者视角：pre 空胜（正式>预发），逐 id 数字/字母分律，短 prefix 小。障碍是
+	// `1` vs `alpha`：数小。排查现场：预发选错先查此。
 	if a == b {
 		return 0
 	}
@@ -134,6 +148,10 @@ func comparePre(a, b string) int {
 }
 
 // QueryKind classifies a version query.
+//
+// 设计者视角：四态——latest 追新、exact 钉死、caret 兼容、revision 分支/SHA 快照。
+// 障碍是 revision 与版串歧义：版解析成先判版，不成方 revision。排查现场：查询错类
+// 先查 ParseQuery 序。
 type QueryKind int
 
 const (
@@ -144,6 +162,9 @@ const (
 )
 
 // Query is a parsed manifest version query.
+//
+// 设计者视角：Kind+Base/Rev+Text（Text 留 lock 保真）。障碍是 exact 钉死须留原串。
+// 不变量：Text 恒原。排查现场：lock 版串变先查 Text。
 type Query struct {
 	Kind QueryKind
 	// Exact/Caret base version.
@@ -155,6 +176,10 @@ type Query struct {
 }
 
 // ParseQuery parses "latest", exact versions, carets, or revisions.
+//
+// 设计者视角：`latest`→Latest，`^`→Caret（内版须合法），版串→Exact，余（无空白引号）
+// →Revision 交 fetcher。障碍是空/含空白：拒。候选：版优先 vs 修订优先；选版优先。
+// 排查现场：分支名被当版错先查字符。
 func ParseQuery(s string) (Query, error) {
 	t := strings.TrimSpace(s)
 	if t == "" {
@@ -182,6 +207,10 @@ func ParseQuery(s string) (Query, error) {
 
 // Matches reports whether v satisfies a caret/exact query (latest and
 // revisions are resolved by the fetcher, never matched here).
+//
+// 设计者视角：exact 等值，caret 下限+npm 上界（Major>0 锁主，0.Minor>0 锁次，
+// 0.0.x 锁补丁）。latest/rev 此处恒 false（fetcher 决）。障碍是 0 版上界特律。
+// 排查现场：兼容选错先查上界。
 func (q Query) Matches(v Version) bool {
 	switch q.Kind {
 	case QueryExact:
@@ -204,6 +233,8 @@ func (q Query) Matches(v Version) bool {
 }
 
 // MaxVersion returns the highest version in vs (nil when empty).
+//
+// 设计者视角：线性取大，空返 nil（latest 无版时上游定）。排查现场：空 panic 先查 nil。
 func MaxVersion(vs []Version) *Version {
 	if len(vs) == 0 {
 		return nil
@@ -218,6 +249,9 @@ func MaxVersion(vs []Version) *Version {
 }
 
 // SortVersions sorts ascending.
+//
+// 设计者视角：Compare 升序，供 MVS 取大。障碍是预发序：Compare 已含。排查现场：版序
+// 错先查 Compare。
 func SortVersions(vs []Version) {
 	sort.Slice(vs, func(i, j int) bool { return vs[i].Compare(vs[j]) < 0 })
 }

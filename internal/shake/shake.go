@@ -50,6 +50,13 @@ type shaker struct {
 
 // ShakeFile 从 f 删除死的纯局部函数定义。
 // 从不失败：任何无法识别的形状都不删除。
+//
+// 设计者视角：ShakeFile 三幕——漫游建图（候选+根边+taint）、flood 求活、filter
+// 删死。障碍一是安全压倒优化：未知节点即 taint 全保（见 default）；障碍二是
+// 传递死：仅被死者引者随死，故 flood 自根沿边；障碍三是指针删：dead 以 Stmt 指针
+// 判，filter 逐块过滤。候选：可达分析 vs 引用计数；选可达+不动点。不变量：
+// taint 即零删；nil 返 0。排查现场：误删先查 taint 分支，漏删先查候选条件
+// （纯闭包+单值+无属性）。
 func ShakeFile(f *ast.File) int {
 	if f == nil || f.Block == nil {
 		return 0
@@ -111,6 +118,11 @@ func ShakeFile(f *ast.File) int {
 // filterStmt 递归进入 st 的子块，使删除作用于任意深度。
 // 未知语句保持原样（删除由指针驱动，因此这里
 // 无需污染：只能删除先前证明死亡的定义）。
+//
+// 设计者视角：filterStmt 是删除的“下钻机”——只钻已知含块/闭包者，未知直留（此
+// 处不 taint，因删集已定、指针判）。障碍是漏钻：某块不钻即其内死者删不掉，故须
+// 与 shaker.stmt 覆盖对齐。候选：复用漫游 vs 独立；选独立轻量。不变量：只删 dead
+// 指针。排查现场：深层死者未删先查此下钻是否漏该型。
 func filterStmt(st ast.Stmt, filter func(b *ast.Block)) {
 	switch n := st.(type) {
 	case *ast.DoBlock:
@@ -172,6 +184,10 @@ func filterStmt(st ast.Stmt, filter func(b *ast.Block)) {
 }
 
 // filterExpr 递归进入表达式中嵌套的闭包。
+//
+// 设计者视角：filterExpr 补语句下钻的“表达式侧”——table/call/单目内闭包体亦有块
+// 待滤。障碍是表达式无定义可删：只为钻到内层块。候选：合入 filterStmt vs 分立；
+// 选分立，型别正交。不变量：未知表达式留。排查现场：表内闭包死者未删先查此下钻。
 func filterExpr(x ast.Expr, filter func(b *ast.Block)) {
 	switch n := x.(type) {
 	case *ast.FuncLit:
@@ -216,9 +232,16 @@ func filterExpr(x ast.Expr, filter func(b *ast.Block)) {
 }
 
 func (s *shaker) push() { s.scopes = append(s.scopes, map[string]*binding{}) }
-func (s *shaker) pop()  { s.scopes = s.scopes[:len(s.scopes)-1] }
+
+// 设计者视角：push 开新词法层（do/if/循环/函数/select 皆 push），pop 配对弹，
+// 保遮蔽正确。障碍是 repeat 体 cond 同域（见 stmt）：须一 push 包两部。排查现场：
+// 遮蔽错杀先查 push/pop 配对。
+func (s *shaker) pop() { s.scopes = s.scopes[:len(s.scopes)-1] }
 
 func (s *shaker) bind(name string, cand int) {
+	// 设计者视角：bind 在顶层落户口——cand 为候选 id 或 liveCtx（非候选）。障碍是空名：
+	// 直接弃防 map 脏。候选：覆写 vs 链；选覆写（遮蔽即新户，旧边已记）。排查现场：
+	// 遮蔽后旧候选被误活先查 use 的最近层命中。
 	if name == "" {
 		return
 	}
@@ -227,6 +250,11 @@ func (s *shaker) bind(name string, cand int) {
 
 // use 记录名字的值位置引用：在外层候选外为根边，
 // 否则为外层候选的边。
+//
+// 设计者视角：use 自内向外找最近绑定——非候选即返（无须保），候选则按 cur 分流：
+// 顶层（liveCtx）记 roots，内层记 edges[cur]。障碍是全局/字段/类型名：无绑定即弃；
+// 标签/字段名调用方已避。候选：use 时 flood vs 事后 flood；选事后（图全再活）。
+// 不变量：未解析名零操作。排查现场：死者被活先查是否误记根，活者被删先查 cur 上下文。
 func (s *shaker) use(id *ast.Ident) {
 	if id == nil {
 		return
@@ -253,6 +281,10 @@ func (s *shaker) use(id *ast.Ident) {
 }
 
 // newCand 为纯闭包定义注册删除候选。
+//
+// 设计者视角：newCand 发号（len 即 id）登记 stmt 指针，调用方随即绑名+以 cur 切
+// 上下文扫体。障碍是 id 须与 cands 下标对齐 flood；故 append 即号。排查现场：
+// 删错行先查 stmt 指针登记。
 func (s *shaker) newCand(stmt ast.Stmt) int {
 	id := len(s.cands)
 	s.cands = append(s.cands, &candInfo{id: id, stmt: stmt})
@@ -260,12 +292,19 @@ func (s *shaker) newCand(stmt ast.Stmt) int {
 }
 
 // isPureFuncLit 报告无副作用的闭包值。
+//
+// 设计者视角：纯度判据极严——仅 FuncLit 算纯（构造闭包无副作用），调用/表构造一
+// 律不纯。障碍是 `local x = f()` 看似无害实则有调；故 non-Func 即非候选。候选：
+// 数据流纯度 vs 语法纯；选语法，保守。不变量：非 FuncLit 恒 false。排查现场：
+// 误删有副作用定义先查此判。
 func isPureFuncLit(x ast.Expr) bool {
 	_, ok := x.(*ast.FuncLit)
 	return ok
 }
 
 func (s *shaker) block(b *ast.Block) {
+	// 设计者视角：block 按“语句序+尾 return”漫游，taint 即停（保全）。障碍是 nil 块：
+	// 空体直返。排查现场：taint 后仍删先查此早返。
 	if b == nil || s.tainted {
 		return
 	}
@@ -283,6 +322,12 @@ func (s *shaker) block(b *ast.Block) {
 }
 
 func (s *shaker) stmt(st ast.Stmt) {
+	// 设计者视角：stmt 是候选的“安检门”——仅 `local function f`（非导出有体）与
+	// `local x = function`（单名单值无属性）可进候选，余者或记活（全局/导出/
+	// require/赋值目标/非 local 绑定）或下钻（块/类/枚举值）或 taint（未知）。障碍是
+	// `local x = function` 中 x 体内不可见（Lua 语）：故先扫体后绑名；反之
+	// `local function f` 递归可见：先绑后扫。候选：多值/属性 vs 严进；选严进。
+	// 不变量：未知恒 taint。排查现场：候选漏/多先查此二分支条件。
 	if st == nil || s.tainted {
 		return
 	}
@@ -504,6 +549,8 @@ func (s *shaker) stmt(st ast.Stmt) {
 }
 
 func (s *shaker) funcLit(n *ast.FuncLit) {
+	// 设计者视角：funcLit 开域绑参（含 self/具名 rest）再扫体，防参名被误作外层候选
+	// 引用。障碍是方法 self：IsMethod 方绑。排查现场：参名致候选活先查此绑。
 	if n == nil || s.tainted {
 		return
 	}
@@ -524,6 +571,10 @@ func (s *shaker) funcLit(n *ast.FuncLit) {
 }
 
 func (s *shaker) expr(x ast.Expr) {
+	// 设计者视角：expr 只认值位——Ident 即 use，NamedField Key/Field/Method 名非值
+	// 位跳过，Cast 类型操作数非运行时跳过（见注释），未知即 taint 保全。障碍是字段名
+	// 误计：`a.foo` 的 foo 若计 use 会保错候选；故跳。不变量：类型位永不 use。
+	// 排查现场：候选误活先查字段名是否被计。
 	if x == nil || s.tainted {
 		return
 	}

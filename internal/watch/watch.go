@@ -22,6 +22,11 @@ import (
 )
 
 // ChangeKind 描述被监视文件与基线的差异方式。
+//
+// 设计者视角：三态是轮询的“最小语义”——added/removed 管成员，modified 管内容
+// （size+mtime 双判）。障碍是 mtime 粒度粗：同秒改内容须 size 兜底。候选：hash vs
+// 元信息；选元信息，快且够（增量另有字节比对兜底）。不变量：三态互斥。排查现场：
+// 改而未触发先查 mtime 粒度。
 type ChangeKind string
 
 const (
@@ -34,6 +39,11 @@ const (
 )
 
 // Change 是单个被监视文件的差异，Diff 按 Path 排序。
+//
+// 设计者视角：Change 一行一变——Path 绝对清理，Kind 三态，Config 标配置文件
+// （触之须 Reset+full）。障碍是源与配置混流：Config 旗分流处理。候选：分两表 vs
+// 一表+旗；选后者，Diff 单序。不变量：Diff 出口按 Path 排。排查现场：配置改未全量
+// 先查 Config 旗。
 //
 // 物理布局：
 //
@@ -51,6 +61,11 @@ type Change struct {
 
 // FileMeta 是被监视文件的追踪身份（大小 + 修改时间）。
 //
+// 设计者视角：FileMeta 以 (Size, ModTimeNano, Config) 作身份——双元判变，Config
+// 参判防源与配置同径误判。障碍是 touch（mtime 变内容不变）：判变但增量字节比对
+// 会消之（no-op）。候选：纳 hash vs 双元；选双元，stat 零读。不变量：UnixNano 精度。
+// 排查现场：频繁误触发先查 mtime。
+//
 // 物理布局：
 //
 //	FileMeta
@@ -65,6 +80,9 @@ type FileMeta struct {
 
 // Snapshot 是监视集的快照：清理后的绝对路径 -> FileMeta。
 //
+// 设计者视角：Snapshot 是基线“照片”——绝对清理键保 Diff 可比。障碍是相对/绝对混：
+// Collect 统 abs 之。不变量：键恒绝对。排查现场：diff 恒变先查键系。
+//
 // 物理布局（概念）：
 //
 //	Snapshot (map)
@@ -72,6 +90,10 @@ type FileMeta struct {
 type Snapshot map[string]FileMeta
 
 // OutDirAbs 把有效输出目录解析为绝对路径。
+//
+// 设计者视角：OutDirAbs 给“勿监视输出”划红线——相对即拼 Dir，绝对即 Clean。
+// 障碍是输出落源树内：不划线即自触发循环。候选：监视全集 vs 排除输出；选排除。
+// 不变量：返绝对清理径。排查现场：watch 自激先查此排除。
 func OutDirAbs(cfg *config.Config) string {
 	out := cfg.OutDir()
 	if filepath.IsAbs(out) {
@@ -81,6 +103,10 @@ func OutDirAbs(cfg *config.Config) string {
 }
 
 // underDir 报告 p 是否在 dir 内（边界感知）。
+//
+// 设计者视角：边界感知防 `/out` 误含 `/out2`——相等或 `dir+sep` 前缀方算内。
+// 障碍是字符串前缀陷阱。候选：Rel+.. 判 vs 前缀；选前缀+分隔符，快且准。不变量：
+// 纯判。排查现场：输出未排除先查分隔符。
 func underDir(p, dir string) bool {
 	if p == dir {
 		return true
@@ -89,6 +115,9 @@ func underDir(p, dir string) bool {
 }
 
 // abs 把 p 清理为绝对路径。
+//
+// 设计者视角：abs 统一键系——Abs 成即 Clean，败则 Clean 原径保不抛。障碍是 Abs
+// err（坏径）：退化不断。排查现场：键 mismatch 先查此。
 func abs(p string) string {
 	if a, err := filepath.Abs(p); err == nil {
 		return filepath.Clean(a)
@@ -98,6 +127,10 @@ func abs(p string) string {
 
 // configPaths 返回要监视的配置文件：生效的 tlua.json
 // 以及同目录存在的 tlua.toml/tlua.lock。
+//
+// 设计者视角：配置三件套全监——生效 json（Path 或 Dir 下）+ toml/lock（存在方入）。
+// 障碍是 Path 为空：退 Dir 探测。候选：只监生效 vs 全监；选全监，任一变即 Reset。
+// 不变量：返绝对径。排查现场：改 toml 未重建先查此。
 func configPaths(cfg *config.Config) []string {
 	var out []string
 	if cfg.Path != "" {
@@ -121,6 +154,12 @@ func configPaths(cfg *config.Config) []string {
 // 其消失读作 Removed（重建会暴露底层 TL4001）；
 // 瞬态读取竞争在下个周期解决。原生资产（*.lua shim、*.so/*.dylib/*.dll/*.a）
 // 加入 .tl 源，使 shim/二进制编辑重触发直通复制。
+//
+// 设计者视角：Collect 快照“输入全集”——ListFiles+ListNativeAssets 去重，跳输出
+// 目录，stat 失败即省（下轮 Removed 语义），配置另标 Config。障碍是自触发：输出
+// 必跳；障碍是资产漏监：shim 改须重拷，故并入。候选：stat 错抛 vs 省；选省，
+// 瞬态赛下轮愈。不变量：输出目录零条目。排查现场：输出改触发重建先查 underDir，
+// 资产改不触发先查去重。
 func Collect(cfg *config.Config) (Snapshot, error) {
 	list, err := cfg.ListFiles()
 	if err != nil {
@@ -166,6 +205,10 @@ func Collect(cfg *config.Config) (Snapshot, error) {
 }
 
 // Diff 比较基线与当前快照。结果按路径排序以保证确定性。
+//
+// 设计者视角：Diff 双向比——base 有 cur 无即 Removed，cur 有 base 无即 Added，
+// 双有而元异即 Modified（含 Config 翻）。障碍是 Config 旗：任一端真即真。候选：
+// 无序 vs 排序；选排序，日志稳定。不变量：空即无变。排查现场：抖动先查元判三元。
 func Diff(base, cur Snapshot) []Change {
 	var out []Change
 	for p, bm := range base {
@@ -188,6 +231,9 @@ func Diff(base, cur Snapshot) []Change {
 }
 
 // HasConfigChange 报告是否有变化触及配置文件。
+//
+// 设计者视角：任一 Change.Config 真即须 Reset+full，保配置语义全局生效。障碍是
+// 源改误判：只看旗。排查现场：配置改仍增量先查此。
 func HasConfigChange(changes []Change) bool {
 	for _, c := range changes {
 		if c.Config {
@@ -198,6 +244,10 @@ func HasConfigChange(changes []Change) bool {
 }
 
 // Watcher 轮询 Collect，直到快照与基线不同。
+//
+// 设计者视角：Watcher 是“心跳+防抖”——Poll 钳 50ms 下限防忙轮询，Debounce 合并
+// 连存，Collect 可注入假源供测。障碍是平台差异：轮询保全平台可用。候选：fsnotify
+// vs 轮询；选轮询零依赖。不变量：Poll<50ms 即 50ms。排查现场：CPU 高先查 Poll。
 //
 // 物理布局：
 //
@@ -218,6 +268,11 @@ type Watcher struct {
 // 使一次重建覆盖整个突发。返回新鲜快照（调用方的下一个基线）
 // 与合并后的变化。ctx 取消中止等待。Collect 错误立即返回；
 // 调用方应在重试前退避。
+//
+// 设计者视角：Next 两段等——等变（ticker 轮询，ctx 可断，Collect 错即返）+
+// 等稳（debounce 窗后重采，回到同身份则续监防空重建）。障碍是突发连存：首变后
+// 即重建会频闪；故防抖重采取终态。候选：首变即返 vs 防抖；选防抖。不变量：返快照
+// 即下轮 base。排查现场：空重建先查回同分支，重建频闪先查 Debounce。
 func (w *Watcher) Next(ctx context.Context, base Snapshot) (Snapshot, []Change, error) {
 	poll := w.Poll
 	if poll < 50*time.Millisecond {

@@ -39,6 +39,12 @@ import (
 )
 
 // Open documents: content, parse, check, and the position index.
+//
+// 设计者视角：document 是 IDE 的“一页纸档案”——uri/version/content/lines 管文本，
+// file/diags/index 管语义（AST+诊断+符号索引）。障碍是行列三制混杂：token 用
+// 1 起 rune，LSP 用 0 起 UTF-16，内部用 byte offset；lines 表即翻译官。候选：
+// 存行串 vs 存偏移；选偏移，offsetAt/toRange 零拷。不变量：lines[0]==0。
+// 排查现场：位置漂移先查行表与 UTF-16 换算。
 
 // ---------- documents ----------
 
@@ -53,6 +59,9 @@ type document struct {
 }
 
 func uriToName(uri string) string {
+	// 设计者视角：uriToName 剥 `file://` 得盘径，供 Span.File 与诊断对齐。障碍是
+	// 非 file 协议（untitled）：原样返，诊断仍可显。候选：url 解码 vs 直剥；选直剥，
+	// 简单。不变量：非 file 原样。排查现场：诊断文件名怪先查此。
 	if strings.HasPrefix(uri, "file://") {
 		return strings.TrimPrefix(uri, "file://")
 	}
@@ -60,6 +69,9 @@ func uriToName(uri string) string {
 }
 
 func splitLines(content string) []int {
+	// 设计者视角：splitLines 建行首偏移表，`\n` 后即新行首。障碍是末行无换行、
+	// 空文件：首元 0 恒在。候选：strings.Split vs 偏移；选偏移，offsetAt O(行内)。
+	// 不变量：首元恒 0。排查现场：行越界先查此表。
 	lines := []int{0}
 	for i := 0; i < len(content); i++ {
 		if content[i] == '\n' {
@@ -70,6 +82,10 @@ func splitLines(content string) []int {
 }
 
 func analyze(uri, content string, version int) *document {
+	// 设计者视角：analyze 是文档的“全量体检”——ParseFile 取 AST+语法诊，再
+	// CheckFileIndexed 取类型诊+索引，诊断按 parser 在前拼接。障碍是空 AST：
+	// checker 恒可查（nil 宽容），索引恒有。候选：增量 vs 全量；选全量，单文件小、
+	// 正确压倒省算。不变量：diags 恒 parser 在前。排查现场：悬停缺失先查 index 是否 nil。
 	name := uriToName(uri)
 	f, pdiags := parser.ParseFile(name, content)
 	diags, idx := checker.CheckFileIndexed(f, checker.DefaultOptions())

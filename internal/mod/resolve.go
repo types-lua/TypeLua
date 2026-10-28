@@ -7,6 +7,10 @@ import (
 )
 
 // Resolved is one MVS-selected module.
+//
+// 设计者视角：Path+Version+Commit+Direct 四元，Version 为 tag 文（exact 原串保真），
+// Commit 为钉死 SHA。障碍是 revision 钉：Version 存 rev 文、Commit 存 SHA。排查现场：
+// 版 commit 对不上先查 select 分支。
 type Resolved struct {
 	Path    string
 	Version string // exact tag (or revision text)
@@ -16,6 +20,10 @@ type Resolved struct {
 
 // Registry supplies tag listings and manifests for resolution.
 // Implementations: git-backed cache (fetch.go), in-memory fakes (tests).
+//
+// 设计者视角：四法供 MVS——Tags 列版、Manifest 取依赖、ResolveRev 定修订、LocalDir
+// 指本地。障碍是叶模块：Manifest 返 nil。候选：接口 vs 具体；选接口可测。不变量：
+// 叶恒 nil。排查现场：解析缺边先查 Manifest。
 type Registry interface {
 	// Tags returns tag name -> commit for the module's repository.
 	Tags(ctx context.Context, path string, dep Dep) (map[string]string, error)
@@ -31,12 +39,18 @@ type Registry interface {
 
 // Resolve runs Minimal Version Selection over the root manifest,
 // returning the full module closure (direct + indirect) as a lock.
+//
+// 设计者视角：MVS 薄封 resolveWith（丢源表），根先验。障碍是根非法：前置拦。
+// 不变量：语义同 resolveWith 首返。排查现场：源需查用 resolveWith。
 func Resolve(ctx context.Context, root *Manifest, reg Registry) (*Lock, error) {
 	l, _, err := resolveWith(ctx, root, reg)
 	return l, err
 }
 
 // resolveWith also returns the fetch source (explicit URL or "") per path.
+//
+// 设计者视角：验根→run 闭包→lock+源表。障碍是 URL 覆冲突：pinSource 拒。排查现场：
+// 源冲突先查 pin。
 func resolveWith(ctx context.Context, root *Manifest, reg Registry) (*Lock, map[string]string, error) {
 	if err := root.Validate(); err != nil {
 		return nil, nil, err
@@ -62,6 +76,10 @@ type resolver struct {
 }
 
 func (r *resolver) run(ctx context.Context) error {
+	// 设计者视角：MVS 工作列——根询入队（含本地钉源），循环 selectOne/selectLocal，
+	// 选中未展者取 Manifest 展传递询（本地只展不选版）。障碍是同版重复展：
+	// processed 去重；障碍是本地版旁路：不入 queries。候选：递归 vs 队列；选队列防
+	// 深。排查现场：传递漏先查队列追加，循环不止先查 processed。
 	r.queries = map[string][]Query{}
 	r.sources = map[string]string{}
 	r.selected = map[string]*Resolved{}
@@ -139,6 +157,9 @@ func (r *resolver) run(ctx context.Context) error {
 }
 
 // localSeeds lists root requirements served from local directories.
+//
+// 设计者视角：根 Deps 中本地者为种子（须入队展传递）。障碍是传递本地：run 内另补。
+// 排查现场：本地传递漏先查队列。
 func (r *resolver) localSeeds() map[string]bool {
 	out := map[string]bool{}
 	for p := range r.root.Deps {
@@ -150,6 +171,10 @@ func (r *resolver) localSeeds() map[string]bool {
 }
 
 // selectLocal selects locally-forced content by manifest version.
+//
+// 设计者视角：本地版即 manifest Version（非法兜 `v0.0.0-local`），commit=`local`。
+// 障碍是无版：兜底保可选。候选：旁路 vs 选版；选版保 lock 有版。排查现场：本地版错
+// 先查 manifest。
 func (r *resolver) selectLocal(ctx context.Context, p string) (bool, error) {
 	m, err := r.reg.Manifest(ctx, p, "local")
 	if err != nil {
@@ -169,6 +194,9 @@ func (r *resolver) selectLocal(ctx context.Context, p string) (bool, error) {
 }
 
 // pinSource records the fetch URL for a path, rejecting conflicts.
+//
+// 设计者视角：显式 URL 钉源，异源同径即冲突错（保单源）。障碍是空 URL：跳。
+// 不变量：同径同源。排查现场：源冲突先查两处 Deps。
 func (r *resolver) pinSource(p string, d Dep) error {
 	url := d.URL
 	if prev, ok := r.sources[p]; ok && prev != url {
@@ -179,6 +207,10 @@ func (r *resolver) pinSource(p string, d Dep) error {
 }
 
 // selectOne picks the MVS version for p; true when (re)selected.
+//
+// 设计者视角：按询类分流——revision 定点、latest 追 Tags 最大、exact/caret 走
+// selectVersion。障碍是无 tag：latest 错。候选：合流 vs 分流；选分流清。排查现场：
+// 选版错先查询类。
 func (r *resolver) selectOne(ctx context.Context, p string) (bool, error) {
 	qs := r.queries[p]
 	// Revision queries must agree (incomparable otherwise).
@@ -206,6 +238,9 @@ func (r *resolver) selectOne(ctx context.Context, p string) (bool, error) {
 }
 
 // selectRevision resolves a branch/SHA pin.
+//
+// 设计者视角：revision 经 Registry 定 commit，Version 存 rev 文（lock 保真）。
+// 障碍是浮动分支：快照于此。排查现场：分支漂移先查 lock。
 func (r *resolver) selectRevision(ctx context.Context, p, rev string) (bool, error) {
 	if cur := r.selected[p]; cur != nil && cur.Version == rev {
 		return false, nil
@@ -223,6 +258,11 @@ func (r *resolver) selectRevision(ctx context.Context, p, rev string) (bool, err
 }
 
 // selectVersion picks max(minima) over semver queries (MVS).
+//
+// 设计者视角：MVS 取 max(各询下界)：exact 下界即自身、caret 下界即 Base、latest
+// 遇 Tags 最大，候选 max 且须全询 Matches，已选低即升。障碍是 exact 冲突（两异钉）：
+// 无交即错；障碍是已选够高：Matches 全过即 false。图：询→下界→max→验→选。候选：
+// MVS vs 最新；选 MVS 保最小够用。不变量：选版恒全询过。排查现场：冲突先查双 exact。
 func (r *resolver) selectVersion(ctx context.Context, p string, qs []Query) (bool, error) {
 	dep := Dep{}
 	if u := r.sources[p]; u != "" {
@@ -318,6 +358,9 @@ func (r *resolver) selectVersion(ctx context.Context, p string, qs []Query) (boo
 }
 
 // lock converts the selection into a Lock (direct = root-listed).
+//
+// 设计者视角：selected 按径排入 Entries，根单标 Direct。障碍是本地 Dir：此处空，
+// backfill 另填。排查现场：Direct 错先查根集。
 func (r *resolver) lock() *Lock {
 	l := NewLock()
 	for p, s := range r.selected {
@@ -328,6 +371,8 @@ func (r *resolver) lock() *Lock {
 }
 
 func sortedKeys[V any](m map[string]V) []string {
+	// 设计者视角：键排序保工作列确定（map 随机须排）。障碍是泛型：V any。排查现场：
+	// 抖动先查排序。
 	ks := make([]string, 0, len(m))
 	for k := range m {
 		ks = append(ks, k)

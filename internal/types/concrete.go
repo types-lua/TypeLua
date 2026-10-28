@@ -4,6 +4,15 @@ package types
 
 // IsConcreteType reports whether a type is free of unbound type parameters
 // (and deferred conditionals), i.e. ready for conditional evaluation.
+//
+// 设计者视角：条件类型 `T extends U ? X : Y` 只有在 T 具体时才能求值；若 T
+// 仍含泛型参数/未实例化的 Ref/deferred Conditional，求值会把泛型函数的条件
+// 结果过早固化。候选：递归遍历所有节点 vs 快速路径先行。选快速路径：Primitive/
+// Literal/Enum 等叶节点直接 true，GenericParam/InferParam/Conditional/Ref 直接
+// false，仅复合节点落回 hasTypeParams；这样热路径避免分配 visited set。
+// 不变量：nil 视为具体（空类型无参数）；Literal/Enum 的 base/underlying 为
+// 原语时直接 true，避免为原语 base 递归。排查现场：若条件类型该求值却延迟，
+// 检查 hasTypeParams 是否把某节点误判为含参数。
 func IsConcreteType(t Type) bool {
 	if t == nil {
 		return true
@@ -38,6 +47,15 @@ func IsConcreteType(t Type) bool {
 	return !hasTypeParams(t, map[Type]bool{})
 }
 
+// hasTypeParams 递归判断 t 是否含未绑定的类型参数/延迟类型，seen 用于指针身份
+// 终止循环（Class/Object/Union/Intersection 可能自引用）。
+//
+// 设计者视角：复合类型可能循环引用（如 `interface Node { next: Node<T> }`），
+// 朴素递归会栈溢出。候选：全局 visited vs 按类型族 visited；选按族 visited，
+// 仅对可能自引用的指针类型（Class/ClassValue/Object/Union/Intersection）入栈，
+// 叶节点与容器不入栈，避免漏判或误判。GenericParam/InferParam/Conditional/Ref
+// 任一出现即 true。排查现场：若递归类型误报"含参数"，检查 seen 的入栈条件
+// 是否把某类型族遗漏。
 func hasTypeParams(t Type, seen map[Type]bool) bool {
 	if t == nil {
 		return false

@@ -624,6 +624,13 @@ end
 `
 
 // asyncFunc is true when fn is an async literal (for future use).
+//
+// 设计者视角：emitSpawn 是 spawn 的“一句话翻译”——`spawn f()` 化作
+// `__tl_spawn(function() f() end)`，任务入就绪队列。障碍是参数求值时机：
+// 必须包进闭包延迟到调度，而非发射时求值。候选：内联协程 vs 调度器统一管；
+// 选后者，所有任务经 __tl_ready 排队，保证单线程交错。不变量：输出恒单行
+// __tl_spawn 包裹。排查现场：任务不跑先查 NeedsConcurrency 是否误判无并发
+// 致前导缺失，参数提前求值先查闭包括号。
 func (e *emitter) emitSpawn(n *ast.SpawnStmt) {
 	e.pad()
 	e.write("__tl_spawn(function() ")
@@ -633,6 +640,14 @@ func (e *emitter) emitSpawn(n *ast.SpawnStmt) {
 }
 
 func (e *emitter) emitSelect(n *ast.SelectStmt) {
+	// 设计者视角：emitSelect 是 select 的“三段式脚手架”——先攒 __tl_specs 表
+	// （recv/send/sleep 归一），再 `__tl_select(specs, hasDefault)` 阻塞或快
+	//  poll，最后 `repeat...until true` + if 链分发（break 只跳 select 不跳外
+	// 层循环）。障碍一是 5.1 无 goto：不用 goto 收敛而用 repeat 包；障碍二是
+	// 临时变量碰撞：tag 取自 tmpCount 全局号；障碍三是 recv 变量可选 local：
+	// RecvLocal 决定写 `local` 与否。候选：每 case 独调 vs 统一 specs；选统一，
+	// 调度器一次 poll 定胜负。不变量：specs 序与 cases 序一致（idx 1 起）。
+	// 排查现场：case 错位先查 specs 装配序，break 跳错层先查 repeat 包裹。
 	e.tmpCount++
 	tag := strconv.Itoa(e.tmpCount)
 	e.pad()
@@ -737,6 +752,17 @@ func (e *emitter) emitSelect(n *ast.SelectStmt) {
 
 // NeedsConcurrency reports whether a file uses cooperative concurrency:
 // spawn/await/select nodes, or the channel/timer/sync user globals.
+//
+// 设计者视角：NeedsConcurrency 是调度器前导的“点火开关”——一文件任一并发痕迹
+// （spawn/await/select 或 makeChan/sleep/timeout/WaitGroup/Mutex 名）即整文件
+// 包 __tl_run。障碍是误报与漏报的拉扯：漏报致运行时 nil 调度器，误报仅多几 KB
+// 前导；故宁宽勿严，用户全局名一律点火。候选：checker 标记 vs AST 漫游；选漫游，
+// 发射器不读 checker，独立可测。图：
+//
+//	AST 全漫游 → 命中任一? → 前导+__tl_run : 裸发射
+//
+// 不变量：found 一旦 true 即短路（各层首判）。排查现场：前导缺失先查新语法是否
+// 忘入 walker（如新增并发原语），无故有前导先查局部变量是否取名 sleep 误撞。
 func NeedsConcurrency(f *ast.File) bool {
 	w := &concWalker{}
 	if f.Block != nil {
@@ -746,10 +772,19 @@ func NeedsConcurrency(f *ast.File) bool {
 }
 
 type concWalker struct {
+	// 设计者视角：concWalker 是只找“烟火”的漫游器——found 置位即停，不收符号、
+	// 不报错。障碍是递归深度：每层入口先判 found 短路，避免大文件无谓遍历。
+	// 不变量：found 单调（只 false→true）。排查现场：大文件检测慢先查短路判
+	// 是否缺失。
 	found bool
 }
 
 func (w *concWalker) block(b *ast.Block) {
+	// 设计者视角：block 按“语句序 + 尾 return”漫游——Lua 的 return 可带并发
+	// 表达式（如 `return await f()`），漏扫 return 即漏报。障碍是 nil 块：
+	// 空函数体/空 chunk 须直接返。候选：复用 checker 访问器 vs 手写；选手写，
+	// 零依赖、单文件自洽。不变量：found 置位后不再下钻。排查现场：return 内
+	// await 未点火先查此 return 扫描。
 	if b == nil || w.found {
 		return
 	}
@@ -770,6 +805,11 @@ func (w *concWalker) block(b *ast.Block) {
 }
 
 func (w *concWalker) stmt(st ast.Stmt) {
+	// 设计者视角：stmt 是并发的“嗅探表”——Spawn/Select 直接点火，余者下钻；
+	// Import/类型声明等纯编译期节点零成本跳过。障碍是 Class/Enum 成员体：方法
+	// 内也可能 spawn，须钻入 Init/Body；Defer 的 Call 亦须嗅。候选：反射全扫 vs
+	// 穷举；选穷举，新增节点不点火则默认漏报可查（编译器会提醒未覆盖）。不变量：
+	// 新 AST 节点须显式决定去留。排查现场：类方法内并发未点火先查 ClassDecl 分支。
 	if w.found {
 		return
 	}
@@ -844,6 +884,11 @@ func (w *concWalker) stmt(st ast.Stmt) {
 }
 
 func (w *concWalker) expr(x ast.Expr) {
+	// 设计者视角：expr 在表达式林里找三簇火星——AwaitExpr、裸全局
+	// （makeChan/sleep/timeout/WaitGroup/Mutex）、Call 形 `sleep()` 等。障碍是
+	// 局部遮蔽：`local sleep = 1` 也会被误点火；取舍为宁误报（多前导无害）不漏报。
+	// 候选：符号解析精确判 vs 名判；选名判，发射器无符号表。不变量：nil 直接返。
+	// 排查现场：前导无故出现先查是否有同名局部变量，await 漏报先查 AwaitExpr 分支。
 	if w.found || x == nil {
 		return
 	}

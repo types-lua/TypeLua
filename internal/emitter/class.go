@@ -5,9 +5,20 @@ import (
 )
 
 // Class runtime emission (metatables, inheritance, constructors).
+//
+// 设计者视角：本文件是类的“土法炼钢炉”——无 class 关键字的 Lua 靠元表三件套
+// （__index 自指 + 基表 __index + __call 转 new）撑起继承，好比用砖木搭出钢
+// 结构。障碍是 5.1/5.4 通吃：不用 goto、不用位运算，只用 setmetatable 习语。
+// 不变量：每个类必有 constructor（显式或合成），Base.constructor 永可调用。
 
 // classBaseName extracts the runtime table for `extends` (type args erased).
 // Non-name bases were already rejected by the checker; emit defensively.
+//
+// 设计者视角：classBaseName 是泛型擦除的“脱衣机”——`extends Box<T>` 只留 Box
+// 作运行时表。障碍是 checker 已拒非命名基类，此处仍防一手：若断言错类型直接
+// 返 "" 让输出退化为空基而非 panic。候选：报错 vs 退化；选退化，发射器永不
+// 抛错（TypeScript 语义：有错也发射）。不变量：非 NamedType 恒返 ""。排查现场：
+// 继承链丢失先查 Extends 是否为泛型具化之外的复杂类型。
 func classBaseName(t ast.TypeNode) string {
 	nt, ok := t.(*ast.NamedType)
 	if !ok {
@@ -31,6 +42,16 @@ func classBaseName(t ast.TypeNode) string {
 //
 // Field initializers run inside the constructor (after super(), like TS);
 // every class gets a constructor so `Base.constructor` always exists.
+//
+// 设计者视角：emitClass 是全文件最长的“装配线”，工序固定：建表→静态字段→
+// new 入口→__call 晚绑定→构造体→方法。障碍一是字段初始化时机：须在 super()
+// 之后（镜像 TS），故在构造体内扫描首个顶层 super 调用做 splitAt 切分；障碍
+// 二是元表替换会丢 __index，故 __call 用 getmetatable 突变而非重设；障碍三是
+// ambient declare 类只留类型、零运行时，故 Declared 直接清 pending 返回。
+// 候选：初始化放 new 里 vs 放 constructor；选后者，子类 super 链自然串起。
+// 不变量：classStack 入栈必配 defer 弹栈；抽象类 new 首行即 error。排查现场：
+// 字段先于基类构造执行先查 splitAt 扫描（仅认顶层 ExprStmt super），方法调
+// 不到基类先查 __call 是否被重设覆盖。
 func (e *emitter) emitClass(n *ast.ClassDecl) {
 	if n.Declared {
 		e.pending = nil
@@ -216,6 +237,11 @@ func (e *emitter) emitClass(n *ast.ClassDecl) {
 }
 
 func (e *emitter) emitClassInits(className string, inits []*ast.ClassMember) {
+	// 设计者视角：emitClassInits 是构造体内的“贴砖队”——按声明序逐行
+	// `self.x = <init>`，static 已另行直挂表上，此处只贴实例字段。障碍是空
+	// inits：零字段时须零输出而非空行。候选：调用方判空 vs 内部循环自然空；
+	// 选后者，零特判。不变量：只写 self. 前缀，不碰类表。排查现场：静态字段
+	// 跑进实例先查 Kind/IsStatic 过滤，顺序错乱先查收集序。
 	for _, m := range inits {
 		e.pad()
 		e.mark(m, "")
@@ -226,6 +252,12 @@ func (e *emitter) emitClassInits(className string, inits []*ast.ClassMember) {
 }
 
 func (e *emitter) emitClassParams(m *ast.ClassMember) {
+	// 设计者视角：emitClassParams 是方法签名的“抄写员”——只抄形参名与 ...，
+	// 类型注解全擦，self 靠冒号调用隐传而不占位。障碍是具名 rest（...nums）：
+	// 此处只吐 ...，真正的 `local nums = {...}` 留给 emitVarArgPrelude（须在
+	// 方法体内首行）。候选：此处一并展开 vs 分两处；选分两处，签名与体各管一摊。
+	// 不变量：输出恒为纯名列表，无类型残留。排查现场：具名 rest 为 nil 先查
+	// HasVarArg/VarArgName 配对，self 重复先查是否误把 self 写进 Params。
 	for i, p := range m.Params {
 		if i > 0 {
 			e.write(", ")

@@ -20,6 +20,11 @@ const gitTimeout = 120 * time.Second
 var ErrNoManifest = fmt.Errorf("no tlua.toml")
 
 // git runs git with a timeout, no terminal prompts, and C locale.
+//
+// 设计者视角：git 调统一穿 timeout(120s)+GIT_TERMINAL_PROMPT=0+LC_ALL=C，错取末行
+// （git 错堆栈只留尾），超时另报。障碍是交互卡死：env 钳之；输出乱码：C locale。
+// 候选：裸调 vs 包装；选包装。不变量：错文单行。排查现场：卡死先查 env，超时先查
+// 超限。
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
@@ -47,6 +52,9 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 // GitAvailable reports whether the git binary works.
+//
+// 设计者视角：LookPath+`--version` 双检，缺/坏各报因。障碍是 PATH 无 git：首判。
+// 排查现场：fetch 全败先查此。
 func GitAvailable(ctx context.Context) error {
 	if _, err := exec.LookPath("git"); err != nil {
 		return fmt.Errorf("git not found in PATH (required for module fetching)")
@@ -59,6 +67,10 @@ func GitAvailable(ctx context.Context) error {
 
 // LsRemote lists refs (tag -> commit, heads) without cloning.
 // Peeled `^{}` lines win over tag objects.
+//
+// 设计者视角：ls-remote 轻嗅仓，剥离行（annotated tag 真 commit）覆对象行，坏 SHA
+// 跳。障碍是轻量 tag vs 注解 tag：剥离优先。候选：clone 全量 vs ls；选 ls。不变量：
+// 剥离胜。排查现场：版 commit 错先查剥离。
 func LsRemote(ctx context.Context, url string) (tags, heads map[string]string, err error) {
 	out, err := git(ctx, "", "ls-remote", url)
 	if err != nil {
@@ -93,6 +105,8 @@ func LsRemote(ctx context.Context, url string) (tags, heads map[string]string, e
 }
 
 func isHexSHA(s string) bool {
+	// 设计者视角：40 位十六进制即 SHA，防短 SHA 误判。障碍是大小写：双容。排查现场：
+	// 解析失败先查长度。
 	if len(s) != 40 {
 		return false
 	}
@@ -106,6 +120,9 @@ func isHexSHA(s string) bool {
 }
 
 // CloneMirror clones url as a bare mirror into dir (dir must not exist).
+//
+// 设计者视角：`clone --mirror` 全量裸仓，父目录先建。障碍是已存：调用方 Sync 已判。
+// 排查现场：clone 失败先查父目录与网络。
 func CloneMirror(ctx context.Context, url, dir string) error {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return err
@@ -115,12 +132,19 @@ func CloneMirror(ctx context.Context, url, dir string) error {
 }
 
 // RemoteUpdate refreshes a mirror.
+//
+// 设计者视角：`remote update` 增量拉新 tag/branch，Sync 在线分支调用。障碍是并发
+// 更：git 自锁。排查现场：版不新先查此。
 func RemoteUpdate(ctx context.Context, mirrorDir string) error {
 	_, err := git(ctx, "", "-C", mirrorDir, "remote", "update")
 	return err
 }
 
 // MirrorTags lists tags (name -> commit) from a mirror.
+//
+// 设计者视角：`tag -l` 枚举+RevParse 逐解，dangling 跳过（删 tag 残留）。障碍是坏
+// tag：跳不崩。候选：packed-refs 直读 vs git 调；选调，兼容。排查现场：版缺先查
+// dangling。
 func MirrorTags(ctx context.Context, mirrorDir string) (map[string]string, error) {
 	out, err := git(ctx, "", "-C", mirrorDir, "tag", "-l")
 	if err != nil {
@@ -142,6 +166,9 @@ func MirrorTags(ctx context.Context, mirrorDir string) (map[string]string, error
 }
 
 // RevParse resolves any revision (tag/branch/SHA) to a commit SHA.
+//
+// 设计者视角：`rev-parse rev^{commit}` 归一 tag/branch/SHA 为 commit，非 40 位即
+// 错。障碍是 tag 对象 vs commit：`^{commit}` 剥之。排查现场：解不出先查后缀。
 func RevParse(ctx context.Context, mirrorDir, rev string) (string, error) {
 	out, err := git(ctx, "", "-C", mirrorDir, "rev-parse", rev+"^{commit}")
 	if err != nil {
@@ -156,6 +183,10 @@ func RevParse(ctx context.Context, mirrorDir, rev string) (string, error) {
 
 // ShowFile reads path at commit from a mirror.
 // Returns ErrNoManifest-wrapped error when the path is absent.
+//
+// 设计者视角：`git show commit:path` 读档，不存判 ErrNoManifest 包之（上游判叶），
+// 余错取首行。障碍是缺文 vs 坏仓：`does not exist` 分流。候选：archive vs show；
+// 选 show 单文件轻。不变量：缺恒包 ErrNoManifest。排查现场：叶误报错先查包。
 func ShowFile(ctx context.Context, mirrorDir, commit, path string) ([]byte, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
@@ -175,6 +206,8 @@ func ShowFile(ctx context.Context, mirrorDir, commit, path string) ([]byte, erro
 }
 
 func firstLine(s string) string {
+	// 设计者视角：错文取首行（git 末行在 git() 取，此处首行供 show/archive），空兜
+	// `git failed`。障碍是多行：截首。排查现场：错文空先查兜底。
 	s = strings.TrimSpace(s)
 	if i := strings.Index(s, "\n"); i >= 0 {
 		return s[:i]
@@ -188,6 +221,11 @@ func firstLine(s string) string {
 // Extract materializes commit into dst via `git archive` (no tar binary
 // needed; extraction uses archive/tar). Regular files only; absolute
 // paths, `..` escapes, and non-regular entries are skipped.
+//
+// 设计者视角：`git archive` 流+untar 落盘，无 tar 二进制依赖；三重防逃
+// （绝对/`..`/Rel 越界）保不写出 dst。障碍是恶意 tar 逃逸：见 untar。候选：
+// checkout vs archive；选 archive 免工作树。不变量：只落常规文件。排查现场：
+// 文件缺失先查过滤，逃逸先查 untar。
 func Extract(ctx context.Context, mirrorDir, commit, dst string) error {
 	cmdCtx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
@@ -210,6 +248,9 @@ func Extract(ctx context.Context, mirrorDir, commit, dst string) error {
 }
 
 // hasDotDot reports a `..` path element (tar escape attempt).
+//
+// 设计者视角：按 `/` 切段判 `..`，zip-slip 第一闸。障碍是 `a/../b` 合法但仍拒：
+// 宁严。排查现场：文件被跳先查此。
 func hasDotDot(name string) bool {
 	for _, seg := range strings.Split(filepath.ToSlash(name), "/") {
 		if seg == ".." {
@@ -220,6 +261,10 @@ func hasDotDot(name string) bool {
 }
 
 // untar extracts a tar stream, containing paths inside dst.
+//
+// 设计者视角：逐条只落常规，绝对/`..`/Rel 越界全跳，`/hdr` 锚后 Join 保内。
+// 障碍是 symlink/设备：跳。候选：全解 vs 过滤；选过滤。不变量：不出 dst。
+// 排查现场：解后缺文件先查三闸。
 func untar(r io.Reader, dst string) error {
 	tr := tar.NewReader(r)
 	for {

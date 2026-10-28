@@ -7,12 +7,20 @@ import (
 )
 
 // Macro expansion core: arity, recursion guard, call drivers.
-
+//
+// 设计者视角：本文件是宏调用的“接生房”——arity 把门、enter/leave 防递归、
+// renameScope 备卫生、expand*Macro 走复印改名代入全套。障碍是实参须先在调用点
+// 展开（caller context），体复制后才改名代入，序错则卫生破。
 // ---------- macro expansion core ----------
 
 // checkArity validates argument count. A variadic macro (`...`) requires
 // at least len(params); otherwise the count must match exactly.
 // Mismatches report (best-effort runnable output) via a nil return.
+//
+// 设计者视角：checkArity 是“检票口”——变参下限对、定参精确对，错即报
+// MacroArityMismatch 返 nil 让上层产 nil/空保可跑。障碍是变参 extras 可零：
+// nargs==len(params) 亦过。候选：抛错中断 vs 诊断+可跑；选后者。不变量：过则返
+// 索引片。排查现场：变参误报先查 hasVarArg。
 func (e *expander) checkArity(md *macroDef, call token.Span, nargs int) []int {
 	if md.hasVarArg {
 		if nargs < len(md.params) {
@@ -31,6 +39,11 @@ func (e *expander) checkArity(md *macroDef, call token.Span, nargs int) []int {
 }
 
 // enter guards recursion: same macro re-entered, or depth exceeded.
+//
+// 设计者视角：enter 是递归的“闸刀”——栈中重名即 RecursiveMacro，栈深超 64 亦拦，
+// 过则压栈。障碍是间接递归（a→b→a）：单名判不够，须整栈扫+深度双保险。候选：
+// visited 集 vs 栈；选栈，报错可指名。不变量：true 恒配 leave（defer）。排查现场：
+// 误报递归先查栈是否忘弹。
 func (e *expander) enter(name string, sp token.Span) bool {
 	for _, n := range e.stack {
 		if n == name {
@@ -47,11 +60,18 @@ func (e *expander) enter(name string, sp token.Span) bool {
 }
 
 func (e *expander) leave() {
+	// 设计者视角：leave 与 enter 配对弹栈（调用方 defer），保误报不蔓延。障碍是
+	// 早返忘弹：须 defer。排查现场：后续宏误报递归先查 leave。
 	e.stack = e.stack[:len(e.stack)-1]
 }
 
 // renameScope prepares a rename context: avoid-set from caller arguments,
 // labels pre-scanned over the copied body.
+//
+// 设计者视角：renameScope 备“卫生包”——avoid 采实参全拼（见 collectIdents），
+// labels 待 prescan。障碍是漏采：少一拼即可能捕获；故过近似宁多勿少。候选：
+// 精确自由变量 vs 过近似；选过近似，counter 多跳无害。不变量：avoid 含实参全拼。
+// 排查现场：捕获先查 collect 覆盖。
 func (e *expander) renameScope(args []ast.Expr) *renameCtx {
 	r := &renameCtx{e: e, vars: map[string]string{}, labels: map[string]string{}, avoid: map[string]bool{}}
 	for _, a := range args {
@@ -61,6 +81,11 @@ func (e *expander) renameScope(args []ast.Expr) *renameCtx {
 }
 
 // reportStrayDots reports variadic `...` used outside call arguments.
+//
+// 设计者视角：reportStrayDots 把代入期收的 strayDots 统一报 TL3706。障碍是 `...`
+// 在函数体内属该函数而非宏（见 dotsShadow），须免报；此处只报真 stray。候选：
+// 代入点即报 vs 收集后报；选后者，一调用一错。不变量：纯报不改。排查现场：漏报先查
+// dotsShadow，误报先查 call-args 判。
 func (e *expander) reportStrayDots(md *macroDef, sub *substCtx) {
 	for _, sp := range sub.strayDots {
 		e.errorf(diag.MacroVarargOutsideCallArgs, sp, "variadic '...' of macro '%s' must appear in call arguments", md.name)
@@ -68,6 +93,12 @@ func (e *expander) reportStrayDots(md *macroDef, sub *substCtx) {
 }
 
 // expandExprMacro expands an expression-macro call.
+//
+// 设计者视角：表达式宏五步曲——展实参→arity→enter→复印改名代入→递归展结果。
+// 障碍是改名与代入序：须先 prescanLabels+rename 再 subst，否则影子参错位；
+// 变参 extras 经 varArgs 在 call-args 位 splice。候选：原地展 vs 复印展；选复印，
+// 定义底片 pristine。不变量：失败返 NilLit 保可跑。排查现场：卫生破先查序，
+// ... 未展先查 splice 位。
 func (e *expander) expandExprMacro(md *macroDef, call *ast.CallExpr, env *scope) ast.Expr {
 	// Expand arguments first (caller context).
 	args := make([]ast.Expr, len(call.Args))
@@ -98,6 +129,12 @@ func (e *expander) expandExprMacro(md *macroDef, call *ast.CallExpr, env *scope)
 }
 
 // expandStmtMacro expands a statement-macro call into statements.
+//
+// 设计者视角：语句宏七步曲——前五同表达式，另加语句合法性筛（splice 占位须为
+// Call/MethodCall，否则 MacroExpandsToInvalidStmt 汰之）与调用点域二次展
+// （嵌套宏/定义）。障碍是占位 `...()` 展后须为真调用，否则吐非法 Lua；故筛。
+// 候选：筛 vs 不筛；选筛，发射永合法。不变量：返片可拼。排查现场：语句丢失先查
+// valid 过滤，嵌套未展先查二次 expandBlock。
 func (e *expander) expandStmtMacro(md *macroDef, call *ast.CallExpr, env *scope) []ast.Stmt {
 	args := make([]ast.Expr, len(call.Args))
 	for i, a := range call.Args {

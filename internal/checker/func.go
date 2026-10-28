@@ -11,9 +11,22 @@ import (
 // 作用域与泛型参数栈成对 push/pop，保证嵌套函数不泄漏。
 
 // Function types and bodies, plus generic parameter scopes.
+//
+// 设计者视角：函数是“签名与体分离”——funcTypeFromLit 只算签名（含泛型占位），
+// checkFuncBody 开层验体；未标注返回用 nil 哨兵区分推断与 void（见 retStack）。
+// 障碍是嵌套函数泄漏泛型/变参/返回：tparam/值层/vararg/ret/infer/async 六栈成对
+// 压弹。取舍：签名未标注返 [Any] 保可赋，体仍走推断。排查现场：返回误报先查
+// isAnnotated 哨兵，泛型泄漏先查 pushTParams 配对。
 
 // ---------- function types & bodies ----------
 
+// funcTypeFromLit builds a Func signature from syntax (params/returns/generics).
+//
+// 设计者视角：funcTypeFromLit 是签名的“翻译官”——tparam 先压后弹，参数无标注
+// 即 Any（NoImplicitAny 另报），`...: T[]` 取元（数组退元），返回经 flattenReturns
+// 展平（void 即空），泛型约束/默认就地解。障碍是签名内前向泛型：必须在压栈后解，
+// 否则 T 查不到。取舍：未标注返回给 [Any]（可赋）而非 nil（体另用哨兵）。不变量：
+// 进出 tparam 等长。排查现场：签名泛型丢失先查压栈顺序，变参元型错先查 Array 退元。
 func (c *Checker) funcTypeFromLit(fn *ast.FuncLit, generics []*ast.GenericParam) *types.Func {
 	// Push tparams for param/return resolution.
 	c.pushTParams(generics)
@@ -67,6 +80,11 @@ func (c *Checker) funcTypeFromLit(fn *ast.FuncLit, generics []*ast.GenericParam)
 	return &types.Func{Params: params, HasVarArg: fn.HasVarArg, VarArg: va, Returns: rets, TypeParams: tps, IsAsync: fn.IsAsync}
 }
 
+// flattenReturns flattens a return annotation (tuple spreads, void empties).
+//
+// 设计者视角：flattenReturns 是返回标注的“拆包机”——Tuple 铺为多返回，void 化空，
+// 其余包单。障碍是 void 与无标注皆 len==0：此处不区分（调用方以 ReturnType==nil
+// 另判），只保形状。nil 输入即 nil。排查现场：多返回少一位先查 Tuple 是否未铺。
 func flattenReturns(t types.Type) []types.Type {
 	if t == nil {
 		return nil
@@ -80,6 +98,16 @@ func flattenReturns(t types.Type) []types.Type {
 	return []types.Type{t}
 }
 
+// checkFuncBody checks a function body with params/self/varargs/returns in scope.
+//
+// 设计者视角：checkFuncBody 是函数体的“无菌室标准间”——tparam→值层→label/goto→
+// 形参→self（方法）→具名变参→vararg→ret（未标注置 nil 哨兵）→infer→async，验体
+// 验 goto 后倒序弹。障碍是 Go 的 nil/空切片难辨（void vs 推断）：借 ReturnType==nil
+// 显式置 nil 哨兵。候选：签名体合一 vs 分离；选分离（签名先行供递归调用）。图：
+//
+//	压六栈 → checkBlock → 验goto → 弹六栈
+//
+// 不变量：各类栈进出等长。排查现场：返回误报先查哨兵，`...` 越界先查 vararg 标记。
 func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, ft *types.Func) {
 	c.pushTParams(generics)
 	c.push() // value scope
@@ -148,6 +176,12 @@ func (c *Checker) checkFuncBody(fn *ast.FuncLit, generics []*ast.GenericParam, f
 	_ = isAnnotated
 }
 
+// pushTParams pushes generic parameter scope (constraints/defaults resolved).
+//
+// 设计者视角：pushTParams 是类型参数的“开层”——约束/默认就地 resolve 后入栈顶
+// map。障碍是约束内再引泛型：此时外层已在栈，逐层向外可解。取舍：拷贝存
+// GenericParam（防别名）。不变量：与 popTParams 成对。排查现场：T 找不到先查
+// 是否忘 push（如签名外解）。
 func (c *Checker) pushTParams(gs []*ast.GenericParam) {
 	m := map[string]*types.GenericParam{}
 	for _, g := range gs {
@@ -164,10 +198,20 @@ func (c *Checker) pushTParams(gs []*ast.GenericParam) {
 	c.tparamStack = append(c.tparamStack, m)
 }
 
+// popTParams pops the innermost generic parameter scope.
+//
+// 设计者视角：popTParams 与 push 成对关层，防泛型泄漏到外层函数。障碍是 defer
+// 顺序错一位即串味；故签名与体各用 defer 保配对。不变量：栈非空（调用方保证）。
+// 排查现场：外层见到内层 T，先查 pop 是否漏调。
 func (c *Checker) popTParams() {
 	c.tparamStack = c.tparamStack[:len(c.tparamStack)-1]
 }
 
+// lookupTParam finds the nearest generic parameter binding (innermost wins).
+//
+// 设计者视角：lookupTParam 是泛型的“就近查”——自顶向下扫 tparamStack，遮蔽自然
+// 生效（内层 T 盖外层）。障碍是值层与类型层双轨：此处只查类型轨，值名同名不扰。
+// 取舍：线性扫（层浅）。排查现场：T 绑错层先查内外重名遮蔽。
 func (c *Checker) lookupTParam(name string) *types.GenericParam {
 	for i := len(c.tparamStack) - 1; i >= 0; i-- {
 		if v, ok := c.tparamStack[i][name]; ok {

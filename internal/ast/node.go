@@ -37,6 +37,14 @@ type File struct {
 }
 
 // Span returns the source span of this node.
+//
+// 设计者视角：File 是“一源一文件”的根容器，好比档案袋封面——Name 标明归属，
+// Block 装正文，EOF 兜底空文件。障碍是空文件无语句可取坐标：若直接解引用
+// Block 会 panic，故 Block 为 nil 时退守 EOF，保证任何 File 都有可报的 Span。
+// 候选：存 token 指针 vs 存值 Span；选值 Span，让合成/空文件也能造坐标，且
+// checker/emitter/LSP 只依赖 Span() 这一扇门。不变量：返回的 Span.File 恒为
+// Name（覆盖 Block 自带的 File）。排查现场：若跨文件诊断串了文件，先看此处
+// File 回填是否被绕过，次看 parser 的 EOF Span 是否带对文件名。
 func (n *File) Span() token.Span {
 	if n.Block == nil {
 		return n.EOF
@@ -54,4 +62,11 @@ type Block struct {
 }
 
 // Span returns the source span of this node.
+//
+// 设计者视角：Block 是“语句序列 + 可选 return”的扁容器，好比火车车厢挂钩——
+// Stmts 只装普通语句，Ret 独立存放，把“return 必须在块末”的 Lua 语法直接编码
+// 进数据结构，想放错位置都没地方放。此处直接返回预拼好的 S，避免每次遍历重算
+// Start/End。取舍：不存父指针，遍历方向唯一自顶向下，需要上下文由 checker/
+// emitter 自己压栈换取零耦合。不变量：Stmts 永不含 ReturnStmt，Ret 为 nil 即无
+// 返回。排查现场：若 return 行号漂移，检查 parser 拼 S 时是否把 Ret 的 End 纳入。
 func (n *Block) Span() token.Span { return n.S }

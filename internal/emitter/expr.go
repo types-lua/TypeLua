@@ -5,8 +5,18 @@ import (
 )
 
 // 表达式发射与运算符拼写。
+//
+// 设计者视角：本文件是“直译员”——除 Cast/NonNull/Await 三擦除外，其余几乎一字
+// 一译，保证运行时语义与手写 Lua 一致。障碍是 Lua 语法暗礁：函数字面量直接
+// 调用须套括号、!= 须译 ~=、not 后须空格。取舍：不做常量折叠/美化，块状一律
+// 多行（除小函数单 return 内联），把可读性让给正确性。不变量：nil 输入吐 nil
+// （防崩），未知节点吐 nil（永不抛错）。
 
 func itoa(i int) string {
+	// 设计者视角：itoa 是零依赖的“小字排”——enum 自增值转字面量，不引 strconv
+	// 以减依赖。障碍是 0 与负数：0 须特判（循环不跑），负数先取绝对值再补号。
+	// 不变量：itoa(parseInt(s)) 往返一致（十进制无下划线）。排查现场：枚举值
+	// 错乱先查 parseInt/itoa 是否配对使用。
 	if i == 0 {
 		return "0"
 	}
@@ -30,6 +40,12 @@ func itoa(i int) string {
 }
 
 func parseInt(s string) (int, error) {
+	// 设计者视角：parseInt 是 enum 自增计数器的“跟随器”——读已写字面量回计数，
+	// 容忍前导 +/- 与下划线分隔（1_000）。障碍是十六进制/小数：非纯十进制即
+	// 报 errNotInt，调用方随即关 autoActive 转吐 nil/显式值，避免自增值与
+	// Lua 语义分叉。候选：strconv 全功能 vs 手写十进制；选手写，语义收敛。
+	// 不变量：错则非 nil，调用方必须处理。排查现场：自增值跳号先查字面量是否
+	// 含非十进制字符致计数器停摆。
 	neg := false
 	if len(s) > 0 && s[0] == '-' {
 		neg = true
@@ -63,9 +79,21 @@ var errNotInt = errString("not int")
 type errString string
 
 // Error 返回 errString 的文本。
+//
+// 设计者视角：errString 是 parseInt 的“哨兵错”——单值类型省去 errors.New，
+// 调用方只判 err==nil 与否。障碍是哨兵须包级唯一：var errNotInt 单例，对比
+// 用 == 即判。不变量：Error() 恒返原文。排查现场：误吞他错先查是否把非
+// errNotInt 也当计数停摆处理。
 func (x errString) Error() string { return string(x) }
 
 func (e *emitter) emitExpr(x ast.Expr) {
+	// 设计者视角：emitExpr 是表达式的“大分发”——30+ 节点类型各走一支，擦除类
+	// （Cast/NonNull/Await）直透内层，super/super:m 借 curClass 改写基调，
+	// FuncLit 调用套括号防语法错。障碍是小函数体内联与 defer/vararg 前导的
+	// 互斥：需前导时强制多行，否则单 return 可 `return ... end` 同行。候选：
+	// 表驱动 vs switch；选 switch，各支长度悬殊、表装不下。不变量：永不写
+	// 类型残留；nil 输入不 panic。排查现场：super 未改写先查 curClass，调用栈
+	// 溢出先查 ParenExpr 是否无界递归。
 	if x == nil {
 		e.write("nil")
 		return
@@ -236,6 +264,11 @@ func (e *emitter) emitExpr(x ast.Expr) {
 }
 
 func isSmallBody(b *ast.Block) bool {
+	// 设计者视角：isSmallBody 是内联的“门禁”——仅无语句块可同行（含单 return
+	// 由上层再判），有任一语句即多行。障碍是误判多语句为小体会把分号逻辑挤
+	// 成一行难读；故判据极严（len==0）。候选：更激进内联 vs 保守；选保守，
+	// 内联只为可读性、不为性能。不变量：nil 返 true（空体）。排查现场：函数体
+	// 换行异常先查 needsPrelude 是否强制多行覆盖此处。
 	if b == nil {
 		return true
 	}
@@ -243,6 +276,11 @@ func isSmallBody(b *ast.Block) bool {
 }
 
 func binOpString(k interface{ String() string }) string {
+	// 设计者视角：binOpString 是方言的“译名表”——parser 容忍 !=，Lua 只认 ~=，
+	// 此处统一翻译，其余原样。障碍是接口参数：传 token.Kind 之类 Stringer，
+	// 不绑具体类型以容未来操作符。候选：parser 层归一 vs 发射层译；选发射层，
+	// AST 保留原文利于诊断。不变量：!= 恒出 ~=。排查现场：输出含 != 先查此
+	// 翻译是否被绕过（如手拼字符串）。
 	s := k.String()
 	// `!=` 解析为 `~=` 的别名；始终发射 Lua 形式。
 	if s == "!=" {
@@ -251,4 +289,9 @@ func binOpString(k interface{ String() string }) string {
 	return s
 }
 
+// unOpString 是单目符的直通管：not/-/~/ # 原样输出，空格由调用方按 `not` 特判补。
+//
+// 设计者视角：保留此函数为对称扩展点（若未来收敛操作符只改一处）。障碍是 not
+// 后缺空格会拼成 `notx` 语法错，故 emitExpr 内特判补空格。不变量：恒等翻译。
+// 排查现场：`notx` 粘连先查空格特判是否被删。
 func unOpString(k interface{ String() string }) string { return k.String() }

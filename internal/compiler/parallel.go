@@ -16,6 +16,12 @@ import (
 // kept (same as sequential fail-fast). Workers always drain the channel so
 // a panic can never deadlock the sender; fn must write only its own slot
 // (all current users: parse, emit compute).
+//
+// 设计者视角：parallelDo 是“有界包工队”——CPU 数开工，按索引回填保序，panic 收
+// 敛到调用方重抛（watch 转警告、单发转 loud fail）。障碍是 worker 死光致发送
+// 死锁：故每项独立 recover，工头不死；障碍二是 fn 写串槽：契约要求只写自家槽。
+// 候选：errgroup vs 手写；选手写，语义贴 fail-fast。不变量：n<=0 直接返；
+// 单工退化串行。排查现场：数据串扰先查 fn 是否写邻槽，panic 丢失先查 firstPanic。
 func parallelDo(n int, fn func(i int)) {
 	if n <= 0 {
 		return

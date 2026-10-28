@@ -27,6 +27,11 @@ import (
 //   - 外部（--lua <bin>）：发射到临时目录并执行解释器
 //     （lua5.4、luajit 等）。发射的 bootstrap 前导从脚本目录设置
 //     package.path/cpath，因此与 `lua dist/main.lua` 相同。用于 ffi/C 扩展。
+//
+// 设计者视角：run=配载→Load→（check 或 parse 守门）→Emit 落临时→内/外执行。
+// 默认 parse 即跑（快），--check 方严。障碍是 .d.tl 入口：拒；障碍是 FFI：
+// 内嵌必败，须 --lua 外置。候选：常驻 dist vs 临时；选临时零残留。不变量：
+// 错诊先印。排查现场：FFI 失败先查 --lua，入口错先查 OutputForFile。
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	check := fs.Bool("check", false, "type-check before running (default: parse only)")
@@ -113,6 +118,8 @@ func cmdRun(args []string) error {
 }
 
 func hasSource(p *compiler.Program, abs string) bool {
+	// 设计者视角：判入口是否源内（去 decl，Abs 比对，败退 Clean 比）。障碍是相对/绝对
+	// 混：双比。排查现场：入口不在源先查 Files。
 	clean := filepath.Clean(abs)
 	for _, sf := range p.Files {
 		if sf.IsDecl {
@@ -130,6 +137,11 @@ func hasSource(p *compiler.Program, abs string) bool {
 }
 
 // runEmbedded 通过 golua 在进程内执行发射的 Lua。
+//
+// 设计者视角：golua 进程内跑——装库+Traceback+arg 表（arg[0]=名，类 PUC）+
+// package.path 指临时（入口+兄弟+vendored）+双 chunk（setup+入口）。障碍是 C 模块：
+// 无加载器，须外置。候选：内 vs 外；选旗切。不变量：arg 表恒置。排查现场：require
+// 失败先查 setup path，FFI 失败换 --lua。
 func runEmbedded(chunkName string, src []byte, tmp string, scriptArgs []string) error {
 	r := rt.New(os.Stdout)
 	r.PushContext(rt.RuntimeContextDef{MessageHandler: debuglib.Traceback})
@@ -159,6 +171,8 @@ func runEmbedded(chunkName string, src []byte, tmp string, scriptArgs []string) 
 }
 
 func doChunk(r *rt.Runtime, name string, src []byte, argVals []rt.Value) error {
+	// 设计者视角：LoadFromSourceOrCode 载块+Call 运，错包名（载错/运错分报）。
+	// 障碍是 traceback：PushContext 已设。排查现场：载错看名，运错看 `!!!`。
 	clos, err := r.LoadFromSourceOrCode(name, src, "bt", rt.TableValue(r.GlobalEnv()), true)
 	if err != nil {
 		return fmt.Errorf("error loading %s: %s", name, err)
@@ -172,6 +186,9 @@ func doChunk(r *rt.Runtime, name string, src []byte, argVals []rt.Value) error {
 // runExternal 用外部解释器执行发射的入口。
 // 发射的 bootstrap 前导从脚本目录解析兄弟/vendor 模块，
 // 因此无需设置 LUA_PATH。
+//
+// 设计者视角：LookPath 定 bin，直调 `bin entry args...` 三流透传，错报退出码。
+// 障碍是前导已铺 path：无需 env。排查现场：bin 缺先查 PATH，码非零看透传。
 func runExternal(luaBin, entryLua string, scriptArgs []string) error {
 	bin, err := exec.LookPath(luaBin)
 	if err != nil {
@@ -191,6 +208,9 @@ func runExternal(luaBin, entryLua string, scriptArgs []string) error {
 }
 
 // luaQuote 把 s 渲染为 Lua 双引号字符串字面量。
+//
+// 设计者视角：`"`/`\`/换行转义，余原样，包双引号供 setup path 嵌。障碍是二进制：
+// 按 byte 走。排查现场：path 语法错先查转义。
 func luaQuote(s string) string {
 	var sb strings.Builder
 	sb.WriteByte('"')

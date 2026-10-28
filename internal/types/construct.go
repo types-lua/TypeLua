@@ -7,6 +7,14 @@ import (
 // ---------- constructors ----------
 
 // NewUnion flattens nested unions, removes duplicates and never, handles any/unknown.
+//
+// 设计者视角：Union 是类型系统的"或"，但若每次构造都保留嵌套与重复，子类型
+// 判定与缓存键会因同一类型多种文本形式而失效。候选：惰性范式化（每次判定时
+// 展平）vs 构造时范式化。选构造时：热路径判定只需 O(1) 指针/字符串比较，
+// 代价是每次 NewUnion 多一次 O(n log n) 排序；any/unknown 在此吸收，never 在此
+// 去除，空集退化为 never。不变量：输出 Types 已展平、去 never、去重、按
+// String() 排序；单成员退化为该成员，空输入为 never。排查现场：若缓存键
+// 不稳定或 `A|B` 与 `B|A` 不相等，检查此处的排序与去重，而不是 String()。
 func NewUnion(types []Type) Type {
 	var flat []Type
 	for _, t := range types {
@@ -55,6 +63,13 @@ func NewUnion(types []Type) Type {
 }
 
 // NewIntersection flattens; never absorbs; any is identity.
+//
+// 设计者视角：交集与并集对偶——any 是交集的单位元（any & X = X），never 是
+// 吸收元（never & X = never），因此构造时 any 去除、never 直接返回 never。
+// 与 Union 的差异：Union 的 any 吸收全部（any | X = any），Intersection 的 any
+// 是单位元。候选：保留 any 作成员 vs 去除；选去除，避免 `any & Foo` 打印
+// 冗余且破坏范式化。不变量：空输入退化为 unknown（交集的零元），单成员
+// 退化为该成员。排查现场：若 `Foo & any` 没有化简为 `Foo`，检查 any 分支。
 func NewIntersection(types []Type) Type {
 	var flat []Type
 	for _, t := range types {
@@ -93,6 +108,13 @@ func NewIntersection(types []Type) Type {
 }
 
 // RemoveNil returns T without nil, and whether nil was present.
+//
+// 设计者视角：nil 的联合成员在类型窄化/函数返回分析中常需剥离（如把
+// `Foo | nil` 拆成 `Foo` + "可能为 nil" 标志）。候选：原地修改 Union vs
+// 构造新 Union；选构造新 Union（NewUnion），保持输入不可变并复用范式化。
+// 单类型非联合：是 nil 则退化为 never（空类型），否则原样返回。返回 bool
+// 让调用方知道是否剥离过 nil，避免重复处理。排查现场：若剥离后类型意外
+// 变 never，检查输入是否仅含 nil。
 func RemoveNil(t Type) (Type, bool) {
 	u, ok := t.(*Union)
 	if !ok {
@@ -117,6 +139,12 @@ func RemoveNil(t Type) (Type, bool) {
 }
 
 // ContainsNil reports whether nil is in the type.
+//
+// 设计者视角：nil 检测必须同时覆盖裸 nil 与联合成员中的 nil，因为 TypeLua
+// 把可空类型表示为 `T | nil`。候选：递归遍历 vs 仅查 Union 成员；选后者，
+// 因为 nil 只能作为顶层联合成员或裸类型出现（构造器保证范式化，nil 不会
+// 嵌套在 Array/Map 内被当作"可空"）。排查现场：若 `Foo | nil` 误报 false，
+// 检查 Union 范式化是否把 nil 合并或去重掉了。
 func ContainsNil(t Type) bool {
 	if t.Kind() == KNil {
 		return true

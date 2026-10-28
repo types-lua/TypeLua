@@ -18,7 +18,19 @@ import (
 //
 // `cdata`/`ctype` are distinct primitives (not aliases of userdata) so
 // pointer confusion surfaces as TL3010 instead of silently passing.
+//
+// 设计者视角：ffi 是跨语言的“海关”——cdef 不透明（C 源码原样发射），load 回 any
+// 由调用方 `as` 自家 CLib 确权，cdata/ctype 独立原语防指针串味。障碍是条件 require
+// 在非 JIT 下运行不到：类型恒可用以免误报，运行时门另由 target/部署保。候选：
+// 精确各函数签名 vs 全 any；选精确（载荷类型 string/integer/boolean/cdata 分明）。
+// 不变量：表名恒 "ffi" 供 ownerEntry。排查现场：C 库调用误报先查是否忘 `as CLib`。
 
+// ffiModule builds the precise ffi table type (always available, see above).
+//
+// 设计者视角：ffiModule 是上模的“装配线”——cdef/load/new/cast/typeof/gc/string/copy/
+// fill/istype/sizeof/alignof/offsetof/metatype/C/os/arch/abi 逐字段精确装，
+// 变参位标 any。障碍是 C 命名空间动态：C 恒 any，os/arch 恒 string，abi 为函数。
+// 取舍：硬编码（JIT API 稳定）。排查现场：某 ffi 函数类型漂移先查此处装配。
 func (c *Checker) ffiModule() types.Type {
 	anyT := types.Any
 	strT := types.String

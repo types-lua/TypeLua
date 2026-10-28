@@ -10,6 +10,12 @@ import (
 )
 
 // ParseManifest parses tlua.toml content.
+//
+// 设计者视角：Decode→取 package 表（名+版，未知键拒）→取 dependencies（串=版询，
+// 内联表=version/url/path，裸 URL 追 latest）→path 依赖兼作 replace→禁 [replace] 表
+// （已迁 path 式）→拒未知顶表→Validate。障碍是旧 [replace]：显错指迁；障碍是裸 URL
+// 无版：latest。候选：宽容未知键 vs 严拒；选严拒防笔误。不变量：过即 Validate 过。
+// 排查现场：解析拒先查未知键。
 func ParseManifest(src string) (*Manifest, error) {
 	d, err := toml.Decode(src)
 	if err != nil {
@@ -96,6 +102,10 @@ func ParseManifest(src string) (*Manifest, error) {
 
 // EncodeManifest renders tlua.toml deterministically (Cargo-style single
 // [dependencies] table; version shorthands where possible).
+//
+// 设计者视角：按 package→dependencies 定序（径排序），纯版询用糖串，余用内联表，
+// 保往返稳定 diff 小。障碍是 map 乱序：SortedKeys 定之。候选：多表 vs 单表；
+// 选单表 Cargo 风。不变量：Parse(Encode(m))==m（语义）。排查现场：diff 抖先查排序。
 func EncodeManifest(m *Manifest) string {
 	var b toml.Builder
 	b.Comment("tlua package manifest (tlua.toml)")
@@ -132,10 +142,16 @@ func EncodeManifest(m *Manifest) string {
 }
 
 func quoteToml(s string) string {
+	// 设计者视角：strconv.Quote 保 TOML 串转义。障碍是手拼引号漏转义；故库之。
+	// 排查现场：含引号依赖名错先查此。
 	return strconv.Quote(s)
 }
 
 // ParseLock parses tlua.lock content.
+//
+// 设计者视角：逐 [[module]] 取 path/version/commit/direct/dir（错型即错，未知键拒），
+// 去重+Set 排序，禁多余表，末 Validate。障碍是手改 lock：严拒。候选：宽 vs 严；
+// 选严。不变量：过即 Validate 过。排查现场：lock 拒先查未知键/重复。
 func ParseLock(src string) (*Lock, error) {
 	d, err := toml.Decode(src)
 	if err != nil {
@@ -195,6 +211,8 @@ func ParseLock(src string) (*Lock, error) {
 }
 
 func hasOnlyRoot(d *toml.Doc) bool {
+	// 设计者视角：lock 只允根表（空键），余皆拒。障碍是误加 [x]：拦。排查现场：lock
+	// 拒先查多余表。
 	for k := range d.Tables {
 		if k != "" {
 			return false
@@ -204,6 +222,9 @@ func hasOnlyRoot(d *toml.Doc) bool {
 }
 
 // EncodeLock renders tlua.lock deterministically.
+//
+// 设计者视角：按径排序逐 [[module]]，dir 非空方写，保 diff 稳。障碍是乱序：先排。
+// 不变量：Parse(Encode(l)) 往返。排查现场：lock 抖先查排序。
 func EncodeLock(l *Lock) string {
 	var b toml.Builder
 	b.Comment("tlua lockfile (tlua.lock) - exact pins; edit via `tlua mod get`")

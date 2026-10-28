@@ -11,9 +11,24 @@ import (
 // shadowing 检查豁免本地化重定义。
 
 // Builtin value definitions (permissive any-based to avoid false positives).
+//
+// 设计者视角：内置库签名是“宽进宽出”的海绵垫——除 tonumber/type 等少数精确外，
+// 一律 any 进 any 出，避免对标准库误报。障碍是版本差异（coroutine.close 仅
+// 5.4）与并发原语（makeChan/sleep/WaitGroup/Mutex）：前者按 Target 裁剪，后者
+// 挂 IsAsync 供 TL3805 检查。候选：精确建模 table/string 库 vs 全 any；选全 any，
+// 把精度留给用户代码。self 占位后删（delete）防顶层 self 泄漏。不变量：全部标
+// IsBuiltin，遮蔽永脱钩（见 bindVar）。排查现场：内置误报先查是否误写精确签名，
+// 版本 API 漏报先查 Target 分支。
 
 // ---------- builtins (permissive any-based to avoid false positives) ----------
 
+// defineBuiltins installs permissive builtins into sc (see package note above).
+//
+// 设计者视角：defineBuiltins 是顶层层的“开铺货”——core 函数、any 模块、coroutine
+// 精确模块、并发原语一次摆齐。障碍是 Target 门禁必须在此收口（5.1 藏 close），
+// 否则旧版本代码报不出错。取舍：coroutine 走精确 Object（见 coroutineModule），
+// 其余走 any，海绵与手术刀分开用。不变量：调用方保证 sc 为待填顶层；幂等但只调
+// 一次。排查现场：内置缺失先查 Ambient 模式是否跳过此处（见 checkFileModule）。
 func (c *Checker) defineBuiltins(sc *Scope) {
 	anyT := types.Any
 	mkFunc := func(params ...types.Type) types.Type {

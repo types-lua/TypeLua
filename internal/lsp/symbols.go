@@ -7,6 +7,11 @@ import (
 )
 
 // Document symbols (top-level declarations).
+//
+// 设计者视角：大纲只收顶层声明——函数 12、类 5、接口 11、别名 26、枚举 10、
+// 变量/import 13、宏缀 `(macro)`， range 全 span、selection 指名。障碍是空档：
+// 返 [] 非 nil。候选：全树 vs 顶层；选顶层，大纲求稳。不变量：空恒 []。排查现场：
+// 大纲缺新语法先查此 switch。
 
 // ---------- document symbols ----------
 

@@ -7,10 +7,18 @@ import (
 )
 
 // Line/column conversions between UTF-16 LSP positions and byte offsets.
+//
+// 设计者视角：三制翻译官——token(1 起 rune)、LSP(0 起 UTF-16)、文档(byte)。
+// 代理对（emoji）占 2 units，须 utf16.Encode 计；行首表+d.lineText 逐 rune 走。
+// 障碍是中文/emoji：byte 列全偏。候选：rune vs UTF-16；选按协议 UTF-16。不变量：
+// 越界钳制。排查现场：跳转偏先查此换算。
 
 // ---------- positions ----------
 
 // lineText returns the raw line (without trailing newline).
+//
+// 设计者视角：取行裸串供列换算，末行无 `\n` 即到文末。障碍是行越界：返 ""。排查现场：
+// 空行列错先查行表。
 func (d *document) lineText(line int) string {
 	if line < 0 || line >= len(d.lines) {
 		return ""
@@ -24,6 +32,9 @@ func (d *document) lineText(line int) string {
 }
 
 // utf16Col converts our 1-based rune column to an LSP 0-based UTF-16 column.
+//
+// 设计者视角：rune 列→UTF-16 列逐字 Encode 累 units，<1 钳 0。障碍是代理对：
+// len(Encode) 2。排查现场：中文列偏先查此处。
 func utf16Col(line string, runeCol1 int) int {
 	if runeCol1 < 1 {
 		return 0
@@ -40,6 +51,9 @@ func utf16Col(line string, runeCol1 int) int {
 }
 
 func (d *document) offsetAt(line, colUTF16 int) int {
+	// 设计者视角：LSP 位→byte 偏移逆算——行越界钳头尾，行内逐字耗 units。障碍是超长
+	// 列：耗尽即行末。候选：二分 vs 线走；选线走，行短。不变量：返值恒界内。排查现场：
+	// 点击末跳转错先查钳制。
 	if line < 0 {
 		return 0
 	}
@@ -68,6 +82,8 @@ type lspRange struct {
 }
 
 func (d *document) toRange(sp token.Span) lspRange {
+	// 设计者视角：Span→LSP Range 双端换算（行 -1，列经 utf16Col）。障碍是跨行：
+	// 起止各算。排查现场：高亮错位先查行列基（1→0）。
 	return lspRange{
 		Start: lspPos{Line: sp.Start.Line - 1, Character: utf16Col(d.lineText(sp.Start.Line-1), sp.Start.Column)},
 		End:   lspPos{Line: sp.End.Line - 1, Character: utf16Col(d.lineText(sp.End.Line-1), sp.End.Column)},
@@ -75,6 +91,8 @@ func (d *document) toRange(sp token.Span) lspRange {
 }
 
 func spanContains(sp token.Span, off int) bool {
+	// 设计者视角：含判左闭右开，零长（空位）仅等值命中。障碍是光标停词尾：调用方
+	// 另有 off-1 回退（见 useAt）。排查现场：点选无响应先查回退。
 	if sp.Start.Offset == sp.End.Offset {
 		return off == sp.Start.Offset
 	}

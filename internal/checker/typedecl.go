@@ -9,9 +9,19 @@ import (
 // 触发错误与缓存，并为 enum 生成运行时表值。
 
 // Type declaration checking (aliases, interfaces, enums).
+//
+// 设计者视角：类型声明在 collectTypes 已占座，此处只“点火”——resolve 触发错误与
+// 缓存（alias/interface），enum 另产运行时表值（值/类型双记+成员桩）。障碍是重复
+// 声明：lookup 指针须与本节点同（Entry.alias/iface/enumDecl 归属），否则为副本
+// 直接退（错已报）。取舍：声明体不另验（resolve 即验）。排查现场：前向引用取空
+// 先查 collectTypes 是否登记。
 
 // ---------- type declarations ----------
 
+// checkTypeAlias triggers resolution (errors and cycles surface here).
+//
+// 设计者视角：checkTypeAlias 是别名的“点火器”——lookup 到本节点 Entry 即 resolve
+// （错与环在 entry 层报+缓存）。无他事。排查现场：别名环未报先查 resolving 守卫。
 func (c *Checker) checkTypeAlias(n *ast.TypeAliasDecl) {
 	e := c.cur().lookupType(n.Name.Name)
 	if e == nil {
@@ -21,6 +31,11 @@ func (c *Checker) checkTypeAlias(n *ast.TypeAliasDecl) {
 	_ = c.resolveTypeEntry(e, nil)
 }
 
+// checkInterface records members then triggers resolution.
+//
+// 设计者视角：checkInterface 多一步“钉桩”——FuncType 字段记 method 余记 field，
+// 再 resolve（继承合并与重字段错在 buildInterface 报）。障碍是方法简写识别：
+// 以 Type 是否 *FuncType 判（非名）。排查现场：接口成员跳转缺失先查此处 Kind 判据。
 func (c *Checker) checkInterface(n *ast.InterfaceDecl) {
 	e := c.cur().lookupType(n.Name.Name)
 	if e == nil {
@@ -39,6 +54,12 @@ func (c *Checker) checkInterface(n *ast.InterfaceDecl) {
 	_ = c.resolveTypeEntry(e, nil)
 }
 
+// checkEnum resolves the enum and defines its runtime table value.
+//
+// 设计者视角：checkEnum 是枚举的“双生”——类型侧 resolve 取 Enum，值侧 Object 表
+// （成员字面为字段）落值册，双记 Entry（见 recordDefEntry），成员逐桩。障碍是
+// 非 Enum 解（如环坏）：无表即无值（静返）。取舍：值表名与类型同名（双栖）。
+// 排查现场：`Color.Red` 找不到先查值表是否建成。
 func (c *Checker) checkEnum(n *ast.EnumDecl) {
 	e := c.cur().lookupType(n.Name.Name)
 	if e == nil {

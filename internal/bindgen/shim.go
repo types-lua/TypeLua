@@ -19,6 +19,10 @@ import (
 
 // DefaultSoName 从头文件路径推导同级共享库名：
 // mylib.h -> libmylib.so（已有 lib* 前缀保留：libfoo.h -> libfoo.so）。
+//
+// 设计者视角：去扩展（.h/.hpp/.hxx/.hh 大小写不敏感）+ `lib` 前缀归一+`.so`。
+// 障碍是 `LIBFoo.H` 大小写：低判。候选：推导 vs 必传；选推导可覆。排查现场：
+// 库名错先查扩展剥离。
 func DefaultSoName(headerPath string) string {
 	base := filepath.Base(headerPath)
 	for _, ext := range []string{".hpp", ".hxx", ".hh", ".h"} {
@@ -35,12 +39,18 @@ func DefaultSoName(headerPath string) string {
 
 // CdefBody 返回头文件的 ffi.cdef 载荷：注释与预处理行剥离，
 // 边缘空行修剪。从不失败；空输入产生空（仍有效）体。
+//
+// 设计者视角：stripComments 去注+`#` 行，Trim 去边，空亦有效（cdef 空块）。
+// 障碍是 `#ifdef` 变体：留运行时（见包注）。排查现场：cdef 错先查剥离。
 func CdefBody(headerSrc string) string {
 	return strings.Trim(stripComments(headerSrc), "\n")
 }
 
 // longString 把 body 包成 Lua 长字符串；当 body 自身含闭合括号时
 // 升一级（C 中几乎不会，但生成必须总而全）。
+//
+// 设计者视角：含 `]]` 即升 `[=[ ]=]`，保任何体可嵌。障碍是体含 `]=]`：仍罕见，
+// 两级够。排查现场：shim 语法错先查闭合。
 func longString(body string) string {
 	if !strings.Contains(body, "]]") {
 		return "[[\n" + body + "\n]]"
@@ -52,6 +62,11 @@ func longString(body string) string {
 // （如 "mylib.h"，用于重新生成注释）；libName 是 ambient 契约接口
 // （如 "CMyLib"）；soName 是同级库文件（如 "libmylib.so"，见 DefaultSoName）。
 // 空 libName 默认 CLib；空 soName 从 headerName 推导。
+//
+// 设计者视角：shim 三件——`require ffi`+cdef 长串+`libDir()` 自定位+
+// `ffi.load(dir..so) as Lib` 单 `as` 收口。障碍是 source/dist 双布局：libDir 经
+// debug.getinfo 自定位，同级 so 永对。候选：LUA_PATH vs 自定位；选自定位零配。
+// 不变量：空参全兜底。排查现场：so 找不到先查 libDir，类型不对先查 `as`。
 func GenerateShim(headerSrc, headerName, libName, soName string) string {
 	if strings.TrimSpace(libName) == "" {
 		libName = "CLib"

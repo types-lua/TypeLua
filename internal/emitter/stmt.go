@@ -5,6 +5,13 @@ import (
 )
 
 // Statement emission (locals, control flow, enums, functions).
+//
+// 设计者视角：本文件是语句的“总配电盘”——40+ 分支各管一路，擦除类
+// （TypeAlias/Interface/Macro）直接清 pending 隐身，defer/spawn/select 三
+// 特种语句各托给专文件。障碍是 declare function 与空函数同形：parser 皆给空
+// 体，发射层无法区分；约定由 compiler 预过滤 Declared，此处只管发射有效函数。
+// 不变量：每分支出口恒换行（nl），pending 在擦除分支必清。排查现场：类型声明
+// 漏进输出先查 compiler 是否未过滤，缩进塌方先查 emitBlock 的 saved 恢复。
 
 func (e *emitter) emitStmt(st ast.Stmt) {
 	if st == nil {
@@ -263,6 +270,11 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 }
 
 func funcNameString(n *ast.FuncName) string {
+	// 设计者视角：funcNameString 把 FuncName 拼回 `a.b.c:m` 全名，好比门牌重组——
+	// Prefix 点连、Method 冒号接。障碍是 nil 名（匿名）：返 "?" 占位防 panic，
+	// 调用方照写 `function ?` 虽怪但不崩（上游 checker 已报错）。候选：报错 vs
+	// 占位；选占位，发射永不抛。不变量：nil 恒返 "?"。排查现场：输出含 `function ?`
+	// 先查 parser 是否丢名，冒号丢失先查 Method 是否为 nil。
 	if n == nil {
 		return "?"
 	}
@@ -280,6 +292,10 @@ func funcNameString(n *ast.FuncName) string {
 }
 
 func (e *emitter) emitParams(fn *ast.FuncLit) {
+	// 设计者视角：emitParams 只抄“名 + ...”——类型擦除后签名即名录。障碍是冒号
+	// 方法的 self：checker 不插 self，Lua 靠 `:` 隐传，此处照原样抄（不加 self）
+	// 恰与 `function a:m(...)` 互补。候选：显式补 self vs 照抄；选照抄，少一事。
+	// 不变量：输出无类型残留。排查现场：self 重复/缺失先查定义处是否手写 self。
 	for i, p := range fn.Params {
 		if i > 0 {
 			e.write(", ")
@@ -296,6 +312,12 @@ func (e *emitter) emitParams(fn *ast.FuncLit) {
 
 // emitVarArgPrelude materializes a named rest parameter (`...nums`).
 // Lua drops the name, so `local nums = {...}` rebinds it for the body.
+//
+// 设计者视角：emitVarArgPrelude 是具名 rest 的“挂牌处”——Lua 的 ... 无名，
+// 此处首行 `local nums = {...}` 把名字挂回去。障碍是位置：必须在 defer prelude
+// 之前（清理闭包要捕获 nums），在 indent 目标层。候选：改 AST 插节点 vs 发射时
+// 直写；选直写，不脏 AST。不变量：无名 rest（vaName==nil）零输出。排查现场：
+// nums 未定义先查 HasVarArg/VarArgName 是否配对，捕获不到先查 prelude 顺序。
 func (e *emitter) emitVarArgPrelude(params []*ast.Param, hasVA bool, vaName *ast.Ident, ind int) {
 	if !hasVA || vaName == nil {
 		return
@@ -310,6 +332,12 @@ func (e *emitter) emitVarArgPrelude(params []*ast.Param, hasVA bool, vaName *ast
 }
 
 func (e *emitter) emitEnum(n *ast.EnumDecl) {
+	// 设计者视角：emitEnum 是枚举的“拍扁机”——`enum Color{Red="r"}` 拍成
+	// `Color = {Red="r"}` 单表。障碍是自增值跟随：数字字面量更新 lastAuto，
+	// 遇字符串/复杂式即关 autoActive（后继无值者吐 nil 而非臆测）。候选：全
+	// 编译期求值 vs 仅数字跟随；选后者，字符串后自增语义本就模糊。不变量：
+	// 输出恒单行表构造。排查现场：自增值跳号先查 Value 是否为 NumberLit，
+	// nil 成员先查 autoActive 是否已关闭。
 	// `enum Color { Red = "red" }` => `Color = { Red = "red", ... }`
 	// Auto values: incrementing integers from 0.
 	e.pad()

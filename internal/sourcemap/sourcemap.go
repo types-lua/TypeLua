@@ -7,6 +7,11 @@ import (
 
 // Mapping 把一个生成位置映射回原始源位置（Source Map V3）。
 //
+// 设计者视角：Mapping 是调试器的“路标”——Gen(1 起行/0 起 rune 列)钉生成锚，
+// Src(0 起行列+文件)指回源，Name 供按名跳。障碍是列制：生成列须 rune 而非 byte，
+// 否则中文源码全偏（见 emitter.write）。候选：byte vs rune；选 rune 合 V3 实情。
+// 不变量：GenLine>=1。排查现场：映射漂移先查 emitter 的 line/col 账。
+//
 // 物理布局：
 //
 //	Mapping
@@ -28,6 +33,11 @@ type Mapping struct {
 const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 // AppendVLQ 追加一个 base64-VLQ 值（规范：符号在 LSB）。
+//
+// 设计者视角：AppendVLQ 是 V3 的“打包机”——负数 `(-v<<1|1)`、非负 `(v<<1)`，
+// 5 位一组+续位 32，查 base64 表。障碍是 int 位宽：转 uint32 后逐 5 位吞，无溢出。
+// 候选：手写 vs 库；选手写零依赖。不变量：零值产一字节。排查现场：映射串乱码先查
+// 符号位与续位。
 func AppendVLQ(dst []byte, v int) []byte {
 	var uv uint32
 	if v < 0 {
@@ -51,6 +61,12 @@ func AppendVLQ(dst []byte, v int) []byte {
 
 // Encode 构建 Source Map V3 JSON 文档。Mappings 必须按 (GenLine, GenCol) 排序；
 // sources/content 按索引对齐。
+//
+// 设计者视角：Encode 把映射压成 `mappings` 差分串——行差用 `;` 跳，列/源/行/列/名
+// 全 VLQ 差分。障碍是乱序输入：未排序即差分负跳错乱，故要求调用方排好（emitter
+// 顺写天然有序）；障碍是未知源：自动追 sources/contents 补空。候选：绝对 vs 差分；
+// 选差分合规范。不变量：sources 与 contents 同长。排查现场：行错位先查 prelude
+// shift（见 PrependPrelude），名缺失先查 names 表。
 func Encode(file string, sources []string, contents []string, names []string, mappings []Mapping) ([]byte, error) {
 	nameIdx := map[string]int{}
 	for i, n := range names {

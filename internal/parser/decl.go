@@ -21,6 +21,14 @@ import (
 //     字段：[: type] [= init]
 //   恢复：synchronizeClassMember 推进到下一个成员起始。
 
+// parseExport 解析 `export <decl>`：class/type/interface/enum/function/async/local 可导出，macro 不可。
+//
+// 设计者视角：parseExport 是模块门口的“盖章处”——吃掉 export 后按次 Token 分诊，
+// 命中即解析本体再把 S.Start 前移到 export（高亮含章），LocalFuncDef 另立 Exported 旗。
+// 障碍有二：一是 `export async function` 双词开头，需 isAsyncFuncStart 前瞻；
+// 二是 macro 无运行时值，导出即记 ParseInvalidExport。取舍：非法导出不同情，
+// synchronize 后回 EmptyStmt，让后文继续。不变量：成功节点的 S 必含 export 起点。
+// 排查现场：若导出函数 Span 漏了 export，先看各分支的 S.Start 回写。
 func (p *Parser) parseExport() ast.Stmt {
 	start := p.next()
 	if p.at(token.ClassKw) || (p.at(token.AbstractKw) && p.peek(1).Kind == token.ClassKw) {
@@ -78,6 +86,15 @@ func (p *Parser) parseExport() ast.Stmt {
 	return &ast.EmptyStmt{S: start.Span}
 }
 
+// parseDeclare 解析 `declare <类型空间声明>`：class/type/interface/enum 与无体 function，macro 不可。
+//
+// 设计者视角：parseDeclare 是类型世界的“报关单”——只收无运行时发射的声明，
+// function 形态只收签名（params+`->`/`: `返回，无 body，Body 置空块占位），身后无 end。
+// 障碍是泛型 `<T>` 与调用括号的粘连：试探成功且后接 '(' 才认泛型，否则回退当比较。
+// 取舍：declare class 的字段初值在 parseClassMember 内判死刑（ParseDeclareFieldInit），
+// 而非此处一刀切，让错误锚在字段而非 declare。候选曾是复用 parseGlobalFunc 再掏空 body，
+// 但签名与体解析交织，单列签名路更不易把 `end` 误吃。不变量：返回节点 Declared 恒真。
+// 排查现场：若 declare function 吞了下句，先看 LParen expect 失败后的游标。
 func (p *Parser) parseDeclare() ast.Stmt {
 	start := p.next()
 	// declare only applies to type-space decls (no runtime emit).
@@ -155,6 +172,14 @@ func (p *Parser) parseDeclare() ast.Stmt {
 //
 // 尾部的 `...` 收集额外调用实参（变参 macro）。
 // Parameters are strict identifiers; `self`/`super` are reserved.
+//
+// 设计者视角：parseMacroDef 是宏的“招工表”——名后括号内只收严格 Ident（软关键字不许混入），
+// `self`/`super` 预留判死刑，重名 param 判死刑，`...` 必居末（否则 ParseMacroVarargLast）。
+// 双形态分流：`=` 后 parseExpr 即表达式宏；`do` 后 inMacroBody++ 包 parseBlock（体内裸 Ident
+// 可作语句占位，见 parseExprStmtOrAssign），`end` 封口，Ret 非空即 ParseMacroBodyReturn。
+// 障碍是宏体内的 return 与块恢复交织：inMacroBody 旗让宏体内的语句级裸名合法化，待展开后复核。
+// 取舍：签名错即 synchronize 回 EmptyStmt，不硬凑半截宏。不变量：IsExpr 与 Body/Block 互斥且必居其一。
+// 排查现场：若语句宏误收 return 值，先看 inMacroBody 的 ++/-- 是否配对。
 func (p *Parser) parseMacroDef() ast.Stmt {
 	start := p.next() // macro
 	name := p.parseIdent()
@@ -226,6 +251,14 @@ func (p *Parser) parseMacroDef() ast.Stmt {
 	return &ast.EmptyStmt{S: start.Span}
 }
 
+// parseTypeDecl 解析 `type X<T> = T` / `interface X ... { }` / `enum X { }` 三形态，exported/declared 透传。
+//
+// 设计者视角：parseTypeDecl 是类型声明的“三岔口”——type 走别名路（泛型+`=`+parseType），
+// interface 走继承+字段路（extends 逗号列、`{` 后 parseInterfaceField 循环、synchronizeInterface
+// 局部恢复），enum 走成员路（AllowSoft 名+可选 `= expr`）。障碍是接口/枚举的分隔符
+// `,`/`;` 可混用：循环首即跳过，让尾逗号合法。取舍：字段错只跳一格（synchronize 后 continue），
+// 整表不作废。不变量：Exported/Declared 原样透传，S 从关键字到收尾符。
+// 排查现场：若 interface 缺 `}` 后外层被吞，先看 expect(RBrace) 失败后是否继续了外层循环。
 func (p *Parser) parseTypeDecl(exported, declared bool) ast.Stmt {
 	switch p.cur().Kind {
 	case token.TypeKw:
@@ -328,6 +361,14 @@ func (p *Parser) parseTypeDecl(exported, declared bool) ast.Stmt {
 // (`[mods] name<T>(params)[: R | -> R] body end`) and at most one
 // `constructor(params) body end`. In `declare` classes and on `abstract`
 // members there is no body.
+//
+// 设计者视角：parseClassDecl 是类的“审批大厅”——abstract 章、名、泛型、extends 单继承、
+// implements 多实现、`{` 后成员循环（parseClassMember+synchronizeClassMember），
+// `}` 封口，exported/declared/isLocal 三旗透传。障碍是 extends/implements 后的类型逗号列
+// 与成员循环的逗号分隔同形：前者在 `{` 前收，后者在 `{` 后收，以 LBrace 为界绝不混。
+// 取舍：成员错只跳一格（同步后 continue），整类不作废；`{` 缺席即同步回 Empty，不硬搭空类。
+// 不变量：Members 保序，S 从 abstract/class 起到 `}`。排查现场：若 implements 列少一项，
+// 先看逗号循环的 break 条件。
 func (p *Parser) parseClassDecl(exported, declared, isLocal bool) ast.Stmt {
 	start := p.cur()
 	abstract := false
@@ -389,6 +430,17 @@ func (p *Parser) parseClassDecl(exported, declared, isLocal bool) ast.Stmt {
 	return &ast.ClassDecl{Name: name, Generics: generics, Extends: extends, Implements: implements, Members: members, Exported: exported, Declared: declared, Abstract: abstract, IsLocal: isLocal, S: sp}
 }
 
+// parseClassMember 解析单个类成员：修饰符 async/vis/static/readonly/abstract + 名 + 方法/字段双路。
+//
+// 设计者视角：parseClassMember 是成员的“安检+分诊”——前后两处 async 嗅探（`async name(`/`<`
+// 且同行） guards `async: string` 字段不被误收；vis/static/readonly/abstract 循环收章，
+// 重复章即时记账（DuplicateVisibility/Modifier）。分诊：后接 `(`/`<` 即方法路
+// （泛型试探+params+返回+declare/abstract 无体 vs parseFuncBlock 有体，缺体在 `,`/`;`/`}`
+// 前即 MethodBodyMissing）；否则字段路（`[:T] [=init]`，无 type 无 init 即 FieldNeedsTypeOrInit
+// 补 any，abstract 字段即 OnlyMethodsAbstract）。障碍有三：ctor 不许 async/不许返回注记、
+// `constructor` 裸作字段名即 CtorNotMethod。取舍：方法泛型试探失败即回退按无泛型续，
+// 错判成本一次回退。不变量：失败回 nil（调用方同步），成功 S 从首修饰/名到体尾。
+// 排查现场：若 `static async fetch()` 的 async 丢失，先看第二嗅探（修饰后）是否生效。
 func (p *Parser) parseClassMember(declared bool) *ast.ClassMember {
 	start := p.cur()
 	// Leading `async` modifier for methods (`async greet() ... end`):
@@ -547,6 +599,13 @@ loop:
 	return &ast.ClassMember{Kind: ast.ClassField, Name: name, Visibility: vis, IsStatic: isStatic, IsReadonly: isReadonly, FieldType: fty, Init: init, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
+// synchronizeClassMember 在类体内推进到下一成员起点（Ident/软关键字/`}`），恢复成员级错误。
+//
+// 设计者视角：它是类大厅的“叫号机”——坏成员后吃到 `,`/`;`（消费即停）或下个像名字的
+// Token（Ident/软关键字即停，不消费）再开工，避免把整类吞掉。障碍是修饰符亦为软关键字：
+// 取舍是见软关键字即停（宁早不停晚），残修饰留给下轮 parseClassMember 再判。
+// 不变量：EOF/RBrace 前必停且不消费 `}`。排查现场：若坏成员后下个好成员仍丢失，
+// 先看停机条件是否漏了 isSoftKw。
 func (p *Parser) synchronizeClassMember() {
 	for {
 		k := p.cur().Kind
@@ -564,6 +623,14 @@ func (p *Parser) synchronizeClassMember() {
 	}
 }
 
+// parseInterfaceField 解析单个接口字段：`[readonly] name[?] [: T | <T>(params): R]`（方法糖与属性双形态）。
+//
+// 设计者视角：parseInterfaceField 是接口的“柜台”——readonly 章先收，`?` 可选后收，
+// 后接 `(`/`<` 即方法糖（泛型试探+parseFuncTypeParams+`:`/`->` 返回，包成 FuncType），
+// 否则 expect(':') 收属性类型。障碍是方法泛型 `<` 与比较同形：试探后无 '(' 即回退按
+// 属性续，零副作用。取舍：属性缺 ':' 只记账不停工（ty 为 nil 仍成 Field），让后文继续。
+// 不变量：失败回 nil（调用方同步），成功 S 从 readonly/名到类型尾。
+// 排查现场：若 `m<T>(x: T): T` 的泛型丢失，先看试探后 at(LParen) 是否为真。
 func (p *Parser) parseInterfaceField() *ast.InterfaceField {
 	start := p.cur()
 	readonly := false
@@ -617,6 +684,13 @@ func (p *Parser) parseInterfaceField() *ast.InterfaceField {
 	return &ast.InterfaceField{Name: name, Type: ty, Optional: optional, Readonly: readonly, S: token.Span{Start: start.Span.Start, End: p.prevEnd(), File: p.file}}
 }
 
+// returnTypeToList 把 `->` 返回类型摊平成 []TypeNode：nil 即空，Tuple 拆元，void 即空，余者单包。
+//
+// 设计者视角：它是函数类型 Returns 的“归一化漏斗”——parseReturnType 产出的三种方言
+// （nil/Tuple/void/单体）在此统一成切片，checker 遍历 Returns 即得定长/多值，无需二次
+// switch。障碍是 `void` 有名无实：NamedType(void) 必须摊成空片，否则会被当一个返回值。
+// 取舍：Tuple 拆元（多返回），Paren 不拆（括号语义），泾渭分明。不变量：纯函数，无副作用。
+// 排查现场：若 `-> ()` 被当一个返回，先看 void 名的匹配是否含 Args 非空的误伤。
 func returnTypeToList(rt ast.TypeNode) []ast.TypeNode {
 	if rt == nil {
 		return nil

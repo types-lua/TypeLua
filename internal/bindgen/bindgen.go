@@ -29,6 +29,12 @@ var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Generate 为 headerSrc 渲染 .d.tl 契约。libName 是持有函数与 #define 的接口
 // （默认 CLib）。
+//
+// 设计者视角：Generate 四步——空 lib 兜 CLib，scanDefines 先收宏（保字符串内 `;`
+// 存活），stripComments+splitTopLevel 切声明，handleDecl 逐收，末按 struct/enum/
+// alias 排序、方法保源序拼 .d.tl。障碍是未知构造：退 any+`-- skipped` 保可解析；
+// 障碍是 `;` 在宏串内：先扫宏再剥注。候选：报错 vs 退化；选退化零误报。不变量：
+// 任意输入不 panic、输出恒可解析。排查现场：输出缺声明先查切分，名乱序先查排序。
 func Generate(headerSrc, libName string) string {
 	if strings.TrimSpace(libName) == "" {
 		libName = "CLib"
@@ -97,6 +103,8 @@ type parser struct {
 }
 
 func (p *parser) addStruct(name, body string) {
+	// 设计者视角：struct 首见登记 known+保序，重见跳（C 重定义罕见，首胜保确定）。
+	// 障碍是空名匿名：亦记空键一次（调方保名非空）。排查现场：名用变 any 先查 known。
 	if p.structs == nil {
 		p.structs = map[string]string{}
 	}
@@ -109,6 +117,8 @@ func (p *parser) addStruct(name, body string) {
 }
 
 func (p *parser) addEnum(name, body string) {
+	// 设计者视角：enum 同 struct 首胜保序，供后文名用。障碍是匿名 enum：空名亦占位。
+	// 排查现场：枚举名变 any 先查此。
 	if p.enums == nil {
 		p.enums = map[string]string{}
 	}
@@ -121,6 +131,8 @@ func (p *parser) addEnum(name, body string) {
 }
 
 func (p *parser) addAlias(name, body string) {
+	// 设计者视角：alias 首胜保序，known 供后文。障碍是函数指针 alias：体为 type 串。
+	// 排查现场：别名丢失先查重名跳。
 	if p.aliases == nil {
 		p.aliases = map[string]string{}
 	}
@@ -134,6 +146,10 @@ func (p *parser) addAlias(name, body string) {
 
 // scanDefines 在注释剥离前收集简单 #define（使字符串内 // 存活；
 // 只接受整数/字符串字面量）。
+//
+// 设计者视角：先扫宏后剥注——字符串内 `//` 不被误作注释，复杂宏（函数式/表达式）
+// 跳过。障碍是 `#define FOO foo(` 未闭：只收整数/串字面。候选：全预处理 vs 子集；
+// 选子集零误报。不变量：defines 恒简单字面。排查现场：宏缺先查字面判。
 func (p *parser) scanDefines(src string) {
 	for _, line := range strings.Split(src, "\n") {
 		t := strings.TrimSpace(line)
@@ -155,6 +171,8 @@ func (p *parser) scanDefines(src string) {
 }
 
 func isIntLit(s string) bool {
+	// 设计者视角：整数判容 ±、十六进制，余十进制 ParseInt。障碍是 `0x` 大小写：
+	// 双容。排查现场：宏整数漏先查此。
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return false
@@ -174,11 +192,17 @@ func isIntLit(s string) bool {
 }
 
 func isStringLit(s string) bool {
+	// 设计者视角：双引号包即串字面（转义不究，够宏用）。障碍是单引号字符：不收。
+	// 排查现场：串宏漏先查引号。
 	s = strings.TrimSpace(s)
 	return len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"'
 }
 
 func stripComments(src string) string {
+	// 设计者视角：手扫 `//`/`/* */`（块内换行保留保行号），末丢 `#` 行（define 已收）。
+	// 障碍是字符串内 `//`：因先扫宏，此处仍会误剥；故 Generate 先 scanDefines 保宏串。
+	// 候选：状态机识串 vs 简扫；选简扫+先扫宏。不变量：行数不变（块注换行保留）。
+	// 排查现场：行号漂移先查换行保留，串内注被剥先查序。
 	var b strings.Builder
 	i := 0
 	for i < len(src) {
@@ -218,6 +242,10 @@ func stripComments(src string) string {
 }
 
 // splitTopLevel 在花括号/括号深度 0 处按 ';' 拆分。
+//
+// 设计者视角： depth 双计（{}/()），零深 `;` 方切，保 struct/enum 体不碎。障碍是
+// 字符串内 `;`：简扫会误切；宏串已先收，余罕见。候选：词法全解 vs 简扫；选简扫够用。
+// 不变量：空段不过滤（上游 Trim 跳）。排查现场：声明碎裂先查 depth。
 func splitTopLevel(src string) []string {
 	var out []string
 	depthBrace, depthParen := 0, 0
@@ -247,6 +275,10 @@ func splitTopLevel(src string) []string {
 }
 
 func (p *parser) handleDecl(d string) {
+	// 设计者视角：声明分流——函数指针 typedef→别名，原生 typedef→handleTypedef，
+	// struct/enum 含 `{`→解析登记，前向 struct/enum/union→cdata 别名或跳，原型含
+	// `()`→方法，余 skipped 保可解析。障碍是未知：永跳不报错。候选：报错 vs 跳；
+	// 选跳。不变量：未知恒进 skipped。排查现场：声明丢失先查分流序。
 	if d == "" {
 		return
 	}
@@ -310,6 +342,10 @@ func (p *parser) handleDecl(d string) {
 }
 
 func (p *parser) handleTypedef(t string) {
+	// 设计者视角：typedef 三路——含 `{` 的 struct/enum 体→结构登记，多声明符逗号→跳，
+	// 单别名→mapCType 登记（指针已含 `*` 经 starSuffix 补）。障碍是 `*` 附名
+	// （`int *p`）：base 须补星方映 cdata。候选：全展 vs 单别名；选单。多者跳。
+	// 不变量：未知恒 skipped。排查现场：别名变 any 先查 mapCType。
 	t = strings.TrimSpace(t)
 	if t == "" {
 		return
@@ -361,6 +397,8 @@ func (p *parser) handleTypedef(t string) {
 }
 
 func starSuffix(last string) string {
+	// 设计者视角：尾名含 `*` 即补 ` *` 供 mapCType 识指针。障碍是 `**`：含即补一
+	// （映 cdata 够用）。排查现场：指针变 any 先查此。
 	if strings.Contains(last, "*") {
 		return " *"
 	}
@@ -368,6 +406,8 @@ func starSuffix(last string) string {
 }
 
 func oneLine(s string) string {
+	// 设计者视角：skipped 注释单行化（空白折叠，超 120 截断保可读）。障碍是超长原型：
+	// 截之。排查现场：skipped 对不上先查截断。
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > 120 {
 		return s[:120] + "..."

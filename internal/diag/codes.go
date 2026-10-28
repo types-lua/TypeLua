@@ -11,6 +11,12 @@ import (
 // 调用点使用常量（`diag.AwaitOutsideAsync`），从不用原始字符串，
 // 因此拼写错误是编译错误而非静默的错误码。
 //
+// 设计者视角：Code 是跨工具的“契约号”——好比国标件号，IDE/测试/用户脚本按号匹配，
+// Message 措辞随便改都不碎。障碍是字符串字面量易拼错且难重构：此处用类型化常量收敛，
+// 拼错即编译失败。数值分段（TL1xxx 词法、TL2xxx 语法、TL3xxx 检查、TL4xxx 工程）让
+// 看到前缀即知去哪个车间查。不变量：已发布编号永不复用、只追加；codeTable 与常量
+// 由测试强制配对。排查现场：若新增诊断无码可用，先按阶段选段追加，次跑同步测试验配对。
+//
 // 数值范围（为工具与 SPEC 引用保持稳定）：
 //
 //	TL1xxx  词法
@@ -22,6 +28,12 @@ import (
 type Code string
 
 // Category 按发出阶段分组错误码。
+//
+// 设计者视角：Category 是“车间牌”——lexer/parser/checker/expander/concurrency/project
+// 六车间加 unknown 兜底，让诊断按阶段过滤、按车间统计。障碍是 Code 与阶段本可从前缀推导，
+// 但 TL37/TL38 在 TL3 大段里需特判（见 categoryOf），显式存 cat 可避免每次前缀分支。
+// 不变量：codeTable 中的 cat 与前缀推导一致（测试可验）。排查现场：若某码被分错车间，
+// 先看表条目 cat 是否手误，次看 categoryOf 的 TL37/TL38 特判顺序。
 type Category int
 
 const (
@@ -42,6 +54,11 @@ const (
 )
 
 // String 返回 Category 的文本形式。
+//
+// 设计者视角：它是车间牌的“挂牌名”——MarkdownTable 与 CLI 分组全靠它拼表头。
+// 取舍是 switch 手写，未知兜底 "unknown" 而非 panic，让野值诊断仍可打印。
+// 不变量：已知车间名全小写、恒定拼写。排查现场：若表格里冒出 unknown，先查该码
+// 是否注册，次查 cat 是否误填 CatUnknown。
 func (c Category) String() string {
 	switch c {
 	case CatLexer:
@@ -236,6 +253,11 @@ const (
 
 // codeDef 是注册表的一行。Name 必须与上面声明的常量匹配
 // （测试通过解析本文件强制配对）。
+//
+// 设计者视角：它是注册表的“一行档案”——code 定编号、name 定常量名、cat 定车间、
+// desc 定人话，一行即全部真相。障碍是常量与表易脱钩（加码忘加行）：测试解析本文件
+// 强制“每个常量必有一行、每行必有常量”，脱钩即红。不变量：code 唯一、表按码排序。
+// 排查现场：若配对测试红，先看新码是否只加了 const 而忘加 codeTable 行。
 type codeDef struct {
 	code Code
 	name string
@@ -245,6 +267,12 @@ type codeDef struct {
 
 // codeTable 是错误码元数据的唯一真相来源。按错误码排序；
 // 测试验证排序、唯一性与上面常量的完整覆盖。
+//
+// 设计者视角：它是全编译器的“花名册正本”——Category()/Description()/MarkdownTable()
+// 都读它，调用点只读常量。障碍是分散注册易重号：此处集中一表，按码排序让人眼即见空洞，
+// 测试再验排序+唯一+全覆盖三重门。取舍是启动即常驻内存，换查询零解析。
+// 不变量：有序、唯一、与常量全配对；desc 为英文短语，供表与文档复用。
+// 排查现场：若 Codes() 顺序飘，先看本表是否手误乱序，次看测试的排序断言。
 var codeTable = []codeDef{
 	{LexUnterminatedLongComment, "LexUnterminatedLongComment", CatLexer, "unterminated long comment"},
 	{LexInvalidCharacter, "LexInvalidCharacter", CatLexer, "invalid character"},
@@ -382,6 +410,11 @@ var codeTable = []codeDef{
 }
 
 // codeIndex 把每个注册错误码映射到其行。
+//
+// 设计者视角：它是花名册的“索引卡”——包 init 时一次建成 map，让 Known()/Category()/
+// Description() 从 O(n) 扫表降为 O(1) 命中。取舍是双份内存（表+索引）换热点零遍历。
+// 不变量：与 codeTable 严格同源；只读，永不写。排查现场：若新码 Known() 为 false，
+// 先看 codeTable 是否漏行，次看本索引是否在表之后初始化（本文件用 func() 即时构建）。
 var codeIndex = func() map[Code]codeDef {
 	m := make(map[Code]codeDef, len(codeTable))
 	for _, d := range codeTable {
@@ -391,15 +424,30 @@ var codeIndex = func() map[Code]codeDef {
 }()
 
 // String 返回 Code 的线上传输拼写（TLnnnn）。
+//
+// 设计者视角：它是契约号的“原样拓印”——string(c) 直出，让诊断落盘/传 LSP 时拼写稳定。
+// 取舍是值接收者、无分配分支。不变量：String() 与底层 string 强一致。
+// 排查现场：若线上传输多了引号或空格，先看调用方是否用了 %q/%s 之外的动词。
 func (c Code) String() string { return string(c) }
 
 // Known 报告 Code 是否在注册表中。
+//
+// 设计者视角：它是“查花名册”——好比收文先验章，真码才放行按码断言，野码早暴露。
+// 障碍是外部输入（LSP/基线文件）可带任意串：先 Known 再用，避免把拼写错误当新码吞下。
+// 不变量：纯只读，查 codeIndex 一次命中即返。排查现场：若 Lookup 明明有码却报未知，
+// 先看码大小写/空格（TL 大写、六位），次看 codeTable 是否漏行。
 func (c Code) Known() bool {
 	_, ok := codeIndex[c]
 	return ok
 }
 
 // Valid 报告 Code 是否符合 TLnnnn 形状（无论是否注册）。
+//
+// 设计者视角：它是“验章形”——不看花名册，只看章的形制（6 位、TL 开头、后四位数字），
+// 把“形错”（拼写坏）与“无此号”（未注册）分两层报。障碍是 Valid 为真但 Known 为假的
+// 未来码：Category() 对这类码仍按前缀归车间，而非一棍子打 unknown。取舍是字节级手验，
+// 零正则零分配。不变量：Valid 为假则 Known 必假。排查现场：若 "TL12" 被判有效，
+// 先数长度（必须 6），次看前后空格是否未剪。
 func (c Code) Valid() bool {
 	s := string(c)
 	if len(s) != 6 || s[0] != 'T' || s[1] != 'L' {
@@ -414,6 +462,12 @@ func (c Code) Valid() bool {
 }
 
 // Category 返回发出该错误码的阶段。
+//
+// 设计者视角：它是“看章定车间”——注册码读表的 cat 栏，未注册但形对的按前缀推导
+// （categoryOf），形都不对才归 unknown。障碍是 TL37/TL38 藏在 TL3 大段里：
+// 若先判 TL3 会把宏/并发误归 checker，故推导时 TL37/TL38 优先。取舍是注册优先、
+// 推导兜底，让未来码未注册仍有合理车间。不变量：已知码的车间恒等于表栏。
+// 排查现场：若宏错误被标 checker，先看表栏 cat 是否手误 Expander，次看推导分支顺序。
 func (c Code) Category() Category {
 	if d, ok := codeIndex[c]; ok {
 		return d.cat
@@ -425,6 +479,11 @@ func (c Code) Category() Category {
 }
 
 // Description 返回注册表中的简短描述（未知返回空）。
+//
+// 设计者视角：它是花名册上的“备注栏”——MarkdownTable 与 hover 提示直接抄它，
+// 让文档与代码同源。取舍是未知返回空而非报错，让调用方自行决定兜底措辞。
+// 不变量：已知码永不返回空。排查现场：若表格某行描述空白，先看 codeTable 该行
+// desc 是否漏填，次看码是否拼错导致走了未知分支。
 func (c Code) Description() string {
 	if d, ok := codeIndex[c]; ok {
 		return d.desc
@@ -433,6 +492,11 @@ func (c Code) Description() string {
 }
 
 // Name 返回注册表中对应的常量标识符（未知返回空）。
+//
+// 设计者视角：它是编号到“人名”的反查——`TL3801` 反查得 `AwaitOutsideAsync`，
+// 供文档与测试把码与常量互相印证。取舍是运行时查表而非编译期，保证表是唯一真相。
+// 不变量：已知码的 Name 恒与本文件 const 标识符一致（测试解析源码强制配对）。
+// 排查现场：若 Name 为空但码看着眼熟，先看大小写（TL 大写），次看表行 name 是否拼错。
 func (c Code) Name() string {
 	if d, ok := codeIndex[c]; ok {
 		return d.name
@@ -441,6 +505,12 @@ func (c Code) Name() string {
 }
 
 // categoryOf 从数值前缀推导类别。
+//
+// 设计者视角：它是“看号段定车间”的备用尺——注册表未覆盖的未来码仍能按 TL1/2/37/38/3/4
+// 归位。障碍是号段嵌套：TL37（宏）与 TL38（并发）是 TL3 的子段，必须先判子段再判大段，
+// 否则宏/并发全被吞进 checker。取舍是 HasPrefix 链而非数值运算，让段界一目了然。
+// 不变量：输入非 TL 开头一律 unknown。排查现场：若新段（如 TL39）全进 unknown，
+// 先在此加分支，次给 codeTable 补 cat。
 func categoryOf(s string) Category {
 	switch {
 	case strings.HasPrefix(s, "TL1"):
@@ -460,6 +530,11 @@ func categoryOf(s string) Category {
 }
 
 // Lookup 解析线上传输拼写并返回注册错误码。
+//
+// 设计者视角：它是外部码串的“验章入口”——基线文件/LSP 传来的 "TL3014" 在此验真伪，
+// 真即返码+true，假即原样返+false 让调用方报“未知码”而非误用。取舍是不剪空格不改大小写，
+// 严格匹配，倒逼上游传干净串。不变量：ok=true 当且仅当 c.Known()。
+// 排查现场：若合法码 Lookup 失败，先看首尾空格/换行是否未剪，次看是否为全角字符。
 func Lookup(s string) (Code, bool) {
 	c := Code(s)
 	if !c.Known() {
@@ -469,6 +544,12 @@ func Lookup(s string) (Code, bool) {
 }
 
 // Codes 返回所有注册错误码（升序）。
+//
+// 设计者视角：它是花名册的“点名册”——MarkdownTable、补全、覆盖率检查都按此遍历，
+// 升序让 diff 稳定可读。障碍是 codeTable 的书写序可能手抖：此处现排序而非信源头，
+// 让输出与书写序解耦。取舍是每次分配新切片（不暴露底层），换调用方随便改不污染正本。
+// 不变量：长度恒等于 codeTable，严格升序。排查现场：若文档表顺序飘，先看是否绕过本函数
+// 直读 codeTable，次看 sort 是否被改动。
 func Codes() []Code {
 	out := make([]Code, len(codeTable))
 	for i, d := range codeTable {
@@ -481,6 +562,14 @@ func Codes() []Code {
 // MarkdownTable 把完整注册表渲染为 Markdown 表格
 // （被 docs/11-diagnostics.md 使用，并由测试保持同步）。
 //
+// 设计者视角：它是花名册的“印刷版”——表头 Code/Constant/Category/Description 四栏，
+// 按 Codes() 升序逐行抄 codeIndex，让线上文档与代码同源，改码不改文档即红（同步测试）。
+// 障碍是 desc 含 `|` 会破表：此处约定 desc 永不含竖线（英文短语），换渲染零转义。
+// 取舍是每次现拼字符串，换文档生成永远新鲜。不变量：行数恒等于注册码数，首两行为表头。
+// 排查现场：若 docs 里的表与本函数输出对不上，先跑同步测试的 -update，再看是否手改了
+// md 而没回写本表（正本永远是 codeTable）。
+//
+//go:generate go test -run TestDiagnosticsDocInSync -update .
 //go:generate go test -run TestDiagnosticsDocInSync -update .
 func MarkdownTable() string {
 	var sb strings.Builder

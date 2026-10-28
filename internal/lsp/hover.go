@@ -7,6 +7,11 @@ import (
 )
 
 // Hover and go-to-definition.
+//
+// 设计者视角：悬停/定义皆经 useAt 三岔——值符显 `kind name: abbrev`，成员显
+// `kind Owner.Name`，类型显 `entryKind TypeName`。定义再按成员/类型/值各取位。
+// 障碍是三命名空间并存：Member/Entry/Sym 分流不可串。候选：类型全展 vs abbrev；
+// 选 abbrev 防长串。不变量：无命中返 nil（无悬停）。排查现场：悬停空先查 useAt。
 
 // ---------- hover & definition ----------
 
@@ -42,6 +47,9 @@ type location struct {
 }
 
 func (s *Server) definition(raw json.RawMessage) any {
+	// 设计者视角：定义跳转分流——成员查 memberDefSpan，类型取 DeclSpan，值经
+	// defSpanOf(Root)。障碍是结构成员无定义位：返 nil。候选：跳声明 vs 跳定义；
+	// 选定义。不变量：单档恒单元素数组。排查现场：跳不到先查成员定义记录。
 	doc, pos, ok := s.docAt(raw)
 	if !ok {
 		return nil

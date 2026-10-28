@@ -14,9 +14,21 @@ import (
 // -> Tuple，含命名 -> Object"分流；索引/字段访问统一走 lookupField。
 
 // Expression checking, table literals, and operators.
+//
+// 设计者视角：表达式是“单值与多值双轨”——checkExpr/checkExprSingle 走单值，
+// checkExprMulti 承载多返回（调用/await 末位展开）。表字面按“纯列表→Tuple，
+// 含命名→Object”分流（见 checkTable），字段/索引统一走 lookupField/indexResult。
+// 障碍是 Lua 多值只在末位展开、其余取首值：checkExprListMulti/checkCallArgs 双处
+// 复刻此语义。取舍：遇错填 Any 续流，级联不炸。不变量：checkExpr 永不返 nil 切片
+// 空即 Nil。排查现场：多值丢失先查是否非末位误展开，表类型错先查纯列表判据。
 
 // ---------- expressions ----------
 
+// checkExprListMulti checks expression lists with last-position multi expansion.
+//
+// 设计者视角：checkExprListMulti 是赋值/返回/传参的“铺轨器”——前者取首值，末者铺
+// 多值，复刻 Lua 语义。障碍是空列表：返 nil 而非空切片，下游以 len 判缺省补 nil。
+// 取舍：薄循环委托单/多两版。排查现场：尾值多返回丢失先查是否误调 Single 版。
 func (c *Checker) checkExprListMulti(exprs []ast.Expr) []types.Type {
 	if len(exprs) == 0 {
 		return nil
@@ -33,6 +45,11 @@ func (c *Checker) checkExprListMulti(exprs []ast.Expr) []types.Type {
 }
 
 // checkExprSingle returns the first value of an expression.
+//
+// 设计者视角：checkExprSingle 是多值到单值的“取首器”——非末位、条件、算术等单值
+// 语境统一经此。障碍是零值（无返回函数）：空切片须退 Nil 而非 panic。取舍：
+// 调 Multi 后取 [0]，逻辑单源。不变量：永不返 nil。排查现场：取到 Nil 意外先查
+// 被调是否 void。
 func (c *Checker) checkExprSingle(e ast.Expr) types.Type {
 	ms := c.checkExprMulti(e)
 	if len(ms) == 0 {
@@ -41,11 +58,28 @@ func (c *Checker) checkExprSingle(e ast.Expr) types.Type {
 	return ms[0]
 }
 
+// checkExpr is the single-value entry (delegates to checkExprSingle).
+//
+// 设计者视角：checkExpr 是最常用的“便民门”——多数语境只要首值。薄委托保调用点
+// 简洁，门禁与展开藏于 Multi/One。排查现场：需多值却调此处（如传参）会丢值，
+// 应换 ListMulti/ExprMulti。
 func (c *Checker) checkExpr(e ast.Expr) types.Type {
 	return c.checkExprSingle(e)
 }
 
 // checkExprMulti expands multi-return calls on the last position.
+//
+// 设计者视角：checkExprMulti 是多值分流的“总盘”——Call/MethodCall/VarArg/Await
+// 各有展开，其余包单值。障碍有四：require 点名（驱动模块型）、error 标记（发射器
+// errdefer）、Point.new/super/makeChan 特判——顺序即优先级，挪一位即误判（如
+// super 被当普通调用）。候选：各特判散落 vs 集中；选集中，调用语义一处可览。
+// 图：
+//
+//	require? → error标记? → new实例? → super? → makeChan? → 通用 call
+//
+// 不变量：失败分支亦验参（错误不吞）。排查现场：特判未命中先查顺序与遮蔽
+// （如 require 被局部遮蔽即走通用）。
+
 func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 	switch n := e.(type) {
 	case *ast.CallExpr:
@@ -138,6 +172,12 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 	}
 }
 
+// currentVarArg returns the enclosing vararg element type, if any.
+//
+// 设计者视角：currentVarArg 是 `...` 的“查岗”——栈顶即当前函数变参元型，空栈或
+// nil 标记即无参函数。障碍是嵌套函数：内层非变参必须遮外层（栈顶为准）。取舍：
+// 只读不报，报错留给调用方。排查现场：`...` 误放行先查 varargStack 压弹（函数
+// 是否按 HasVarArg 入栈）。
 func (c *Checker) currentVarArg() types.Type {
 	if len(c.varargStack) == 0 {
 		return nil
@@ -145,6 +185,17 @@ func (c *Checker) currentVarArg() types.Type {
 	return c.varargStack[len(c.varargStack)-1]
 }
 
+// checkExprOne checks single-value expression forms (ident/literal/table/index/ops/casts).
+//
+// 设计者视角：checkExprOne 是单值形的“分诊台”——Ident 查值册（self/super 特判），
+// 字面量直构 Literal，表走 checkTable，索引/字段走 indexResult/lookupField（含
+// 可见性门禁与 LSP 打卡），双/单目走 checkBinOp/checkUnOp，cast 双向可赋即放，
+// `!` 剥 nil。障碍是恢复节点（nil Expr）：parser 已报，此处返 Any 不崩。取舍：
+// Call/Method 在此不可达（Multi 已分流），留断言兜底。图：
+//
+//	Ident→字面→表/函数→索引/字段→运算→cast/!/await单值
+//
+// 不变量：永不返 nil（兜底 Any）。排查现场：字段误报先查 lookupField 与门禁顺序。
 func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 	if e == nil {
 		// Recovery artifact (parser already reported); never crash.
@@ -269,6 +320,15 @@ func (c *Checker) checkExprOne(e ast.Expr) types.Type {
 	return types.Any
 }
 
+// checkTable checks a table literal (pure list as Tuple, else Object).
+//
+// 设计者视角：checkTable 是表字面的“分拣线”——ExprField 归列，Named/Indexed 归
+// 字段/索引器；无命名即纯列表（空表为空 Object，否则 Tuple 保序，见调用方转 Array），
+// 有命名即 Object（列部并为 integer 索引器）。障碍是 `["k"]=v` 与 `[1]=v` 混写：
+// 前者经 literalKey 升为命名字段，后者走索引器。候选：纯列表直给 Array vs Tuple；
+// 选 Tuple（保位置供 [string,number] 拟合，推断时再 widen 为 Array）。不变量：
+// 字段名冲突后者覆盖（ collected 先后即源序）。排查现场：元组拟合失败先查此处
+// 是否误判含命名。
 func (c *Checker) checkTable(n *ast.TableLit) types.Type {
 	// Collect.
 	var listElems []types.Type
@@ -312,6 +372,12 @@ func (c *Checker) checkTable(n *ast.TableLit) types.Type {
 	return obj
 }
 
+// literalKey extracts a static key from a table key expression, if any.
+//
+// 设计者视角：literalKey 是表键的“静态嗅探”——字符串经 unquote/parse 取内容，
+// 数字取原文；其余（变量/调用）返 nil 走索引器。障碍是长括号串与转义：先
+// unquoteKey 保源忠实，再 parse 兜底。取舍：best-effort，嗅不到即动态。排查现场：
+// `["a"]=1` 未进字段先查引号剥离是否失败。
 func literalKey(e ast.Expr) *string {
 	switch n := e.(type) {
 	case *ast.StringLit:
@@ -335,6 +401,12 @@ func literalKey(e ast.Expr) *string {
 // unquoteKey splits a string literal into content plus delimiter widths.
 // Handles "...", '...', and long brackets [[...]], [=[...]=] (any level).
 // Escapes stay raw (source-faithful, matching literalKey).
+//
+// 设计者视角：unquoteKey 是引号的“卡尺”——除内容外还量出来龙去脉的 open/close
+// 宽，供 stringKeyName 切内 Span（重命名不碰引号）。障碍是长括号多等号层级：
+// 逐字数 `=` 再拼关符，后缀校验防半截。转义保持 raw（源忠实）。不变量：ok 即
+// 内容切片有效。排查现场：成员重命名带上引号，先查 open/close 是否算错。
+
 func unquoteKey(lit string) (string, int, int, bool) {
 	if len(lit) >= 2 {
 		q := lit[0]
@@ -361,6 +433,12 @@ func unquoteKey(lit string) (string, int, int, bool) {
 // stringKeyName splits a quoted `"name"` literal into its member name and
 // inner span (quotes excluded, so rename edits preserve them).
 // Long strings and non-literals report false.
+//
+// 设计者视角：stringKeyName 是 `obj["field"]` 的“LSP 卡口”——把字面键切出成员名
+// 与去引号内 Span，索引器式访问亦能记成员。障碍是长串与空内容：前者 Span 难保
+// 引号语义，后者切无可切，一律 false 跳过。取舍：只认可切引号串。不变量：
+// 内 Span 恒在外 Span 内。排查现场：字符串索引跳转缺失先查此处是否 false。
+
 func stringKeyName(sl *ast.StringLit) (string, token.Span, bool) {
 	if sl == nil {
 		return "", token.Span{}, false
@@ -380,6 +458,12 @@ func stringKeyName(sl *ast.StringLit) (string, token.Span, bool) {
 	return name, inner, true
 }
 
+// parseStringLiteral best-effort unquotes a string literal (raw fallback).
+//
+// 设计者视角：parseStringLiteral 是“宽容脱壳”——双/单引去壳，长串尽量去括号，
+// 失败即返原文。障碍是 Lua 转义与 Go 引号语义不同：不求全等，只求键比对可用
+// （精比对另有 normStrLit）。取舍：永不报错（err 恒 nil 通道）。排查现场：键名
+// 含转义对不上，先查此处与 norm 的双轨是否一致。
 func parseStringLiteral(lit string) (string, error) {
 	if len(lit) >= 2 && (lit[0] == '"' || lit[0] == '\'') {
 		// Use strconv-ish unquoting for simple cases; Lua escapes differ, so best-effort.
@@ -398,6 +482,13 @@ func parseStringLiteral(lit string) (string, error) {
 // recordTableKeys records named keys of a table literal checked against a
 // nominal object type (interface implementations), recursing into nested
 // literals with the member's declared type.
+//
+// 设计者视角：recordTableKeys 是内联接口实现的“描图”——表字面按形参/返回的名义
+// Object 类型逐键打卡（Named 与 ["k"] 双式），嵌套表携成员声明型递归。障碍是
+// 匿名 Object 无 Entry：必须经 ownerEntry 回查到声明才记，否则结构表互相串。
+// 候选：全记 vs 声明才记；选后者，防误合并。不变量：Index 为 nil 即返。排查现场：
+// 内联实现跳转缺失先查 want 是否为具名 Object。
+
 func (c *Checker) recordTableKeys(lit *ast.TableLit, want types.Type) {
 	if c.Index == nil || lit == nil {
 		return
@@ -445,6 +536,13 @@ func (c *Checker) recordTableKeys(lit *ast.TableLit, want types.Type) {
 	}
 }
 
+// checkBinOp checks binary operators with Lua numeric/string semantics.
+//
+// 设计者视角：checkBinOp 是二目运算的“验算尺”——算术要数字（整数保整数，除/^
+// 恒 Number）、位运算要整数、连接要可连、等值恒 Boolean、大小比要可比、and/or
+// 并为 union。障碍是 anyLike 的传染：任一端 any 即放行，防动态代码刷屏。候选：
+// 精确值流 vs 类型级；选类型级（字面 Base 参与）。不变量：失败亦返合理结果型
+// 续流。排查现场：位运算误报先查 isIntegerLike（含 enum/union 透视）。
 func (c *Checker) checkBinOp(n *ast.BinOpExpr) types.Type {
 	l := c.checkExpr(n.L)
 	r := c.checkExpr(n.R)
@@ -490,6 +588,11 @@ func (c *Checker) checkBinOp(n *ast.BinOpExpr) types.Type {
 	return types.Any
 }
 
+// checkUnOp checks unary operators (not/len/minus/bitwise-not).
+//
+// 设计者视角：checkUnOp 与 BinOp 对偶——not 恒 Boolean，# 要 lengthable（串/表/
+// 数组…），- 要数字（整数保整数），~ 要整数。障碍同 any 放行。取舍：错即报、
+// 型照返。排查现场：# 误报先查 isLengthable 的 union 全员判据。
 func (c *Checker) checkUnOp(n *ast.UnOpExpr) types.Type {
 	x := c.checkExpr(n.X)
 	switch n.Op {

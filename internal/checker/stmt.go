@@ -10,9 +10,25 @@ import (
 // 分支发散信息用于流敏感窄化（return 后条件翻转）。
 
 // Statement checking (locals, assignment, control flow, return).
+//
+// 设计者视角：语句是三栈协同——retStack 管返回契约、labelStack/gotoList 管跳转
+// （函数级配对，见 func/class 体），if/while 携窄化（分支影子+发散翻转，见
+// checkIf）。障碍是恢复节点（nil Stmt）与未知语句：前者静返，后者报
+// CheckerUnsupportedStmt。取舍：do/if/for 各开层（变量不外泄），while 先验条件
+// 后窄体。图：
+//
+//	checkStmt →(local/assign/func)→ 符号+类型 →(if/loop)→ 窄化+块 →(return)→ 契约
+//
+// 排查现场：变量外泄先查 push/pop，发散窄化失效先查 blockDiverges。
 
 // ---------- statements ----------
 
+// checkStmt dispatches one statement (nil-safe, exhaustive switch).
+//
+// 设计者视角：checkStmt 是语句的“总盘”——Empty 静过，Expr 直验，Local/Global
+// 分流，Do/If/Loop 各有层与窄，类型声明转 typedecl/class，宏残留报内部错，
+// import/defer/spawn/select 各专函。障碍是新语法漏分支：default 报不支持而非
+// panic，保全量。取舍：nil 早返（恢复）。排查现场：某语句无检查先查 switch 是否缺分支。
 func (c *Checker) checkStmt(st ast.Stmt) {
 	if st == nil {
 		// Recovery artifact (parser already reported); never crash.
@@ -95,6 +111,17 @@ func (c *Checker) checkStmt(st ast.Stmt) {
 	}
 }
 
+// checkLocalAssign checks `local a[: T] [= v]` (annotated vs inferred).
+//
+// 设计者视角：checkLocalAssign 是局部定义的“双轨”——有标注即验 IsAssignable（错即报
+// 留 want），无标注即推（纯列表 Tuple→Array+ widenInferred 防过窄，余 widen）。
+// 缺省尾值补 Nil，无值无标即 Nil。障碍是同层重定义（Lua 允但多为 bug）：报
+// Redefinition（内置豁免），仍 bind 续流；表字面另描名义键（recordTableKeys）与
+// 结构桩（recordStructLiteral）。close 无值另报。图：
+//
+//	标注?验:推 → 重定义查 → bind+打卡 → 表键/结构记
+//
+// 不变量：bind 恒执行。排查现场：推断过窄（如字面未展宽）先查 widenInferred。
 func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 	var declTypes []types.Type
 	for _, tn := range n.Types {
@@ -179,6 +206,10 @@ func (c *Checker) checkLocalAssign(n *ast.LocalAssign) {
 	}
 }
 
+// widen strips one literal to its base (shallow, for legacy paths).
+//
+// 设计者视角：widen 是浅展宽——字面取 Base，余原样。深展宽用 widenInferred。
+// 留此薄函供旧径复用。排查现场：展宽不彻底先查是否误调此浅版。
 func widen(t types.Type) types.Type {
 	if lit, ok := t.(*types.Literal); ok {
 		return lit.Base
@@ -187,6 +218,13 @@ func widen(t types.Type) types.Type {
 }
 
 // widenInferred deep-widens literals for unannotated inference to avoid over-narrowing.
+//
+// 设计者视角：widenInferred 是推断的“防过窄网”——无标注 `local x=1` 应得 number
+// 而非字面 1，故深展（字面→基，union/数组/元组/映射/对象/类参递归，ClassValue
+// 直留）。障碍是对象字段内字面亦须展，否则 `local t={x="a"}` 的 x 被锁死。
+// 候选：浅展 vs 深展；选深展。取舍：Class 浅拷 Args（Def/链不动）。排查现场：
+// 推断仍字面先查是否绕过此处（如直接用 got）。
+
 func widenInferred(t types.Type) types.Type {
 	switch x := t.(type) {
 	case *types.Literal:
@@ -230,6 +268,11 @@ func widenInferred(t types.Type) types.Type {
 	}
 }
 
+// isPureList reports a list-only table literal (all ExprFields).
+//
+// 设计者视角：isPureList 是 Tuple→Array 的“扳道”——纯列表才可作可增长数组推断
+// （见 checkLocalAssign），含命名即对象。空表亦纯（调方按空对象/数组分流）。
+// 排查现场：列表推成对象先查字段 Kind 是否混入命名。
 func isPureList(lit *ast.TableLit) bool {
 	for _, f := range lit.Fields {
 		if f.Kind != ast.ExprField {
@@ -243,6 +286,11 @@ func isPureList(lit *ast.TableLit) bool {
 // `local Name [: Type] = require("path")`. Without an annotation the
 // driver-resolved module type applies (any when unresolved); with one,
 // the resolved type must satisfy it.
+//
+// 设计者视角：checkImport 是 import 的“等价桥”——无标注即取模块型（any 兜底），
+// 有标注即验模块型可赋标注（any 跳验）。重定义规同 local（内置豁免）。障碍是
+// 路径未解：不报（经典模式），只取 any。取舍：与 require 同货架（requirePathType）。
+// 排查现场：import 取 any 先查驱动 RequireTypes 键。
 func (c *Checker) checkImport(n *ast.ImportStmt) {
 	if n.Name == nil {
 		return
@@ -267,6 +315,11 @@ func (c *Checker) checkImport(n *ast.ImportStmt) {
 // checkDefer checks a deferred call like a normal call (argument checking
 // included). Bare `...` cannot cross into the deferred closure (it would
 // bind the closure's nonexistent varargs); copy into a local first.
+//
+// 设计者视角：checkDefer 是延迟调用的“直验”——按常验参，另查裸 `...`（hasBareVarArg）
+// 并指路存局部。障碍是 defer 体无变参可绑：`...` 会绑到不存在的闭包变参。取舍：
+// 验后查（错误并存）。排查现场：defer 内 `...` 未报先查 hasBareVarArg 是否透嵌套函数
+// （FuncLit 内即 false，属对）。
 func (c *Checker) checkDefer(n *ast.DeferStmt) {
 	c.checkExpr(n.Call)
 	if hasBareVarArg(n.Call) {
@@ -275,6 +328,12 @@ func (c *Checker) checkDefer(n *ast.DeferStmt) {
 }
 
 // hasBareVarArg reports a `...` outside nested function bodies.
+//
+// 设计者视角：hasBareVarArg 是变参逃逸的“嗅探”——遇 FuncLit 即止（内层 `...` 属内层），
+// 余者递归（调用/方法/二目/表/cast/await 等）。defer/spawn 共用（跨闭包即错）。
+// 障碍是 Paren/Await 包裹：须透视。取舍：纯读 AST。排查现场：`...` 漏报先查是否藏
+// 在未覆盖的表达式形（如新语法分支缺失）。
+
 func hasBareVarArg(x ast.Expr) bool {
 	switch n := x.(type) {
 	case *ast.VarArg:
@@ -328,6 +387,11 @@ func hasBareVarArg(x ast.Expr) bool {
 	return false
 }
 
+// checkLocalFunc checks `local function f()` (signature first, then body).
+//
+// 设计者视角：checkLocalFunc 是局部函数的“先签名后体”——签名先行供递归自调，
+// 重定义规同 local，bind 后打卡再验体。障碍是签名与体泛型环境各需压弹（func
+// 内已管），此处不另压。排查现场：递归调用找不到先查是否体前未 bind。
 func (c *Checker) checkLocalFunc(n *ast.LocalFuncDef) {
 	ft := c.funcTypeFromLit(n.Func, n.Generics)
 	if existing := c.cur().vars[n.Name.Name]; existing != nil && !existing.IsBuiltin {
@@ -338,6 +402,10 @@ func (c *Checker) checkLocalFunc(n *ast.LocalFuncDef) {
 	c.checkFuncBody(n.Func, n.Generics, ft)
 }
 
+// genericNames lists generic parameter names for function symbols (LSP hover).
+//
+// 设计者视角：genericNames 是函数符号的“泛型名片”——只存名（约束/默认存 Func
+// TypeParams），供悬停展示。薄抽取。排查现场：悬停泛型缺失先查此处与 TypeParams 是否同步。
 func genericNames(gs []*ast.GenericParam) []string {
 	var out []string
 	for _, g := range gs {
@@ -346,6 +414,13 @@ func genericNames(gs []*ast.GenericParam) []string {
 	return out
 }
 
+// checkGlobalFunc checks `function a.b:c()` (global or method definition).
+//
+// 设计者视角：checkGlobalFunc 容 Lua 的“补丁式定义”——单名全局：已存即更新类型
+// （函数重定义合法），无即 bind；多段/方法：验基存在，对象基即记字段（单层跟踪，
+// 深链从简）。体恒验。障碍是 `a.b.c` 深链：只记末字段于首基对象（近似）。取舍：
+// 全局仍落当前层（模块多局部+返回，全局罕见）。排查现场：方法调用找不到先查基
+// 对象字段是否在此记。
 func (c *Checker) checkGlobalFunc(n *ast.FuncDefStmt) {
 	ft := c.funcTypeFromLit(n.Func, n.Generics)
 	if n.Name == nil {
@@ -387,6 +462,17 @@ func (c *Checker) checkGlobalFunc(n *ast.FuncDefStmt) {
 	c.checkFuncBody(n.Func, n.Generics, ft)
 }
 
+// checkAssign checks `a, b.c, d[k] = vals` (per-target type and access).
+//
+// 设计者视角：checkAssign 是赋值的“逐靶验”——值先铺多（末位展开），靶分三式：
+// Ident（查值册+const 门+打卡）、Field（lookup+门禁+名义/结构双记，表值直流另钉桩）、
+// Index（indexResult+串键双记）。readonly 另拦。逐靶验 IsAssignable（错即报）。
+// 表值对名义 want 另描键（recordTableKeys），Ident 表值对非名义另分户。障碍是
+// 缺值补 Nil、无值取 Any（`f()=...` 形）。取舍：错靶仍验余靶。图：
+//
+//	铺值 → 逐靶(查型+门禁+打卡) → 验赋 → 表键/结构记
+//
+// 排查现场：成员赋值未跳转先查双记是否命中，readonly 漏报先查标记透传。
 func (c *Checker) checkAssign(n *ast.AssignStmt) {
 	valTypes := []types.Type{}
 	if len(n.Values) > 0 {
@@ -489,6 +575,17 @@ func (c *Checker) checkAssign(n *ast.AssignStmt) {
 	}
 }
 
+// checkIf checks if/elseif/else with branch narrowing and divergence flip.
+//
+// 设计者视角：checkIf 是流敏感的“眼镜店”——条件先验，Then 开层+真窄，elseif 各验
+// 各窄，Else 开层+假窄（只反首条件，elseif 链不反——近似）。发散翻转：Then 发散
+// 无 Else 即会后施假窄（卫语句 `if x==nil then return end` 后 x 非 nil），Else 发散
+// 即会后施真窄。障碍是发散判定（blockDiverges 只看末句，if 须双支发散）。取舍：
+// elseif 后不翻（复杂度换精度）。图：
+//
+//	验cond → 真窄Then → [elseif]* → 假窄Else → 发散?会后窄
+//
+// 排查现场：卫语句后未窄先查 blockDiverges 是否识发散（如 return 包在 do 里已识）。
 func (c *Checker) checkIf(n *ast.IfStmt) {
 	c.checkExpr(n.Cond)
 	c.push()
@@ -520,6 +617,12 @@ func (c *Checker) checkIf(n *ast.IfStmt) {
 	}
 }
 
+// blockDiverges reports whether a block always exits (return-terminated).
+//
+// 设计者视角：blockDiverges 是发散的“探针”——有 Ret 即散，末句 if 须 Then/Else/
+// elseif 全散，Do 透视，while 保守假，余者假。障碍是 `do return end` 包裹与
+// `if` 无 Else：前者透视，後者即不散。取舍：保守（宁假勿真，假只丢一次窄化机会）。
+// 排查现场：卫语句翻转失效先查末句是否为 if/do 包裹。
 func blockDiverges(b *ast.Block) bool {
 	if b == nil {
 		return false
@@ -558,6 +661,12 @@ func blockDiverges(b *ast.Block) bool {
 	return false
 }
 
+// checkNumericFor checks `for i = s, e[, step]` (numeric bounds, scoped var).
+//
+// 设计者视角：checkNumericFor 是数值循环的“量程表”——起止验后须可赋 Number（any
+// 放行，错报一次即停），步进照验，循环变量独层（默认 Number，标注另解）再验体。
+// 障碍是步进 nil（`for i=1,10 do`）：Step 为 nil 即跳。取舍：变量不外泄。排查现场：
+// 界误报先查 IsAssignable 方向（界→Number）。
 func (c *Checker) checkNumericFor(n *ast.NumericFor) {
 	s := c.checkExpr(n.Start)
 	e := c.checkExpr(n.End)
@@ -581,6 +690,12 @@ func (c *Checker) checkNumericFor(n *ast.NumericFor) {
 	c.pop()
 }
 
+// checkGenericFor checks `for k[, v] in exprs` (permissive element types).
+//
+// 设计者视角：checkGenericFor 取宽容——迭代源照验（chan iter 含 async 亦可），
+// 循环变量无标注恒 Any（有标注即解），独层验体。障碍是迭代协议多态（函数/表/通道）：
+// 不精判元素型，宁 Any 不误报。取舍：exprTypes 验而不用（占位后续精化）。排查现场：
+// 循环变量取到 Any 属预期（设计如此），非 bug。
 func (c *Checker) checkGenericFor(n *ast.GenericFor) {
 	var exprTypes []types.Type
 	for _, e := range n.Exprs {
@@ -599,6 +714,17 @@ func (c *Checker) checkGenericFor(n *ast.GenericFor) {
 	c.pop()
 }
 
+// checkReturn checks return values against the function contract.
+//
+// 设计者视角：checkReturn 是返回的“对账”——值先铺多，顶层（retStack 空，模块出口）
+// 只验不判；未标注（nil 哨兵）收 infer 备推断；void（空非 nil）多值即报；余者逐位
+// IsAssignable（缺位补 Nil），表值另描键。障碍是 nil 哨兵与 void 空的 Go 同形：
+// 靠是否 nil 辨（见 func.go）。取舍：逐位报首错即停？此处逐位各自可报（与调用单报错
+// 不同）。图：
+//
+//	铺vals → 顶层?返 → nil?收 → void?判空 → 逐位验
+//
+// 排查现场：返回误报先查 retStack 顶是 nil 还是空。
 func (c *Checker) checkReturn(r *ast.ReturnStmt) {
 	vals := []types.Type{}
 	if len(r.Exprs) > 0 {

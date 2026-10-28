@@ -55,10 +55,25 @@ type Func struct {
 }
 
 // Kind 返回 Func 的类型分类标签。
+//
+// 设计者视角：Kind 是 Func 的固定鉴别符 KFunc，与 Primitive 的"K 字段"模式
+// 不同——Func 是独立 struct，分类恒定，无需存储 K。排查现场：无。
 func (t *Func) Kind() Kind { return KFunc }
 
 // String 把 Func 渲染为规范文本。
+//
+// 设计者视角：多返回、可选参数、vararg、泛型声明、async 标记都要可逆地打印，
+// 以便诊断与缓存键；String 委托 stringSeen 并以空 seen 起步，stringSeen
+// 负责循环对象的折叠。排查现场：若函数类型打印缺 vararg/返回，检查此分支。
 func (t *Func) String() string { return t.stringSeen(map[Type]bool{}) }
+
+// stringSeen 用 visited 集合渲染 Func，容器/对象递归时转发 seen，避免循环类型
+// 打印死循环；Func 自身不入 seen（函数类型不可递归包含自身作为直接容器）。
+//
+// 设计者视角：Func 的参数/返回/类型参数都可能含循环对象，必须把 seen 转发给
+// typeString；Func 本身不入 seen 是因为函数类型不会被自身直接包含（递归函数
+// 通过 Object/Class 间接引用）。排查现场：若深层层类型打印成 "{...}"，检查
+// seen 的传递链是否断开。
 func (t *Func) stringSeen(seen map[Type]bool) string {
 	var ps []string
 	for _, p := range t.Params {

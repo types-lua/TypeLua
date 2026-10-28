@@ -5,10 +5,17 @@ import (
 )
 
 // Deep copy (expansion works on copies; definitions stay pristine).
+//
+// 设计者视角：复印是卫生的“底片保护”——每次展开全深拷体与实参，定义永 pristine，
+// 多次调用互不串。障碍是浅拷：Ident/Param/Block 若共享，改名会污染定义致二次展
+// 变味；故逐层深拷（含 TypeArgs/Generics）。候选：复用 vs 复印；选复印。不变量：
+// 拷后改之不影响原。排查现场：二次展开味变先查是否漏拷某层。
 
 // ---------- deep copy (expansion works on copies; definitions stay pristine) ----------
 
 func copyExpr(x ast.Expr) ast.Expr {
+	// 设计者视角：copyExpr 按型深拷表达式，末 default 直返（无子结构者）。障碍是
+	// Field/Method 的名指针亦须拷，否则改名串。排查现场：改名串定义先查此拷。
 	switch n := x.(type) {
 	case *ast.Ident:
 		c := *n
@@ -110,6 +117,8 @@ func copyExpr(x ast.Expr) ast.Expr {
 }
 
 func copyExprs(xs []ast.Expr) []ast.Expr {
+	// 设计者视角：copyExprs 批量拷实参列，保代入时每 occurrence 独份（见 subst 每用
+	// 必 copy）。障碍是空片：make 零长亦可。排查现场：多处代入互串先查是否复用同份。
 	out := make([]ast.Expr, len(xs))
 	for i, x := range xs {
 		out[i] = copyExpr(x)
@@ -118,6 +127,9 @@ func copyExprs(xs []ast.Expr) []ast.Expr {
 }
 
 func copyParams(ps []*ast.Param) []*ast.Param {
+	// 设计者视角：copyParams 连 Param 与其 Name 双拷，防改名透过指针污染定义。
+	// 障碍是只拷一层：Name 指针共享即串。不变量：双层新。排查现场：形参改名串定义
+	// 先查此处。
 	out := make([]*ast.Param, len(ps))
 	for i, p := range ps {
 		np := *p
@@ -129,6 +141,8 @@ func copyParams(ps []*ast.Param) []*ast.Param {
 }
 
 func copyBlock(b *ast.Block) *ast.Block {
+	// 设计者视角：copyBlock 深拷语句列+return，nil 宽容。障碍是 Ret nil：须判空。
+	// 不变量：nil 进 nil 出。排查现场：块共享致改名串先查语句拷。
 	if b == nil {
 		return nil
 	}
@@ -146,6 +160,10 @@ func copyBlock(b *ast.Block) *ast.Block {
 }
 
 func copyStmt(st ast.Stmt) ast.Stmt {
+	// 设计者视角：copyStmt 按语句型深拷，声明类（Type/Interface/Enum/Class）无运行时
+	// 宏位直返原（见注释），MacroDef 亦直返（上层已擦）。障碍是 Select/FuncDef 的
+	// 嵌套块与名指针：须递归拷。候选：反射全拷 vs 穷举；选穷举，新节点须显式决定。
+	// 不变量：新节点未覆盖走 default 直返。排查现场：新语法改名串先查此处是否直返。
 	switch n := st.(type) {
 	case *ast.EmptyStmt:
 		c := *n
@@ -294,6 +312,8 @@ func copyStmt(st ast.Stmt) ast.Stmt {
 }
 
 func copyIdents(xs []*ast.Ident) []*ast.Ident {
+	// 设计者视角：copyIdents 逐个值拷 Ident，防改名经指针串。障碍是空列。排查现场：
+	// 名串先查此处。
 	out := make([]*ast.Ident, len(xs))
 	for i, x := range xs {
 		c := *x

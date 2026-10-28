@@ -11,6 +11,10 @@ import (
 )
 
 // Project is a directory with a manifest and optional lock.
+//
+// 设计者视角：Project 是包操作的“工作台”——Dir 定根，Manifest 必有，Lock 可无，
+// HasLock 记 lock 是否曾在。障碍是无 manifest 目录：LoadProject 报错指 init。
+// 不变量：Manifest 永非 nil。排查现场：根错先查 FindManifest 上溯。
 type Project struct {
 	Dir      string
 	Manifest *Manifest
@@ -20,6 +24,10 @@ type Project struct {
 }
 
 // FindManifest searches dir upward for tlua.toml.
+//
+// 设计者视角：向上溯至根，首命中即项目根（类 go）。障碍是 Abs 失败：退原径。
+// 候选：当前目录 vs 上溯；选上溯，子目录可跑。不变量：空即无项目。排查现场：
+// 根错先查上溯。
 func FindManifest(dir string) string {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -39,6 +47,10 @@ func FindManifest(dir string) string {
 }
 
 // LoadProject loads the manifest (required) and lock (optional) for dir.
+//
+// 设计者视角：manifest 必有（缺即指 init），lock 有则解、无则空（HasLock 记之）。
+// 障碍是坏 toml：包路径指错因。候选：缺 lock 报错 vs 空；选空，新项目可跑。
+// 不变量：返时 Manifest 非 nil。排查现场：无项目先查上溯，坏文件先查包径。
 func LoadProject(dir string) (*Project, error) {
 	mp := FindManifest(dir)
 	if mp == "" {
@@ -65,16 +77,25 @@ func LoadProject(dir string) (*Project, error) {
 }
 
 // SaveManifest writes tlua.toml.
+//
+// 设计者视角：EncodeManifest 定序写，覆写原子由 OS 保。障碍是并发写：调用方串行。
+// 排查现场：diff 抖先查 Encode。
 func (p *Project) SaveManifest() error {
 	return os.WriteFile(filepath.Join(p.Dir, ManifestName), []byte(EncodeManifest(p.Manifest)), 0o644)
 }
 
 // SaveLock writes tlua.lock.
+//
+// 设计者视角：EncodeLock 定序写，fetch/get 后落盘。障碍是空 lock：仍写头注。
+// 排查现场：lock 抖先查 Encode。
 func (p *Project) SaveLock() error {
 	return os.WriteFile(filepath.Join(p.Dir, LockName), []byte(EncodeLock(p.Lock)), 0o644)
 }
 
 // replaceDir resolves a local replace target to an absolute directory.
+//
+// 设计者视角：相对拼 Dir，绝对直返。障碍是旧 lock 无 Replace 表：localSourceDir
+// 另兜。排查现场：本地径错先查拼基。
 func (p *Project) replaceDir(path string) (string, bool) {
 	tgt, ok := p.Manifest.Replace[path]
 	if !ok {
@@ -88,6 +109,10 @@ func (p *Project) replaceDir(path string) (string, bool) {
 
 // pinsForFetch seeds exact pins from the lock for requirements the lock
 // still satisfies (so fetch reproduces instead of upgrading).
+//
+// 设计者视角：fetch 保守——lock 中仍满足 query 者钉 exact，余走升级。障碍是本地条目：
+// 跳过（无版可钉）。候选：全升 vs 钉住；选钉住复现。不变量：本地不钉。排查现场：
+// fetch 升级先查钉。
 func pinsForFetch(m *Manifest, l *Lock) map[string]string {
 	pins := map[string]string{}
 	if l == nil {
@@ -123,6 +148,8 @@ func pinsForFetch(m *Manifest, l *Lock) map[string]string {
 }
 
 func equalVersion(tag string, v Version) bool {
+	// 设计者视角：两版 Compare==0 即等（预发全比）。障碍是 `v` 前缀：ParseVersion 容之。
+	// 排查现场：钉住失效先查此。
 	o, err := ParseVersion(tag)
 	if err != nil {
 		return false
@@ -131,6 +158,9 @@ func equalVersion(tag string, v Version) bool {
 }
 
 // registryFor builds the resolving registry (replace-aware).
+//
+// 设计者视角：GitRegistry 外包 ReplaceRegistry，根 replace+传递链统一。障碍是空
+// replace：仍包（见 ReplaceRegistry）。排查现场：本地不生效先查包。
 func (p *Project) registryFor(cache *Cache) Registry {
 	return ReplaceRegistry(&GitRegistry{Cache: cache}, p.Manifest.Replace, p.Dir)
 }
@@ -138,6 +168,11 @@ func (p *Project) registryFor(cache *Cache) Registry {
 // Get adds/updates requirements, resolves, downloads, and writes the lock.
 // 每个 spec 为 `path` 或 `path@query`（默认：保留 manifest query，否则
 // latest）。无 spec 时，所有直接依赖重新解析（升级）。
+//
+// 设计者视角：get 是“加购+结算”——spec 入 manifest（空 query 保旧 else latest），
+// 升级集=spec 径+无 spec 时全直接，全解+下载+写盘。障碍是 path 查询含 `/`：
+// splitSpec 按首 `@` 切，径禁 `@` 保可分。候选：部分升 vs 全升；选显式集。不变量：
+// manifest 先验。排查现场：未升级先查升级集，径错先查 split。
 func Get(ctx context.Context, p *Project, cache *Cache, specs []string) (*Lock, error) {
 	if err := GitAvailable(ctx); err != nil {
 		return nil, err
@@ -214,6 +249,9 @@ func Get(ctx context.Context, p *Project, cache *Cache, specs []string) (*Lock, 
 // source (explicit URL or "") per path. Locally-forced content (root
 // replaces and discovered transitive path links) bypasses lookup inside
 // the resolver; backfillLockDirs records where it came from.
+//
+// 设计者视角：钉住版（exact pin）交 resolver 保复现，本地直通（见 selectLocal）。
+// 障碍是 URL 覆：pinSource 记源供下载。排查现场：复现变升级先查 pins。
 func (p *Project) resolveLocked(ctx context.Context, cache *Cache, pins map[string]string) (*Lock, map[string]string, error) {
 	reg := p.registryFor(cache)
 	cp := &Manifest{Name: p.Manifest.Name, Version: p.Manifest.Version, Deps: map[string]*Dep{}, Replace: p.Manifest.Replace}
@@ -236,6 +274,9 @@ func (p *Project) resolveLocked(ctx context.Context, cache *Cache, pins map[stri
 
 // backfillLockDirs records project-relative source dirs for local entries
 // (portable across checkouts; standalone vendor/graph need no resolver).
+//
+// 设计者视角：本地条目录 Dir 相对化（相对 Dir 斜杠），跨机可携。障碍是绝对残留：
+// 相对化之。排查现场：跨检出 vendor 错先查 Dir。
 func (p *Project) backfillLockDirs(reg Registry, l *Lock) {
 	for i := range l.Entries {
 		e := &l.Entries[i]
@@ -255,6 +296,9 @@ func (p *Project) backfillLockDirs(reg Registry, l *Lock) {
 
 // splitSpec splits `path[@query]` at the first `@`
 // (paths never contain `@`; queries never contain `/`).
+//
+// 设计者视角：首 `@` 切径询，无 `@` 即全径。障碍是径含 `@`：ValidPath 已禁。
+// 排查现场：切错先查径合法。
 func splitSpec(s string) (string, string) {
 	// A query never contains `/`; the path never contains `@`.
 	if i := strings.Index(s, "@"); i >= 0 {
@@ -265,6 +309,11 @@ func splitSpec(s string) (string, string) {
 
 // Fetch re-resolves (respecting lock pins), verifies upstream commits,
 // downloads everything, and writes the lock.
+//
+// 设计者视角：fetch 是“复现键”——pinsForFetch 钉住可复现者，resolveLocked 重解，
+// verifyLockCommits 防上游 tag 漂（漂即错，须显式 get 升），下载+写盘。障碍是 tag
+// 移动：fetch 不升，报错。候选：静默跟 vs 报错；选报错保复现。不变量：漂移即错。
+// 排查现场：fetch 失败先查 tag 漂。
 func Fetch(ctx context.Context, p *Project, cache *Cache) (*Lock, error) {
 	if err := GitAvailable(ctx); err != nil {
 		return nil, err
@@ -288,6 +337,9 @@ func Fetch(ctx context.Context, p *Project, cache *Cache) (*Lock, error) {
 
 // verifyLockCommits fails when a locked module's upstream tag moved
 // (explicit `get` upgrades; fetch reproduces).
+//
+// 设计者视角：新旧 lock 同径 tag 版而 commit 异即上游改写，fetch 拒。障碍是 commit
+// 钉（非 tag）：版同 commit 同即过。排查现场：fetch 漂移错先查 tag 改写。
 func verifyLockCommits(old, newl *Lock) error {
 	if old == nil {
 		return nil
@@ -306,6 +358,8 @@ func verifyLockCommits(old, newl *Lock) error {
 }
 
 func shortSHA(s string) string {
+	// 设计者视角：日志短 SHA 取 12 位（git 短惯例加长），短者原样。障碍是 `local`：
+	// 原样。排查现场：日志对不上先查截位。
 	if len(s) > 12 {
 		return s[:12]
 	}
@@ -314,6 +368,9 @@ func shortSHA(s string) string {
 
 // localSourceDir resolves a locked local entry to an absolute directory:
 // the lock's recorded dir first, then the root replace table (old locks).
+//
+// 设计者视角：本地源两阶——lock Dir（新）优先，根 replace（旧）兜，非 local 拒。
+// 障碍是旧 lock 无 Dir：replace 兜。排查现场：本地缺先查两阶。
 func (p *Project) localSourceDir(e LockEntry) (string, bool) {
 	if e.Commit != "local" {
 		return "", false
@@ -330,6 +387,10 @@ func (p *Project) localSourceDir(e LockEntry) (string, bool) {
 
 // downloadAll ensures every locked module tree is present.
 // sources maps paths to explicit fetch URLs (may be empty per path).
+//
+// 设计者视角：逐条本地验存、已存验指纹跳过、缺者定源 EnsureTree。障碍是离线现存树：
+// 免 URL（见 Present 跳）。候选：全下 vs 按需；选按需。不变量：本地不进缓存。
+// 排查现场：离线失败先查现存跳，源错先查 sources/sourceURL。
 func (p *Project) downloadAll(ctx context.Context, cache *Cache, l *Lock, sources map[string]string) error {
 	for _, e := range l.Entries {
 		if dir, ok := p.localSourceDir(e); ok {
@@ -358,6 +419,9 @@ func (p *Project) downloadAll(ctx context.Context, cache *Cache, l *Lock, source
 }
 
 // sourceURL returns the fetch URL for a locked path.
+//
+// 设计者视角：显式 URL 优先，余重探（传递依赖无 manifest 条，lock 不存 URL，故
+// 确定性重探）。障碍是传递源：须重探。排查现场：源漂移先查重探。
 func (p *Project) sourceURL(ctx context.Context, cache *Cache, path string) (string, error) {
 	if d := p.Manifest.Deps[path]; d != nil && d.URL != "" {
 		return d.URL, nil
@@ -369,6 +433,9 @@ func (p *Project) sourceURL(ctx context.Context, cache *Cache, path string) (str
 }
 
 // VendorDir returns the project's vendor directory.
+//
+// 设计者视角：`Dir/tlua_modules`，构建与 LSP 同源。障碍是相对：拼 Dir 绝对化。
+// 排查现场：vendor 错位先查 Dir。
 func (p *Project) VendorDir() string {
 	return filepath.Join(p.Dir, VendorDir)
 }
@@ -379,6 +446,11 @@ func (p *Project) VendorDir() string {
 // ffi.load/C-module/IPC differences), and native libraries (*.so/*.dylib/
 // *.dll shared, *.a static). Headers and other files stay in the module
 // cache only.
+//
+// 设计者视角：vendor 是“随行粮”——先保树现存（downloadAll），清旧 vendor 全量重铺
+// （保删文件消失），本地拷、远程树拷，末写 modules.txt。障碍是旧 vendor 残留：
+// 全清重铺；障碍是点文件/.git：copyTlTree 滤之。候选：增量 vs 全量；选全量简单准。
+// 不变量：vendor 恒 lock 全量。排查现场：残留文件先查清铺，陈旧先查下载。
 func (p *Project) Vendor(ctx context.Context, cache *Cache) error {
 	if p.Lock == nil || len(p.Lock.Entries) == 0 {
 		return fmt.Errorf("nothing to vendor (empty lock; run `tlua mod fetch` first)")
@@ -413,6 +485,9 @@ func (p *Project) Vendor(ctx context.Context, cache *Cache) error {
 }
 
 // SortedEntries returns lock entries ordered by path.
+//
+// 设计者视角：拷 lock 按径排，保 vendor/graph 输出稳。障碍是原序手改：重排。
+// 排查现场：输出抖先查此。
 func SortedEntries(l *Lock) []LockEntry {
 	out := append([]LockEntry(nil), l.Entries...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
@@ -422,7 +497,10 @@ func SortedEntries(l *Lock) []LockEntry {
 // copyTlTree copies module runtime assets (preserving layout) from src to dst:
 // *.tl (incl. *.d.tl), *.lua shims, and native libs (*.so/*.dylib/*.dll shared,
 // *.a static).
-// Dotfiles and .git stay out; everything else (headers, docs) stays cached.
+//
+// 设计者视角：仅四类运行时资产可 vendor（点文件/.git/头文档全留缓存），Walk 保
+// 布局，文件 644、目录 755。障碍是点文件：跳；头文件：跳。候选：全拷 vs 白名单；
+// 选白名单小 vendor。不变量：目录结构同源。排查现场：shim 缺先查后缀表。
 func copyTlTree(src, dst string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
@@ -461,6 +539,8 @@ func copyTlTree(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
+	// 设计者视角：流拷 644，关错合并（写错优先）。障碍是半写：调用方全量 vendor
+	// 重铺盖之。排查现场：拷坏先查关错。
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -478,6 +558,9 @@ func copyFile(src, dst string) error {
 }
 
 // Graph describes locked modules and their inter-edges.
+//
+// 设计者视角：Nodes 为 lock 序，Edges 径→依赖径（排好）。障碍是图须离线可画：
+// 只读缓存树/本地，不触网。排查现场：边缺先查 manifest 读。
 type Graph struct {
 	Nodes []LockEntry
 	// Edges maps module path -> required module paths (queries resolved).
@@ -486,6 +569,10 @@ type Graph struct {
 
 // ModuleGraph loads each locked module's manifest (from cache trees or
 // replace dirs) to describe the dependency graph offline.
+//
+// 设计者视角：逐 lock 条读 manifest（本地直读、远程读树），缺树即指 fetch，坏
+// manifest 跳（叶视）。障碍是未下载：显错指 fetch。候选：联网补 vs 离线；选离线。
+// 不变量：零网络。排查现场：图空先查树 present。
 func ModuleGraph(ctx context.Context, p *Project, cache *Cache) (*Graph, error) {
 	g := &Graph{Edges: map[string][]string{}}
 	for _, e := range SortedEntries(p.Lock) {
@@ -514,6 +601,8 @@ func ModuleGraph(ctx context.Context, p *Project, cache *Cache) (*Graph, error) 
 }
 
 func readLocalManifest(dir string) *Manifest {
+	// 设计者视角：坏 manifest 返 nil 视叶（graph 容错），严格路另有 readLocalStrict。
+	// 障碍是缺文：nil。排查现场：边缺先查此吞错。
 	raw, err := os.ReadFile(filepath.Join(dir, ManifestName))
 	if err != nil {
 		return nil

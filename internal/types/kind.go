@@ -134,6 +134,11 @@ const (
 )
 
 // String 把 Access 渲染为可见性关键字拼写。
+//
+// 设计者视角：可见性关键字固定三态，switch 穷举即可；默认分支返回 "public"
+// 而非报错，是为了让未知/零值 Access 退化为最宽松的 public，避免构造期
+// 遗漏 Access 时把成员误判为私有导致误报。排查现场：若诊断里出现 "public"
+// 而源码写的是 protected，检查 Access 常量赋值与 iota 顺序。
 func (a Access) String() string {
 	switch a {
 	case Private:
@@ -194,7 +199,16 @@ type Primitive struct {
 }
 
 // Kind 返回 Primitive 的类型分类标签。
+//
+// 设计者视角：Primitive 的分类直接由 K 字段承载（与其它类型"Kind() 返回固定
+// 常量"不同），因为原语家族共享一个 struct、靠 K 区分；这样 any/number/...
+// 都是 *Primitive 单例，指针身份稳定。排查现场：若 Kind() 返回异常，检查
+// 单例初始化时 K 是否与 Name 对齐。
 func (t *Primitive) Kind() Kind { return t.K }
 
 // String 把 Primitive 渲染为规范文本（用于消息与缓存键）。
+//
+// 设计者视角：原语打印名即其身份（"number"、"any"），Name 在单例初始化时
+// 固定，避免每次渲染重新映射 Kind->字符串；缓存键依赖该字符串稳定。
+// 排查现场：若缓存命中失败，检查单例 Name 是否被意外覆盖。
 func (t *Primitive) String() string { return t.Name }

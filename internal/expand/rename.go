@@ -5,6 +5,11 @@ import (
 )
 
 // Hygiene: scope-aware renaming of macro-introduced bindings.
+//
+// 设计者视角：卫生改名是“全员换证”——体拷贝内每个局部绑 fresh 新名，引用经
+// save/restore 影子栈消解，label 另预扫（goto 可前跳）。障碍是遮参：影子绑与
+// 其域引用须同新名；跨函数同名 label 永不交互故可统改；fresh 须避实参全拼。
+// 图：prescan(labels)→rename(绑+引)→subst(参换实)。
 
 // ---------- hygiene: scope-aware renaming ----------
 //
@@ -26,6 +31,8 @@ type renameCtx struct {
 }
 
 func copyStrMap(m map[string]string) map[string]string {
+	// 设计者视角：copyStrMap 快照 vars 供 scoped 恢复，防兄弟块串名。障碍是 map
+	// 引用共享：不拷即改穿。排查现场：兄弟块名串先查 scoped 快照。
 	out := make(map[string]string, len(m))
 	for k, v := range m {
 		out[k] = v
@@ -34,6 +41,10 @@ func copyStrMap(m map[string]string) map[string]string {
 }
 
 // scoped runs fn with a restored variable map afterwards.
+//
+// 设计者视角：scoped 给闭包拍 vars 快照、跑后恢复，保 for/select/函数形参域不泄。
+// 障碍是忘恢复即兄弟串名。候选：checkpoint 计数 vs 全拷；选全拷，简单。不变量：
+// 出口 vars 与入口等。排查现场：域外见 fresh 名先查 scoped。
 func (r *renameCtx) scoped(fn func()) {
 	saved := copyStrMap(r.vars)
 	fn()
@@ -41,11 +52,18 @@ func (r *renameCtx) scoped(fn func()) {
 }
 
 func (r *renameCtx) bindVar(orig string) {
+	// 设计者视角：bindVar 给旧名发 fresh 新证并入 avoid（后绑避前 fresh）。障碍是
+	// 两绑同原：后者覆前者恰为遮蔽。排查现场：两同名绑同新名先查 avoid 更新。
 	r.vars[orig] = r.e.fresh(orig, r.avoid)
 	r.avoid[r.vars[orig]] = true
 }
 
 // prescanLabels assigns one fresh name per label spelling in the body.
+//
+// 设计者视角：label 须预扫——goto 可在 label 前，故一遍綁名、二遍改写，保前后跳
+// 同名。障碍是函数边界：不同函数同名 label 互不干扰，此处全体綁亦 sound（见注释）。
+// 候选：分函数域 vs 统一；选统一，简单且 sound。排查现场：label 跳错先查 prescan
+// 是否覆盖该体。
 func (r *renameCtx) prescanLabelsStmt(st ast.Stmt) {
 	switch n := st.(type) {
 	case *ast.GotoStmt:
@@ -95,6 +113,8 @@ func (r *renameCtx) prescanLabelsStmt(st ast.Stmt) {
 }
 
 func (r *renameCtx) bindLabel(orig string) {
+	// 设计者视角：bindLabel 一拼一名，重复綁复用首名，保 goto/label 同新。障碍是
+	// 多 label 同拼：须同名。排查现场：跳接错位先查复用。
 	if _, ok := r.labels[orig]; !ok {
 		r.labels[orig] = r.e.fresh(orig, r.avoid)
 		r.avoid[r.labels[orig]] = true
@@ -102,6 +122,8 @@ func (r *renameCtx) bindLabel(orig string) {
 }
 
 func (r *renameCtx) prescanLabelsBlock(b *ast.Block) {
+	// 设计者视角：块级预扫逐句，nil 宽容（空体）。障碍是 Ret 无 label：只扫 Stmts。
+	// 排查现场：块内 label 漏改先查此循环。
 	if b == nil {
 		return
 	}
@@ -111,6 +133,8 @@ func (r *renameCtx) prescanLabelsBlock(b *ast.Block) {
 }
 
 func (r *renameCtx) prescanLabelsExpr(x ast.Expr) {
+	// 设计者视角：表达式内 FuncLit 体可藏 label/goto，须递归预扫；余者下钻。
+	// 障碍是表达式无 label 位：只找 FuncLit。排查现场：闭包内跳错先查此下钻。
 	switch n := x.(type) {
 	case *ast.FuncLit:
 		r.prescanLabelsBlock(n.Body)
@@ -151,6 +175,8 @@ func (r *renameCtx) prescanLabelsExpr(x ast.Expr) {
 }
 
 func childStmts(st ast.Stmt) []ast.Stmt {
+	// 设计者视角：childStmts 给循环三兄弟取体供预扫，余者 nil。障碍是 If/Select 体
+	// 多：上层另行处理，此处只 cover 单体循环。排查现场：循环内 label 漏先查此处。
 	switch n := st.(type) {
 	case *ast.WhileStmt:
 		return n.Block.Stmts
@@ -165,6 +191,9 @@ func childStmts(st ast.Stmt) []ast.Stmt {
 }
 
 func (r *renameCtx) renameBlock(b *ast.Block) {
+	// 设计者视角：renameBlock 快照 vars、逐句改名、末恢复，保兄弟块隔离；Ret 亦改。
+	// 障碍是块内绑须对后句可见、对块外不可见：快照+恢复恰之。排查现场：块外见 fresh
+	// 先查恢复。
 	if b == nil {
 		return
 	}
@@ -181,6 +210,8 @@ func (r *renameCtx) renameBlock(b *ast.Block) {
 }
 
 func (r *renameCtx) renameFuncLit(fn *ast.FuncLit) {
+	// 设计者视角：函数字面量 scoped 綁形参（含具名 rest）再改体，保参域干净。
+	// 障碍是 ... 名亦须綁（见 VarArgName）。排查现场：参名残留先查此綁。
 	r.scoped(func() {
 		for _, p := range fn.Params {
 			r.bindVar(p.Name.Name)
@@ -195,6 +226,9 @@ func (r *renameCtx) renameFuncLit(fn *ast.FuncLit) {
 }
 
 func (r *renameCtx) renameStmt(st ast.Stmt) {
+	// 设计者视角：renameStmt 先值后名（LocalAssign 值先改、名后綁），函数名先綁
+	// （递归），for/select 量 scoped 綁，goto/label 查表换。障碍是 Import 绑名亦
+	// 宏局须綁。候选：穷举 vs 反射；选穷举。排查现场：新语句漏改先查分支。
 	switch n := st.(type) {
 	case *ast.LocalAssign:
 		for _, v := range n.Values {
@@ -338,6 +372,10 @@ func (r *renameCtx) renameStmt(st ast.Stmt) {
 
 // renameExpr resolves references through the current maps. Note it takes
 // only the expression: label positions never appear inside expressions.
+//
+// 设计者视角：renameExpr 只换 Ident（查 vars 表），FuncLit 开域，余者下钻；label
+// 永不在表达式内故无分支。障碍是 Field 名（`a.foo` 的 foo）非变量须留。候选：全换
+// vs 仅 Ident；选后者。不变量：Field/Method 名不动。排查现场：字段名被换先查分支。
 func (r *renameCtx) renameExpr(x ast.Expr) {
 	switch n := x.(type) {
 	case *ast.Ident:
@@ -386,6 +424,11 @@ func (r *renameCtx) renameExpr(x ast.Expr) {
 
 // collectIdents gathers every identifier spelling in an expression
 // (over-approximate and safe: extra avoid-names only bump the counter).
+//
+// 设计者视角：collectIdents 为 avoid 采“全拼过近似”——宁多采（counter 多跳）不漏采
+// （捕获）。障碍是 FuncLit 体与 Field 名：体须下钻采，字段名亦采（保 fresh 避之）。
+// 候选：精确自由变量 vs 过近似；选后者，简单安全。不变量：多采无害、少采致命。
+// 排查现场：捕获先查此覆盖。
 func collectIdents(out map[string]bool, x ast.Expr) {
 	switch n := x.(type) {
 	case *ast.Ident:
@@ -446,6 +489,9 @@ func collectIdents(out map[string]bool, x ast.Expr) {
 }
 
 func collectStmtIdents(out map[string]bool, st ast.Stmt) {
+	// 设计者视角：语句版全拼采集，与 collectIdents 对仗，供实参 avoid。障碍是新语句
+	// 须同步加分支，否则 fresh 撞名。候选：复用 rename 走 vs 独立；选独立采拼。
+	// 排查现场：实参名被捕获先查此分支。
 	switch n := st.(type) {
 	case *ast.LocalAssign:
 		for _, id := range n.Names {

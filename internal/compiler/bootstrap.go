@@ -101,12 +101,23 @@ end
 
 // preludeLines is the generated-line shift the prelude causes (1-based
 // mappings move down by this much). Counted, not hardcoded.
+//
+// 设计者视角：preludeLines 是映射的“标尺”——数换行得偏移，prelude 改行数亦自
+// 适应。障碍是硬编码行数：prelude 一改即错位；故 Count 实时算。候选：硬编码 vs
+// 实算；选实算。不变量：恒等 strings.Count "\n"。排查现场：铺 prelude 后映射
+// 全偏先查此处是否被硬编码替代。
 func preludeLines() int {
 	return strings.Count(modPathPrelude, "\n")
 }
 
 // NeedsModPath reports whether the program needs the runtime bootstrap:
 // any file requires a module, or any file is itself vendored.
+//
+// 设计者视角：NeedsModPath 是 prelude 的“点火判据”——任一 require 或身处 vendor
+// 即铺路（package.path/cpath/searcher）。障碍是 IsDecl/空 AST：声明文件不算，
+// File nil 跳过；vendor 判用 Clean+分隔符防前缀误撞。候选：每文件铺 vs 按需铺；
+// 选按需，纯单文件零负担。不变量：纯读。排查现场：require 运行时找不到先查此
+// 判据，未铺 prelude 多为 RequiredModules 漏报。
 func NeedsModPath(p *Program) bool {
 	vendor := filepath.Clean(filepath.Join(p.Cfg.Dir, mod.VendorDir)) + string(os.PathSeparator)
 	for _, sf := range p.Files {
@@ -126,6 +137,11 @@ func NeedsModPath(p *Program) bool {
 // PrependPrelude prepends the module bootstrap to emitted Lua and shifts
 // source-map generated lines down accordingly. Mappings are copied, never
 // mutated in place.
+//
+// 设计者视角：PrependPrelude 是“铺路+抬标”——头插 prelude 文本，映射 GenLine
+// 统加 shift。障碍是别名污染：若原地改行，同一 mappings 被两次铺会叠加；故
+// 拷贝新片。候选：原地 vs 拷贝；选拷贝，compute 并行安全。不变量：输入 mappings
+// 不动。排查现场：二次铺行号翻倍先查是否复用已移片。
 func PrependPrelude(out string, mappings []sourcemap.Mapping) (string, []sourcemap.Mapping) {
 	shift := preludeLines()
 	moved := make([]sourcemap.Mapping, len(mappings))

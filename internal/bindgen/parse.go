@@ -13,6 +13,9 @@ var (
 )
 
 // bracePart 返回第一个 {...} 子串（含括号）。
+//
+// 设计者视角：首 `{` 起计数配对取体，保嵌套 struct 不早断。障碍是失配：返 "" 上游
+// 跳。排查现场：体空先查配对。
 func bracePart(s string) string {
 	start := strings.Index(s, "{")
 	if start < 0 {
@@ -33,6 +36,10 @@ func bracePart(s string) string {
 }
 
 // typedefTrailingName 返回 typedef 的尾随标识符（} 之后）。
+//
+// 设计者视角：`}` 后末标识即别名（去 `*` 空格），供 typedef struct/enum 命名。
+// 障碍是无别名（`typedef struct Tag{...};`）：返 "" 上游用 Tag。排查现场：别名空
+// 先查 `}` 后。
 func typedefTrailingName(t string) string {
 	end := strings.LastIndex(t, "}")
 	if end < 0 {
@@ -48,12 +55,16 @@ func typedefTrailingName(t string) string {
 }
 
 func afterBraceTypedefName(t, _ string) string {
+	// 设计者视角：拼 `Name { ... }` 供 enum 复用解析（见 handleTypedef）。障碍是空名：
+	// 拼空由下流拒。排查现场：枚举名错先查此拼。
 	// 为枚举解析重构 "Name { ... }"。
 	name := typedefTrailingName(t)
 	return name + " " + bracePart(t)
 }
 
 func cleanIdent(s string) string {
+	// 设计者视角：去饰（星/括号/逗号/数组/位域）取纯名，供 Tag/别名/声明符。障碍是
+	// `buf[64]`/`x:4`：截之。排查现场：名带饰先查此。
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, "*() [],;")
 	s = strings.TrimSpace(s)
@@ -69,6 +80,8 @@ func cleanIdent(s string) string {
 }
 
 func forwardDeclName(t string) string {
+	// 设计者视角：`struct Foo;` 双词形取名前向名，供 cdata 别名。障碍是多词：非双词
+	// 返 ""。排查现场：前向未登记先查词数。
 	t = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(t), ";"))
 	f := strings.Fields(t)
 	if len(f) == 2 && (f[0] == "struct" || f[0] == "enum" || f[0] == "union") && identRe.MatchString(f[1]) {
@@ -78,6 +91,10 @@ func forwardDeclName(t string) string {
 }
 
 // parseStructDecl 处理 `struct Name {...}` 与 `typedef struct [Tag] {...} Alias`。
+//
+// 设计者视角：取体→定名（typedef 尾名优先、退 Tag；非 typedef 取 Tag）→逐字段映类型
+// 拼 `type N = {...}`。障碍是匿名（名非法）：返 "" 跳。候选：匿 struct 编号 vs 跳；
+// 选跳保名义。排查现场：struct 丢失先查名。
 func parseStructDecl(t string, isTypedef bool, known map[string]bool) (string, string) {
 	brace := bracePart(t)
 	if brace == "" {
@@ -108,6 +125,8 @@ func parseStructDecl(t string, isTypedef bool, known map[string]bool) (string, s
 }
 
 func structTagName(t string) string {
+	// 设计者视角：取 `struct` 后 `{` 前末标识为 Tag（防尾别名混）。障碍是匿名（直 `{`）：
+	// 返 ""。排查现场：Tag 错先查 `{` 前截。
 	// struct Tag {...} — Tag 是 struct 后的标识符（若非 `{`）。
 	rest := strings.TrimSpace(t)
 	rest = strings.TrimPrefix(rest, "typedef")
@@ -130,6 +149,9 @@ func structTagName(t string) string {
 }
 
 // parseStructFields 在深度 0 按 ';' 拆分结构体体。
+//
+// 设计者视角：体零深切分→每句 splitDeclarators 展多声明符→名+映类型拼 `n: T`，
+// 未知名按值 any。障碍是位域/数组：名已净、型映 cdata。排查现场：字段缺先查切分。
 func parseStructFields(inner string, known map[string]bool) []string {
 	var out []string
 	for _, stmt := range splitFields(inner) {
@@ -160,6 +182,8 @@ func parseStructFields(inner string, known map[string]bool) []string {
 }
 
 func splitFields(s string) []string {
+	// 设计者视角：struct 体零深 `;` 切（括号/花括号计数），供字段展。障碍是函数指针
+	// 字段含逗号：此处只切 `;`，逗号留 splitDeclarators。排查现场：字段粘连先查 depth。
 	var out []string
 	depth := 0
 	start := 0
@@ -182,6 +206,9 @@ func splitFields(s string) []string {
 }
 
 // splitDeclarators 把 `int x, *y[4]` 拆为基类型 `int` + 声明符。
+//
+// 设计者视角：顶层逗号切（括号计数），首词为基、余为声明符（名+后缀），供逐映。
+// 障碍是 `,` 在括号内（函数指针）：计数避。排查现场：多声明符丢先查切分。
 func splitDeclarators(stmt string) (string, []string) {
 	// 在深度 0（括号/方括号）处按 ',' 拆分。
 	var parts []string
@@ -220,6 +247,8 @@ func splitDeclarators(stmt string) (string, []string) {
 }
 
 func declaratorName(d string) string {
+	// 设计者视角：`(*cb)` 取括内名，余取尾标识（去初始化器/饰）。障碍是 `x=5`：
+	// 先截 `=`。排查现场：名错先查分支。
 	d = strings.TrimSpace(d)
 	// 结构体内的函数声明符（函数指针字段）？
 	// `int (*cb)(int)` -> 名字 `cb`。
@@ -242,6 +271,8 @@ func declaratorName(d string) string {
 }
 
 func declaratorSuffix(d string) string {
+	// 设计者视角：缀 `*`/`[]` 供 mapCType 识指针/数组。障碍是函数指针双星：补之。
+	// 排查现场：指针误 any 先查缀。
 	// 恢复每个声明符的指针/数组标记以供映射。
 	s := ""
 	if strings.Contains(d, "*") {
@@ -257,6 +288,10 @@ func declaratorSuffix(d string) string {
 }
 
 // parseEnumDecl 处理 `enum Name { A, B = 5, ... }`。
+//
+// 设计者视角：`{` 前末词为名，逗号切员（`A=expr` 显值经 evalSimpleInt，自增跟随），
+// 拼 `type N = "A" | ...` 联合（TypeLua 枚举式）。障碍是匿名：名非法即跳；复杂值：
+// 原样串。候选：数值 vs 字串联合；选联合可读。排查现场：成员丢先查逗号切。
 func parseEnumDecl(t string) (string, string) {
 	brace := bracePart(t)
 	if brace == "" {
@@ -316,6 +351,8 @@ func parseEnumDecl(t string) (string, string) {
 }
 
 func evalSimpleInt(expr string) (int, bool) {
+	// 设计者视角：去括号符→符号→下划线→ParseInt(0) 容十六/八/十，供枚举自增跟随。
+	// 障碍是表达式（`1<<2`）： false 上游原样串。排查现场：自增值错先查此。
 	expr = strings.TrimSpace(expr)
 	expr = strings.Trim(expr, "() ")
 	neg := false
@@ -338,6 +375,11 @@ func evalSimpleInt(expr string) (int, bool) {
 }
 
 // parsePrototype 处理 `<ret> <name>(<params>)`。
+//
+// 设计者视角：末标识为名、余为返（补 `*` 经 ptrMark），`void`/空即无参，余 splitParams
+// 逐映（`void` 吞、`...` 变 `...any`），拼 `name(...): ret` 方法串。障碍是返回指针
+// 空格（`char *foo`）：ptrMark 恢复。候选：严格 vs 退 any；选退 any。不变量：
+// 失败返 ""。排查现场：原型丢先查括号，类型 any 先查 map。
 func parsePrototype(t string, known map[string]bool) string {
 	open := strings.Index(t, "(")
 	close := strings.LastIndex(t, ")")
@@ -385,6 +427,9 @@ func parsePrototype(t string, known map[string]bool) string {
 }
 
 // ptrMark 恢复返回类型与名字之间的 `*`（如 `char *foo`）。
+//
+// 设计者视角：`(` 前原文含 `*` 而 head 无即补 ` *` 供映射。障碍是空格切断：
+// 原文判。排查现场：`char*` 变 any 先查此。
 func ptrMark(t string, open int, fname, head string) string {
 	// head 已排除 fname；检查返回 token 与 fname 之间的间隙。
 	i := strings.LastIndex(head, fname)
@@ -406,6 +451,8 @@ func ptrMark(t string, open int, fname, head string) string {
 }
 
 func splitParams(s string) []string {
+	// 设计者视角：参列零深逗号切（括号计数），供逐映。障碍是函数指针参含逗号：
+	// depth 避。排查现场：参粘连先查 depth。
 	var out []string
 	depth := 0
 	start := 0
@@ -429,6 +476,9 @@ func splitParams(s string) []string {
 }
 
 func splitParam(pm string, idx int, known map[string]bool) (string, string) {
+	// 设计者视角：`...`→`...args: any[]`，函数指针 `(*cb)` 内联函数形（名缺编 argN），
+	// 余末标识为名、余映类型（`void` 吞）。障碍是无名参（`int`）：编 argN。候选：
+	// cdata vs 函数形；选函数形精确。排查现场：回调变 cdata 先查内联。
 	pm = strings.TrimSpace(pm)
 	if pm == "..." {
 		return "...args", "any[]"
@@ -490,6 +540,8 @@ func splitParam(pm string, idx int, known map[string]bool) (string, string) {
 }
 
 func isTypeKeyword(s string) bool {
+	// 设计者视角：C 类型关键字表，供参名/类型切分（`int` 后词为名）。障碍是 `size_t`：
+	// 纳入。排查现场：无名参错切先查表。
 	switch s {
 	case "void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "const", "volatile", "struct", "enum", "union", "bool", "size_t":
 		return true
@@ -498,6 +550,9 @@ func isTypeKeyword(s string) bool {
 }
 
 // parseFuncPtrTypedef 处理 `typedef R (*Name)(P...);` -> (name, "type ...")。
+//
+// 设计者视角：`(*` 定锚取返/名/参，返与参逐映拼 `(p)->r` 别名。障碍是形异：
+// 非 `(*` 即 ""。候选：cdata vs 函数形；选函数形。排查现场：回调丢失先查锚。
 func parseFuncPtrTypedef(t string, known map[string]bool) (string, string) {
 	t = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(t), ";"))
 	if !strings.HasPrefix(t, "typedef") {
@@ -534,6 +589,8 @@ func parseFuncPtrTypedef(t string, known map[string]bool) (string, string) {
 }
 
 func funcPtrName(pm string) string {
+	// 设计者视角：参串 `(*name)` 取名供内联回调命名。障碍是无名：返 "" 上游编 argN。
+	// 排查现场：回调名错先查此。
 	i := strings.Index(pm, "(*")
 	if i < 0 {
 		return ""
@@ -546,6 +603,11 @@ func funcPtrName(pm string) string {
 }
 
 // mapCType 把 C 类型拼写映射为 TypeLua 类型。
+//
+// 设计者视角：限定符按 token 剥（防 `unsigned` 内 `signed` 子串误伤）、char* 先判
+// string、余指针/数组判 cdata、标量表映 integer/number/boolean/void、单已知标识
+// 留名义、余 any。障碍是未知按值类型：宁 any 不误报。候选：严 vs 宽；选宽。不变量：
+// 空恒 any。排查现场：类型误报先查表，名义丢失先查 known。
 func mapCType(raw string, known map[string]bool) string {
 	t := strings.TrimSpace(raw)
 	if t == "" {

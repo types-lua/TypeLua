@@ -11,6 +11,8 @@ import (
 )
 
 func cmdMod(args []string) error {
+	// 设计者视角：mod 二级总机——空指用法，余下沉 init/get/fetch/vendor/list/graph。
+	// 障碍是二级 help：此处仅列名，细 help 各子命令。排查现场：未知子命令先查表。
 	if len(args) == 0 {
 		return fmt.Errorf("usage: tlua mod <init|get|fetch|vendor|list|graph>")
 	}
@@ -33,6 +35,8 @@ func cmdMod(args []string) error {
 }
 
 func modCache() (*mod.Cache, error) {
+	// 设计者视角：DefaultDir+NewCache 一步备缓存（含离线旗）。障碍是家缺：错透。
+	// 排查现场：缓存错先查 env。
 	dir, err := mod.DefaultDir()
 	if err != nil {
 		return nil, err
@@ -41,6 +45,8 @@ func modCache() (*mod.Cache, error) {
 }
 
 func cmdModInit(args []string) error {
+	// 设计者视角：mod init 写 tlua.toml（名空取目录基），已存拒。障碍是 name 空：
+	// Base 兜。排查现场：名错先查 Base。
 	fs := flag.NewFlagSet("mod init", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "project directory")
 	name := fs.String("name", "", "module name (default: directory base)")
@@ -71,11 +77,15 @@ func cmdModInit(args []string) error {
 }
 
 func loadModProject() (*mod.Project, error) {
+	// 设计者视角：cwd 上溯载项目（manifest 必+lock 可）。障碍是无项目：错指 init。
+	// 排查现场：目录错先查 cwd。
 	cwd, _ := os.Getwd()
 	return mod.LoadProject(cwd)
 }
 
 func cmdModGet(args []string) error {
+	// 设计者视角：get=快照旧 lock→mod.Get 解下→diff 打印（+ 新增、~ 升级，direct 标）。
+	// 障碍是无 spec 全升：见 mod.Get。排查现场：未升级先查 spec。
 	fs := flag.NewFlagSet("mod get", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -115,6 +125,8 @@ func cmdModGet(args []string) error {
 }
 
 func cmdModFetch(args []string) error {
+	// 设计者视角：fetch=重解+验 tag 不漂+下载（见 mod.Fetch），逐行 `= path ver`。
+	// 障碍是多余参：拒。排查现场：漂移错先查 lock。
 	fs := flag.NewFlagSet("mod fetch", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -141,6 +153,8 @@ func cmdModFetch(args []string) error {
 }
 
 func cmdModVendor(args []string) error {
+	// 设计者视角：vendor 全量重铺 tlua_modules（见 Project.Vendor）。障碍是多余参拒。
+	// 排查现场：vendor 残留先查全清。
 	fs := flag.NewFlagSet("mod vendor", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -164,6 +178,8 @@ func cmdModVendor(args []string) error {
 }
 
 func cmdModList(args []string) error {
+	// 设计者视角：list 按径印 lock（默认仅 direct，--indirect 全印）。障碍是无 lock：
+	// 指 fetch。排查现场：空先查 lock。
 	fs := flag.NewFlagSet("mod list", flag.ContinueOnError)
 	indirect := fs.Bool("indirect", false, "include indirect dependencies")
 	if err := fs.Parse(args); err != nil {
@@ -193,6 +209,8 @@ func cmdModList(args []string) error {
 }
 
 func cmdModGraph(args []string) error {
+	// 设计者视角：graph 离线画依赖（Nodes 按径、Edges 逐印，未解标 unresolved）。
+	// 障碍是未下载：ModuleGraph 指 fetch。排查现场：边缺先查树 present。
 	fs := flag.NewFlagSet("mod graph", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
 		return err

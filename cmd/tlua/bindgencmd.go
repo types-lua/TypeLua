@@ -13,6 +13,10 @@ import (
 
 // cmdBindgen 从 C 头文件子集生成 .d.tl 类型契约（可选类型化 .tl shim）：
 // `tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so] [--check]`。
+//
+// 设计者视角：读头→Generate 契约→必校验（.d.tl/空/--check 皆验，stdout 错走 stderr
+// 保管道纯）→落盘/out 空即 stdout；shim 按需（so 空推导）另验另落。障碍是生成坏：
+// 校验拦之不落盘。候选：验/不验；选必验保契约可析。排查现场：管道脏先查校验分支。
 func cmdBindgen(args []string) error {
 	fs := flag.NewFlagSet("bindgen", flag.ContinueOnError)
 	header := fs.String("header", "", "input C header file (required)")

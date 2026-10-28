@@ -22,10 +22,22 @@ type GenericParam struct {
 }
 
 // Kind 返回 GenericParam 的类型分类标签。
+//
+// 设计者视角：GenericParam 是独立 struct，分类恒定为 KGenericParam；与 Primitive
+// 的"K 字段"模式不同，因为泛型参数携带 Name/Constraint/Default，不能与原语
+// 共用 struct。排查现场：无。
 func (t *GenericParam) Kind() Kind { return KGenericParam }
 
 // String 把 GenericParam 渲染为规范文本。
+//
+// 设计者视角：打印时仅展示约束（`T extends C`），默认值不打印，避免签名冗长；
+// 约束为 nil 时只打印名字。排查现场：若默认值需要诊断，检查此分支是否遗漏。
 func (t *GenericParam) String() string { return t.stringSeen(map[Type]bool{}) }
+
+// stringSeen 渲染 GenericParam，约束经 typeString 转发 seen。
+//
+// 设计者视角：约束可能含循环对象，必须转发 seen；GenericParam 自身不入 seen。
+// 排查现场：若约束打印成 "{...}"，检查 seen 传递。
 func (t *GenericParam) stringSeen(seen map[Type]bool) string {
 	if t.Constraint != nil {
 		return t.Name + " extends " + typeString(t.Constraint, seen)
@@ -50,10 +62,21 @@ type Ref struct {
 }
 
 // Kind 返回 Ref 的类型分类标签。
+//
+// 设计者视角：Ref 是未解析命名类型的中间态，分类恒定 KRef；它必须独立于
+// Class/Enum/Object，以便 parser/checker 在解析前后区分"图纸"与"实物"。
+// 排查现场：无。
 func (t *Ref) Kind() Kind { return KRef }
 
 // String 把 Ref 渲染为规范文本。
+//
+// 设计者视角：Ref 打印 `Name<Args>` 以保留泛型实参，Args 为空时只打印 Name；
+// 这让未解析类型在诊断中可读。排查现场：若泛型实参丢失，检查 Args 赋值。
 func (t *Ref) String() string { return t.stringSeen(map[Type]bool{}) }
+
+// stringSeen 渲染 Ref，实参经 typeString 转发 seen。
+//
+// 设计者视角：实参可能含循环对象，必须转发 seen。排查现场：同上。
 func (t *Ref) stringSeen(seen map[Type]bool) string {
 	if len(t.Args) == 0 {
 		return t.Name
@@ -79,7 +102,13 @@ type InferParam struct {
 }
 
 // Kind 返回 InferParam 的类型分类标签。
+//
+// 设计者视角：InferParam 是条件类型 extends 子句的捕获占位符，分类恒定
+// KInferParam；它只活在 extends 上下文，离开即报错。排查现场：无。
 func (t *InferParam) Kind() Kind { return KInferParam }
 
 // String 把 InferParam 渲染为规范文本。
+//
+// 设计者视角：打印 `infer Name` 以还原源码形状，便于诊断与缓存键；Name 是
+// 唯一身份。排查现场：若缓存键冲突，检查 Name 唯一性。
 func (t *InferParam) String() string { return "infer " + t.Name }

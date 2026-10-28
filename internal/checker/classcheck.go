@@ -11,7 +11,22 @@ import (
 // 守卫 super 只在方法入口层生效；构造器的 self-before-super 顺序单独校验。
 
 // Class body checking, instantiation, and super calls.
+//
+// 设计者视角：此类文件是二遍的“装修队”——checkClass 登记值名并触发 ensureClassDef，
+// checkClassBodies 验字段初始化与方法体（self/super 入栈），实例化与 super 分流在
+// checkClassInstantiate/checkSuperCall/checkSuperMethod。障碍是 super 只在方法入口层
+// 生效（闭包内失效，靠 retDepth 快照）与构造器 self-before-super 顺序。候选：
+// 一遍全算 vs 两遍；选两遍，签名先行。排查现场：super 误放行先查 retDepth，构造器
+// 漏报先查 baseNeedsConstruction。
 
+// checkClass registers the class value and triggers body checking.
+//
+// 设计者视角：checkClass 是类的“落户口+开工单”——先以 typeEntry 身份确保定义态
+// （ensureClassDef 失败即记 Any 续流），再把 ClassValue 落入值册（重定义另报），
+// 逐成员为 LSP 留定义打卡，最后非 Declared 才开二遍。障碍是重复声明：typeEntry
+// 指针必须与本节点同一，否则是重名副本，直接退（错误已在 collectTypes 报）。
+// 取舍：值/类型双登记，一次覆盖类名的两册。不变量：Declared 文件无体不进二遍。
+// 排查现场：类值取到 Any 先查 ensureClassDef 是否返 nil（循环继承）。
 func (c *Checker) checkClass(n *ast.ClassDecl) {
 	e := c.cur().lookupType(n.Name.Name)
 	if e == nil || e.classDecl != n {
@@ -43,6 +58,13 @@ func (c *Checker) checkClass(n *ast.ClassDecl) {
 
 // checkClassBodies is pass 2: field initializers (inferring unannotated
 // fields) and method/constructor bodies with self/super in scope.
+//
+// 设计者视角：checkClassBodies 是二遍的“三道工序”——静态初值（无 self）→实例初值
+// （self+classCtx 入栈，基类约束兜底）→方法/构造体→构造器规则（必填字段、super
+// 必调、self-before-super）。障碍是无标注字段：借 widenInferred 回填并同步 val/
+// inst 双视图，避免签名与体脱钩。候选：字段初值在体前 vs 体后；选体前，方法体可
+// 见完整字段型。不变量：进出压弹 tparam 与 classStack 配对。排查现场：字段未初始化
+// 误报先查 required 是否误含 `x: nil`，super 漏报先查 baseNeedsConstruction。
 func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBuild) {
 	c.pushTParams(n.Generics)
 	defer c.popTParams()
@@ -174,6 +196,12 @@ func (c *Checker) checkClassBodies(e *typeEntry, n *ast.ClassDecl, def *classBui
 }
 
 // baseNeedsConstruction reports whether a derived constructor must call super().
+//
+// 设计者视角：baseNeedsConstruction 是 super 必调的“点火判据”——基构造有必填参
+// 或显式非空体即需 super，让基体有机会跑。障碍是无参/全可选/变参基构造：无需强制
+// （但调了亦可）。候选：恒强制 vs 按需；选按需，减误报。取舍：HasVarArg 即免，
+// 空参但显式仍需（体需执行）。不变量：纯读基 val。排查现场：DerivedCtorMustCallSuper
+// 误报先查基参 Optional/ContainsNil 判定。
 func baseNeedsConstruction(e *typeEntry, baseInst *types.Class, baseVal *types.ClassValue) bool {
 	_ = e
 	if baseVal != nil && baseVal.Constructor != nil {
@@ -192,6 +220,13 @@ func baseNeedsConstruction(e *typeEntry, baseInst *types.Class, baseVal *types.C
 }
 
 // checkClassMethodBody checks one method/constructor body with self/super.
+//
+// 设计者视角：checkClassMethodBody 是单个方法的“无菌室”——压值层、标签/goto、
+// 形参、vararg、返回、推断、async、classCtx（retDepth 快照）八件套，开体、验
+// goto，再逐层弹。障碍是 self/super 注入与保留字冲突：形参禁叫 self/super，
+// non-static 才注 self；ctor 返回恒空（构造不返回值）。取舍：层多但成对 defer，
+// 泄漏即串味。不变量：各类栈进出等长。排查现场：super 在闭包误放行先查 retDepth
+// 与 len(retStack)，self 泄漏到静态先查 inStatic 分支。
 func (c *Checker) checkClassMethodBody(n *ast.ClassDecl, m *ast.ClassMember, ft *types.Func, def *classBuild, baseInst *types.Class, baseVal *types.ClassValue) {
 	isCtor := m.Kind == ast.ClassConstructor
 	c.pushTParams(n.Generics)
@@ -265,6 +300,13 @@ func (c *Checker) checkClassMethodBody(n *ast.ClassDecl, m *ast.ClassMember, ft 
 }
 
 // checkClassInstantiate checks `Point(...)` / `Point.new(...)`.
+//
+// 设计者视角：checkClassInstantiate 是实例化的“安检口”——抽象类先拦（报
+// InstantiateAbstract 后仍验参续流）、构造可见性次验（private 限本类、protected
+// 限子类链）、缺构造即放行，最后把 ctor 包装成 Returns=[Class] 的 Func 委托
+// checkCall（含泛型显式）。障碍是抽象+元数双错会刷屏：抽象成立即只验参不验元数。
+// 取舍：CtorAccess 失败仍继续（以 Any 续流防级联）。不变量：成功恒返 [Class]。
+// 排查现场：泛型实例实参错乱先查 Class.TypeParams 是否透传。
 func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, span token.Span, explicit []types.Type) []types.Type {
 	name := "class"
 	if cv.Class != nil && cv.Class.Name != "" {
@@ -310,6 +352,13 @@ func (c *Checker) checkClassInstantiate(cv *types.ClassValue, args []ast.Expr, s
 }
 
 // checkSuperCall checks `super(...)` (base constructor on self).
+//
+// 设计者视角：checkSuperCall 是派生构造的“点火键”——只许构造入口层、非静态、
+// 有基三者齐备，否则报 SuperOutsideDerivedMethod/SuperMisuse 并把实参照验续流。
+// 障碍是闭包内 super 与静态内 super：前者靠 retDepth 拦，后者直拒（应用基类名调）。
+// 显式泛型一律拒（构造泛型走类实参）。取舍：失败返 [Any]，成功返 [Void]（构造无值）。
+// 不变量：基无 ctor 即逐参验后返 Void。排查现场：super 误报先查 classStack 顶与
+// retStack 深度是否对齐。
 func (c *Checker) checkSuperCall(n *ast.CallExpr) []types.Type {
 	if len(n.TypeArgs) > 0 {
 		c.errorf(diag.GenericArgsInvalid, n.Span(), "explicit type arguments are not allowed on 'super(...)'")
@@ -348,6 +397,12 @@ func (c *Checker) checkSuperCall(n *ast.CallExpr) []types.Type {
 }
 
 // checkSuperMethod checks `super:method(...)` (base method on self).
+//
+// 设计者视角：checkSuperMethod 是基方法的“直通梯”——沿 Base 链找首个同名实例方法，
+// 私有即拦，静态同名则指路（StaticViaInstance），无果报 NoMethod。障碍是静态与
+// 实例重名：必须先实例链、后静态提示，否则指错路。取舍：显式泛型透传（方法级泛型
+// 允许，与 super() 构造禁显式不同）。失败返 [Any] 续流。不变量：inStatic 恒拒。
+// 排查现场：基方法找不到先查链上是否为 private（被跳过）或 static（走错分支）。
 func (c *Checker) checkSuperMethod(n *ast.MethodCallExpr) []types.Type {
 	ctx := c.currentClass()
 	if ctx == nil || ctx.base == nil || len(c.retStack) != ctx.retDepth {

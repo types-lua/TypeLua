@@ -11,6 +11,11 @@ import (
 )
 
 // Completion: scope names, keywords, and member-aware dot/colon lists.
+//
+// 设计者视角：补全两路——成员位（`a.`/`a:b:`）走类型成员，余者走作用域名+关键字。
+// 障碍是 any/unknown 基：成员不可列，退 plain；私成员须 insideOwner。候选：前缀
+// 过滤客户端 vs 服务端；选服务端全列（isIncomplete=false），客户端再滤。不变量：
+// 恒返排序。排查现场：成员缺失先查基类型与私有权。
 
 // ---------- completion ----------
 
@@ -24,6 +29,8 @@ var luaKeywords = []string{
 }
 
 func completionKind(kind string) int {
+	// 设计者视角：kind 译 LSP 数字（Function 3/Method 2/...），未知兜 6（Variable）。
+	// 障碍是客户端图标依赖数字：须稳。排查现场：图标错先查此表。
 	switch kind {
 	case "function":
 		return 3
@@ -54,6 +61,12 @@ var dotCompleteRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.:]*)([.:])\s*$`)
 // a single identifier or a member chain (`a.b.c.`). Private members show
 // only inside their owner's declaration. ok=false means "not a member
 // position": fall back to plain completion.
+//
+// 设计者视角：成员补全四步——行尾正则嗅 `x./:`，链按 ./: 切，首名沿 ScopeAt 上爬
+// 定基，后段 LookupFieldType 逐跳，末 addMembers 展成员（union 归并、私有过滤）。
+// 障碍是 `..` 拼接误触：空段即退 plain；any 基退 plain。候选：AST 重解 vs 符号表；
+// 选符号表，快。不变量：ok 假即调用方走 plain。排查现场：链断先查 Lookup，私成员
+// 漏/多先查 insideOwner。
 func (d *document) memberCompletion(pos lspPos) ([]any, bool) {
 	if d.index == nil {
 		return nil, false
@@ -136,6 +149,10 @@ func (d *document) memberCompletion(pos lspPos) ([]any, bool) {
 
 // insideOwner reports whether off sits inside the owner's declaration
 // (private members complete there; unknown owners stay visible).
+//
+// 设计者视角：私有权判经 ScopeAt 上爬找类型条目，比 DeclRange 含 off；零值范围
+// （无位）放行。障碍是影子同名类：就近条目为准。候选：名比 vs 指针；选就近名，
+// 够用。不变量：owner 空恒 true。排查现场：私成员处处见先查 DeclRange。
 func (d *document) insideOwner(off int, owner string) bool {
 	if owner == "" || d.index == nil {
 		return true
@@ -157,6 +174,11 @@ func (d *document) insideOwner(off int, owner string) bool {
 }
 
 // addMembers lists directly visible members of a value type (unions merge).
+//
+// 设计者视角：按值类型展成员——Object 直列，Class 分字段/方法，ClassValue 列静态
+// +`new`，Enum 列子，Union 递归归并（seen 去重在外）。障碍是类型位擦除：ClassValue
+// 须透 Class 取 owner 供私有判。候选：深展 vs 直展；选直展。排查现场：成员缺先查
+// 类型分支覆盖。
 func addMembers(t types.Type, add func(name, kind, detail string, access types.Access, owner string)) {
 	switch x := t.(type) {
 	case *types.Object:
@@ -196,6 +218,8 @@ func addMembers(t types.Type, add func(name, kind, detail string, access types.A
 }
 
 func fieldKind(t types.Type) string {
+	// 设计者视角：Func 即 method 余 field，补全图标据此。障碍是方法存为 Func：须判。
+	// 排查现场：方法图标错先查此。
 	if _, ok := t.(*types.Func); ok {
 		return "method"
 	}
@@ -203,6 +227,10 @@ func fieldKind(t types.Type) string {
 }
 
 func (s *Server) completion(raw json.RawMessage) any {
+	// 设计者视角：补全先成员后 plain——成员命中即返，余者沿 ScopeAt 上爬收值/类型名
+	// （seen 去重）+关键字，末排序。障碍是 index nil（坏档）：退关键字。候选：模糊
+	// 排 vs 字母；选字母稳。不变量：恒 isIncomplete=false。排查现场：变量缺失先查
+	// ScopeAt，类型缺失先查 ScopeTypes。
 	doc, pos, ok := s.docAt(raw)
 	if !ok {
 		return map[string]any{"isIncomplete": false, "items": []any{}}
