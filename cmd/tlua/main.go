@@ -15,7 +15,7 @@ import (
 // Release builds inject the git tag via:
 //   go build -ldflags "-X main.Version=<tag without leading v>" ./cmd/tlua
 // Local builds keep the fallback below.
-var Version = "0.1.0"
+var Version = "0.9.1"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
