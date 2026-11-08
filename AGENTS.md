@@ -38,6 +38,7 @@ derived from the code. Exit code is unchanged (`text` default).
 ## Source of truth
 
 - `SPEC.md` (v0.8, §1–§16) — language contract. Read this before writing `.tl`.
+- `README.md` (English, default) / `README.zh-CN.md` (Chinese) — project overview.
 - `examples/*/` — 25 runnable programs, all `tlua check`-clean. Copy idioms from here.
 - `docs/` — compiler internals (pipeline, subtyping, LSP). Not user docs.
 - `internal/diag/codes.go` — full diagnostic registry.

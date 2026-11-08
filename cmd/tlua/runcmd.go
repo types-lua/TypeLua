@@ -41,6 +41,11 @@ type runOptions struct {
 // runEntry emits and executes one entry file. Both commands share it so
 // example runs behave exactly like script runs.
 func runEntry(entryArg string, scriptArgs []string, opt runOptions, virtual map[string]string) error {
+	// `tlua run main.tl -- a b` reaches us as ["--","a","b"]: drop the marker
+	// so scripts see arg[1] == "a" like PUC Lua.
+	if len(scriptArgs) > 0 && scriptArgs[0] == "--" {
+		scriptArgs = scriptArgs[1:]
+	}
 	entryAbs, err := filepath.Abs(entryArg)
 	if err != nil {
 		return err
