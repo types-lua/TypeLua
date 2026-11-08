@@ -92,7 +92,7 @@ tlua run --target 5.1 --lua luajit main.tl
 |---|---|
 | `tlua init [--dir .]` | Create `tlua.json` and an example `main.tl` |
 | `tlua check [files...]` | Type-check; `--format=json`, `--watch` |
-| `tlua test [files...]` | Discover and run tests; `--filter`, `--format=json`, `--lua`, `--target` |
+| `tlua test [files...]` | Discover and run tests; `--filter`, `--module`, `--case`, `--list`, `--format=json`, `--lua`, `--target` |
 | `tlua example [name]` | List or run `examples/*.tl` / `examples/*/main.tl` |
 | `tlua run <entry.tl>` | Emit + execute; `--check`, `--lua`, `--target`, `--format=json` |
 | `tlua build [files...]` | Emit Lua; `--outDir`, `--target 5.4\|5.1`, `--sourceMap`, `--treeShake`, `--format=json`, `--watch` |
@@ -100,6 +100,7 @@ tlua run --target 5.1 --lua luajit main.tl
 | `tlua mod <cmd>` | Packages: `init`, `get`, `fetch`, `vendor`, `list`, `graph` |
 | `tlua bindgen` | Generate a `.d.tl` contract + typed shim from a C header |
 | `tlua lsp` | Language server over stdio |
+| `tlua dap` | Debug adapter (DAP) over stdio; used by the VS Code debugger |
 | `tlua version` | Print the version |
 
 Diagnostics are stable `TLxxxx` codes: `TL1xxx` lexer, `TL2xxx` parser,
@@ -268,7 +269,8 @@ completion (including `.`/`:` members), references, rename and document
 symbols, with incremental sync.
 
 VS Code: [`types-lua/vscode-typelua`](https://github.com/types-lua/vscode-typelua)
-provides syntax highlighting, snippets and the language client.
+provides syntax highlighting, snippets, the language client, a Test Explorer
+and breakpoint debugging through `tlua dap`.
 
 ## FFI and native code
 

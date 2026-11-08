@@ -54,11 +54,11 @@ func TestDiscoverTests(t *testing.T) {
 
 func TestBuildTestRunnerUsesDottedModules(t *testing.T) {
 	root := "/proj"
-	src := buildTestRunner(root, []string{"/proj/tests/a_test.tl"}, "add", true)
+	src := buildTestRunner(root, []string{"/proj/tests/a_test.tl"}, "add", "", "", true, false)
 	for _, want := range []string{
 		`require("tests.a_test")`,
 		`T.run("tests.a_test", __m)`,
-		`T.configure("add", true)`,
+		`T.configure("add", true, "", "")`,
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("runner missing %q:\n%s", want, src)

@@ -41,7 +41,7 @@ var tluaTestSource string
 // testRunnerSource is written as <project>/__tlua_test_main.tl and requires
 // every discovered test module through its dotted project path.
 const testRunnerHeader = `local T = require("tlua_test")
-T.configure(%s, %s)
+T.configure(%s, %s, %s, %s)
 `
 
 const testRunnerFooter = `
@@ -52,8 +52,11 @@ print("##tlua-test-result " .. tostring(failed))
 func cmdTest(args []string) error {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	filter := fs.String("filter", "", "only run cases whose module or case name contains this text")
+	moduleExact := fs.String("module", "", "only run cases in this module (exact)")
+	caseExact := fs.String("case", "", "only run this case (exact)")
 	format := fs.String("format", "text", "output format: text or json")
 	luaBin := fs.String("lua", "", "external lua interpreter (e.g. lua5.4, luajit); default: embedded golua")
+	list := fs.Bool("list", false, "list discovered cases without running them")
 	target := fs.String("target", "", "lua target: 5.4 or 5.1 (default: tlua.json or 5.4)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -102,7 +105,7 @@ func cmdTest(args []string) error {
 	}
 	p.AddVirtual(filepath.Join(cfg.Dir, "tlua_modules", "tlua_test.tl"), tluaTestSource)
 	p.AddVirtual(filepath.Join(cfg.Dir, "__tlua_test_main.tl"),
-		buildTestRunner(cfg.Dir, files, *filter, *format == "json"))
+		buildTestRunner(cfg.Dir, files, *filter, *moduleExact, *caseExact, *format == "json", *list))
 
 	p.Check()
 	if len(p.Diags) > 0 {
@@ -128,7 +131,7 @@ func cmdTest(args []string) error {
 		return fmt.Errorf("cannot read the emitted test runner: %v", err)
 	}
 
-	if *format != "json" {
+	if *format != "json" && !*list {
 		fmt.Printf("tlua test · %d file(s)\n", len(files))
 	}
 	var out string
@@ -138,17 +141,86 @@ func cmdTest(args []string) error {
 	} else {
 		out, failed, err = runTestsEmbedded(entry, src, tmp, []string{*filter, *format})
 	}
+	if err != nil {
+		return err
+	}
+	if *list {
+		return printTestList(out, *format, len(files), *filter, files, cfg.Dir)
+	}
 	for _, line := range strings.SplitAfter(out, "\n") {
 		if line == "" || strings.HasPrefix(line, "##tlua-test-result ") {
 			continue
 		}
 		fmt.Print(line)
 	}
-	if err != nil {
-		return err
-	}
 	if failed > 0 {
 		return fmt.Errorf("%d test case(s) failed", failed)
+	}
+	return nil
+}
+
+// testCase is one discovered case for `tlua test --list`.
+type testCase struct {
+	Module string
+	Name   string
+}
+
+type testListError struct {
+	Module  string
+	Message string
+}
+
+// printTestList renders the marker stream from the listing runner and reports
+// module-load failures as a non-zero exit.
+func printTestList(out string, format string, fileCount int, filter string, files []string, root string) error {
+	var cases []testCase
+	var errs []testListError
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "##tlua-test-case\t"):
+			parts := strings.SplitN(strings.TrimPrefix(line, "##tlua-test-case\t"), "\t", 2)
+			if len(parts) == 2 {
+				cases = append(cases, testCase{Module: parts[0], Name: parts[1]})
+			}
+		case strings.HasPrefix(line, "##tlua-test-error\t"):
+			parts := strings.SplitN(strings.TrimPrefix(line, "##tlua-test-error\t"), "\t", 2)
+			if len(parts) == 2 {
+				errs = append(errs, testListError{Module: parts[0], Message: parts[1]})
+			}
+		}
+	}
+	if filter != "" {
+		kept := cases[:0]
+		for _, c := range cases {
+			if strings.Contains(c.Module, filter) || strings.Contains(c.Name, filter) {
+				kept = append(kept, c)
+			}
+		}
+		cases = kept
+	}
+	fileByModule := map[string]string{}
+	for _, f := range files {
+		fileByModule[testModuleName(root, f)] = f
+	}
+	if format == "json" {
+		for _, c := range cases {
+			fmt.Printf("{\"module\":%q,\"case\":%q,\"file\":%q}\n", c.Module, c.Name, fileByModule[c.Module])
+		}
+		for _, e := range errs {
+			fmt.Printf("{\"module\":%q,\"error\":%q}\n", e.Module, e.Message)
+		}
+		fmt.Printf("{\"summary\":true,\"files\":%d,\"cases\":%d,\"errors\":%d}\n", fileCount, len(cases), len(errs))
+	} else {
+		fmt.Printf("tlua test · %d file(s) · %d case(s)\n", fileCount, len(cases))
+		for _, c := range cases {
+			fmt.Printf("  %s / %s\n", c.Module, c.Name)
+		}
+		for _, e := range errs {
+			fmt.Printf("  ! %s: %s\n", e.Module, e.Message)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%d test module(s) failed to load", len(errs))
 	}
 	return nil
 }
@@ -254,22 +326,60 @@ func walkTests(dir string, add func(string)) error {
 // buildTestRunner emits the small TypeLua entry that requires every test
 // module and hands it to the helper. Module names are project-relative
 // dotted paths, which the runtime resolves through package.path.
-func buildTestRunner(root string, files []string, filter string, jsonOut bool) string {
+func buildTestRunner(root string, files []string, filter, moduleExact, caseExact string, jsonOut bool, listOnly bool) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(testRunnerHeader, luaQuote(filter), strconv.FormatBool(jsonOut)))
-	for _, f := range files {
-		rel, err := filepath.Rel(root, f)
-		if err != nil {
-			rel = filepath.Base(f)
+	if listOnly {
+		sb.WriteString(testListHeader)
+		for _, f := range files {
+			fmt.Fprintf(&sb, "__list(%q)\n", testModuleName(root, f))
 		}
-		rel = filepath.ToSlash(rel)
-		rel = strings.TrimSuffix(rel, ".tl")
-		module := strings.ReplaceAll(rel, "/", ".")
+		return sb.String()
+	}
+	sb.WriteString(fmt.Sprintf(testRunnerHeader,
+		luaQuote(filter), strconv.FormatBool(jsonOut), luaQuote(moduleExact), luaQuote(caseExact)))
+	for _, f := range files {
+		module := testModuleName(root, f)
 		fmt.Fprintf(&sb, "do\n  local __m = require(%q)\n  T.run(%q, __m)\nend\n", module, module)
 	}
 	sb.WriteString(testRunnerFooter)
 	return sb.String()
 }
+
+// testModuleName maps a test file to its dotted project module name.
+func testModuleName(root, file string) string {
+	rel, err := filepath.Rel(root, file)
+	if err != nil {
+		rel = filepath.Base(file)
+	}
+	rel = filepath.ToSlash(rel)
+	rel = strings.TrimSuffix(rel, ".tl")
+	return strings.ReplaceAll(rel, "/", ".")
+}
+
+// testListHeader enumerates case functions without executing them. Requiring
+// a module runs its top level (as with the run mode), but no case body.
+const testListHeader = `local function __list(moduleName: string): void
+  local ok: boolean
+  local suite: any
+  ok, suite = pcall(require, moduleName)
+  if not ok then
+    print("##tlua-test-error\t" .. moduleName .. "\t" .. tostring(suite))
+    return
+  end
+  if type(suite) ~= "table" then
+    print("##tlua-test-error\t" .. moduleName .. "\tmodule does not return a table")
+    return
+  end
+  local names: string[] = {}
+  for name, value in pairs(suite) do
+    if type(value) == "function" then names[#names + 1] = name as string end
+  end
+  table.sort(names)
+  for i = 1, #names do
+    print("##tlua-test-case\t" .. moduleName .. "\t" .. names[i])
+  end
+end
+`
 
 // runTestsExternal executes the emitted runner with an external interpreter,
 // capturing output so the failure marker works the same way as in-process.

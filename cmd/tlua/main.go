@@ -13,9 +13,11 @@ import (
 
 // Version is the compiler version printed by `tlua version`.
 // Release builds inject the git tag via:
-//   go build -ldflags "-X main.Version=<tag without leading v>" ./cmd/tlua
+//
+//	go build -ldflags "-X main.Version=<tag without leading v>" ./cmd/tlua
+//
 // Local builds keep the fallback below.
-var Version = "0.9.1"
+var Version = "0.9.2"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -57,6 +59,8 @@ func run(args []string) error {
 	case "lsp":
 		os.Exit(lsp.Run(os.Stdin, os.Stdout, Version))
 		return nil
+	case "dap":
+		return cmdDAP(args[1:])
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", args[0])
@@ -82,6 +86,7 @@ Usage:
   tlua watch [files...] [--outDir dist] [--target 5.4] [--treeShake]
   tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so]
   tlua lsp                          language server over stdio
+  tlua dap                          debug adapter (DAP) over stdio
   tlua version                        print version`)
 }
 

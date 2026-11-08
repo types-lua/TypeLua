@@ -22,9 +22,12 @@ go build -o tlua ./cmd/tlua
 ./tlua run --lua luajit main.tl  # FFI / .so modules need external Lua
 ./tlua example                   # list examples/ (cargo-style)
 ./tlua example NAME -- args      # run examples/NAME.tl or examples/NAME/main.tl
+./tlua test --list               # enumerate cases (JSON for editors)
 ./tlua test --filter NAME        # run matching cases only
+./tlua test --case NAME          # run one exact case
 ./tlua test --format=json        # one JSON object per line
 ./tlua lsp                       # stdio language server
+./tlua dap                       # stdio debug adapter (used by VS Code)
 go test ./...                    # must stay green
 go vet ./...                     # must stay clean
 ```

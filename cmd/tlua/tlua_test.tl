@@ -27,6 +27,8 @@ local checks: number = 0
 local currentModule: string = ""
 local currentCase: string = ""
 local filter: string = ""
+local moduleExact: string = ""
+local caseExact: string = ""
 local json: boolean = false
 local failures: Array<Failure> = {}
 
@@ -90,12 +92,16 @@ local function abort(message: string): void
   fail(label(nil) .. ": " .. message)
 end
 
-local function configure(userFilter: string, jsonOutput: boolean): void
+local function configure(userFilter: string, jsonOutput: boolean, wantModule: string, wantCase: string): void
   filter = userFilter
   json = jsonOutput
+  moduleExact = wantModule
+  caseExact = wantCase
 end
 
 local function matches(module: string, caseName: string): boolean
+  if moduleExact ~= "" and module ~= moduleExact then return false end
+  if caseExact ~= "" and caseName ~= caseExact then return false end
   if filter == "" then return true end
   if string.find(module, filter, 1, true) ~= nil then return true end
   return string.find(caseName, filter, 1, true) ~= nil

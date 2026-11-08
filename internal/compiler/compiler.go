@@ -180,6 +180,7 @@ type emitJob struct {
 	wantMap  bool
 	mapName  string
 	mapLabel string // "--# sourceMappingURL=..." footer, appended after map write
+	mappings []sourcemap.Mapping
 }
 
 // collectEmitJobs maps non-decl files to outputs in program order.
@@ -225,10 +226,11 @@ func computeEmitJobs(jobs []emitJob, opt emitter.Options, withPrelude bool) {
 		if withPrelude {
 			out, mappings = PrependPrelude(out, mappings)
 		}
+		for k := range mappings {
+			mappings[k].SrcFile = jb.srcRel
+		}
+		jb.mappings = mappings
 		if jb.wantMap {
-			for k := range mappings {
-				mappings[k].SrcFile = jb.srcRel
-			}
 			raw, err := sourcemap.Encode(filepath.Base(jb.dst), []string{jb.srcRel}, []string{jb.sf.Content}, nil, mappings)
 			if err != nil {
 				jb.mapErr = err
@@ -282,6 +284,39 @@ func writeFileIfChanged(path string, data []byte) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// RenderedFile is one in-memory emitted unit with its source mappings.
+// Unlike Emit, Render does not touch the filesystem; tooling (the DAP
+// debugger) uses it to place emitted Lua and map runtime lines back.
+type RenderedFile struct {
+	Path       string // output .lua path (outDir layout)
+	SourcePath string // originating .tl path
+	Lua        string
+	Mappings   []sourcemap.Mapping
+}
+
+// Render emits every file in memory, with mappings attached.
+func (p *Program) Render() []RenderedFile {
+	withPrelude := NeedsModPath(p)
+	opt := emitter.Options{
+		Target:          p.Cfg.Target(),
+		TreeShake:       p.Cfg.CompilerOptions.TreeShake,
+		RelativeModules: newRelativeResolver(p.Files, p.Cfg.Dir).moduleMap(),
+	}
+	jobs := collectEmitJobs(p.Cfg, p.Files)
+	computeEmitJobs(jobs, opt, withPrelude)
+	out := make([]RenderedFile, 0, len(jobs))
+	for i := range jobs {
+		jb := &jobs[i]
+		out = append(out, RenderedFile{
+			Path:       jb.dst,
+			SourcePath: jb.sf.Path,
+			Lua:        jb.out,
+			Mappings:   jb.mappings,
+		})
+	}
+	return out
 }
 
 // EmitToString is for tests.

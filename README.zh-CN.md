@@ -86,7 +86,7 @@ tlua run --target 5.1 --lua luajit main.tl
 |---|---|
 | `tlua init [--dir .]` | 创建 `tlua.json` 与示例 `main.tl` |
 | `tlua check [files...]` | 类型检查；`--format=json`、`--watch` |
-| `tlua test [files...]` | 发现并运行测试；`--filter`、`--format=json`、`--lua`、`--target` |
+| `tlua test [files...]` | 发现并运行测试；`--filter`、`--module`、`--case`、`--list`、`--format=json`、`--lua`、`--target` |
 | `tlua example [name]` | 列出或运行 `examples/*.tl` / `examples/*/main.tl` |
 | `tlua run <entry.tl>` | 发射并执行；`--check`、`--lua`、`--target`、`--format=json` |
 | `tlua build [files...]` | 发射 Lua；`--outDir`、`--target 5.4\|5.1`、`--sourceMap`、`--treeShake`、`--format=json`、`--watch` |
@@ -94,6 +94,7 @@ tlua run --target 5.1 --lua luajit main.tl
 | `tlua mod <cmd>` | 包管理：`init`、`get`、`fetch`、`vendor`、`list`、`graph` |
 | `tlua bindgen` | 由 C 头文件生成 `.d.tl` 契约与 typed shim |
 | `tlua lsp` | stdio 语言服务器 |
+| `tlua dap` | stdio 调试适配器（DAP），供 VS Code 调试器使用 |
 | `tlua version` | 打印版本 |
 
 诊断码稳定：`TL1xxx` 词法、`TL2xxx` 语法、`TL3xxx` 类型检查、`TL37xx` 宏、
@@ -253,7 +254,7 @@ tlua example basic --check
 引用、重命名、文档符号，增量同步。
 
 VS Code：[`types-lua/vscode-typelua`](https://github.com/types-lua/vscode-typelua)
-提供语法高亮、代码片段与语言客户端。
+提供语法高亮、代码片段、语言客户端、测试浏览器，以及经 `tlua dap` 的断点调试。
 
 ## FFI 与原生代码
 
