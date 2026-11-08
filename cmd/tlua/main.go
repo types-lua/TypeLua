@@ -11,7 +11,11 @@ import (
 	"github.com/typelua/typelua/internal/lsp"
 )
 
-const Version = "0.1.0"
+// Version is the compiler version printed by `tlua version`.
+// Release builds inject the git tag via:
+//   go build -ldflags "-X main.Version=<tag without leading v>" ./cmd/tlua
+// Local builds keep the fallback below.
+var Version = "0.1.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {

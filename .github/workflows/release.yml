@@ -1,0 +1,104 @@
+name: Release tlua binaries
+
+# Publish Linux x86_64 + ARM64 binaries to GitHub Releases.
+# Trigger: push a tag named vX.Y.Z (e.g. v0.9.0). The old v0.5-style
+# two-part tags do NOT match on purpose.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Build smoke binary
+        run: go build -o /tmp/tlua-smoke ./cmd/tlua
+      - name: Smoke check (examples must be clean)
+        run: /tmp/tlua-smoke check
+      - name: Smoke check --format=json
+        run: /tmp/tlua-smoke check --format=json
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - goarch: amd64
+            asset: tlua-linux-amd64
+          - goarch: arm64
+            asset: tlua-linux-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build (static, trimmed, version-stamped)
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o "${{ matrix.asset }}" ./cmd/tlua
+      - name: Validate artifact
+        run: |
+          ls -l "${{ matrix.asset }}"
+          file "${{ matrix.asset }}"
+          if [ "${{ matrix.goarch }}" = "amd64" ]; then
+            ./"${{ matrix.asset }}" version
+            ./"${{ matrix.asset }}" check
+          else
+            file "${{ matrix.asset }}" | grep -qi "aarch64\|arm" || (echo "not an ARM64 binary" && exit 1)
+          fi
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd release-assets
+          sha256sum ./* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            release-assets/tlua-linux-amd64 \
+            release-assets/tlua-linux-arm64 \
+            release-assets/SHA256SUMS.txt \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
