@@ -92,13 +92,28 @@ jobs:
           cd release-assets
           sha256sum ./* > SHA256SUMS.txt
           cat SHA256SUMS.txt
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The release job has no checkout, so gh cannot infer the repo
+          # from a git remote; pin it explicitly (bug seen on v0.9.0).
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            release-assets/tlua-linux-amd64 \
-            release-assets/tlua-linux-arm64 \
-            release-assets/SHA256SUMS.txt \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          ASSETS=(release-assets/tlua-linux-amd64 release-assets/tlua-linux-arm64 release-assets/SHA256SUMS.txt)
+          for f in "${ASSETS[@]}"; do
+            test -s "$f" || { echo "missing asset: $f" >&2; exit 1; }
+          done
+          # Idempotent: a re-run (or a release already drafted by hand) must
+          # not fail the job. Upload with --clobber to keep assets fresh.
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "release $TAG exists; uploading assets with --clobber"
+            gh release upload "$TAG" "${ASSETS[@]}" --repo "$GH_REPO" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --repo "$GH_REPO" \
+              --verify-tag \
+              --title "$TAG" \
+              --generate-notes
+          fi
