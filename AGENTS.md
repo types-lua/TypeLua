@@ -13,12 +13,15 @@ Go module: `github.com/typelua/typelua` (Go >= 1.27).
 go build -o tlua ./cmd/tlua
 ./tlua init                      # scaffold tlua.json + main.tl
 ./tlua check                     # type-check (exit 1 on error)
+./tlua test                      # discover tests/**, run named cases
 ./tlua check --format=json       # machine-readable diags for agents
 ./tlua build                     # emit to dist/*.lua
 ./tlua build --format=json --target 5.1 --treeShake
 ./tlua run main.tl -- args...    # parse-only by default, embedded golua
 ./tlua run --check main.tl       # full check before run
 ./tlua run --lua luajit main.tl  # FFI / .so modules need external Lua
+./tlua test --filter NAME        # run matching cases only
+./tlua test --format=json        # one JSON object per line
 ./tlua lsp                       # stdio language server
 go test ./...                    # must stay green
 go vet ./...                     # must stay clean

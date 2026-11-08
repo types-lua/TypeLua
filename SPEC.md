@@ -124,6 +124,7 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 - `tlua.json` 对标 `tsconfig.json`：`compilerOptions.{target,strict,strictNilChecks,noImplicitAny,outDir,rootDir,sourceMap,treeShake,types,typeRoots}` + `include/exclude/files`。
   `types` 为 ambient `.d.tl`  allowlist（空 = 全量，类 `tsconfig.types`）；`typeRoots` 默认为 `["types","tlua_modules/@types"]`（缺目录忽略），其下 `*.d.tl` 即使在 `include` 外也参检（从不发射）。
 - 管线：lex → parse（错误恢复）→ check（含宏展开）→ emit，与 `tsc` 同构。
+- 测试：`tlua test [files...] [--filter text] [--format text|json] [--lua BIN] [--target 5.4|5.1]`。零配置发现 `tests/**/*.tl`、`*_test.tl`、`*.test.tl`（跳过 `tlua_modules`/`dist`/`testdata`）；测试文件返回「用例名 → 函数」表，`tlua_test` 助手模块由命令注入到 `tlua_modules/tlua_test.tl`（`eq/eqBytes/ok/raises/fail`）；先全量类型检查再逐个 pcall 运行，失败输出 `模块 / 用例` 并以非零码退出。
 - 监听：`tlua check/build --watch`（`-w`，另有 `watch` 子命令，`--pollInterval/--debounce` 可调）对标 `tsc --watch`：
   监听集 = `ListFiles` 结果 + `tlua.json`/`tlua.toml`/`tlua.lock`，`outDir` 下恒不监听（发射永不自触发）；
   轮询 + 去抖合并连击，基准在每次重编后刷新（编期改动不丢）；删源删其 `OutputForFile` 产物（仅 `.lua` + `.map`）；

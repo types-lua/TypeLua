@@ -8,6 +8,7 @@ Lua 超集 + 静态类型 + 擦除编译到地道 Lua；另有小体积 `class` 
 go build -o tlua ./cmd/tlua
 ./tlua init
 ./tlua check
+./tlua test    # discover tests/**, run named cases (built-in assertions)
 ./tlua build   # -> dist/*.lua
 ./tlua build --watch   # 或 ./tlua watch：监听改动持续增量编译（对标 tsc --watch）
 ./tlua run main.tl [args...]  # 直接运行：默认只解析不卡类型，内嵌 golua，无需安装 lua
@@ -66,6 +67,34 @@ go build -o tlua ./cmd/tlua
 
 - 默认内嵌 `golua`（纯 Go 实现，零外部依赖）：转译结果写入临时目录后在进程内执行，退出自动清理；多文件 `require`、包自举（`package.path` 前缀 + 点式 vendor searcher）、`concurrent` 调度器照常工作；工程外的单文件自动退化为单文件程序。
 - 限制：内嵌模式跑不了 `require("ffi")` 与 `.so/.dll/.a` C 模块（golua 无 C 模块加载器）——这类工程用 `--lua luajit`（配 `--target 5.1`）。
+
+## tlua test（零配置测试）
+
+测试文件放在 `tests/`（或命名 `*_test.tl` / `*.test.tl`），返回一组命名用例：
+
+```lua
+import T from "tlua_test"
+
+return {
+  ["adds numbers"] = function(): void
+    T.eq(1 + 1, 2)
+  end,
+  ["rejects bad input"] = function(): void
+    T.raises(function(): void error("boom") end)
+  end,
+}
+```
+
+```bash
+./tlua test                     # 内嵌 golua，先类型检查再运行
+./tlua test --filter adds       # 只跑名字含 adds 的用例
+./tlua test --format=json       # 每行一个 JSON 对象，便于 CI/agent
+./tlua test --lua lua5.4        # 换解释器
+./tlua test --lua luajit --target 5.1
+```
+
+`tlua_test` 模块由命令自动注入到 `tlua_modules/tlua_test.tl`，无需安装；
+断言失败会带上 `模块 / 用例` 名称，进程以非零码退出。
 
 ## 语言速览
 

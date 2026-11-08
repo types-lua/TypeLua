@@ -82,9 +82,23 @@ func (p *Program) Load() error {
 	return nil
 }
 
+// AddVirtual parses an in-memory source and appends it to the program.
+// Used by tooling (`tlua test` injects its runner and helper module) and by
+// tests that need generated sources without touching disk. Diagnostics from
+// the parse are collected like any other file.
+func (p *Program) AddVirtual(path, content string) {
+	f, diags := parser.ParseFile(path, content)
+	p.Diags = append(p.Diags, diags...)
+	p.Files = append(p.Files, &SourceFile{
+		Path:    path,
+		Content: content,
+		File:    f,
+		IsDecl:  strings.HasSuffix(path, ".d.tl"),
+	})
+}
+
 // LoadSources is for tests / in-memory use.
-func (p *Program) LoadSources(srcs map[string]string) {
-	var names []string
+func (p *Program) LoadSources(srcs map[string]string) {	var names []string
 	for n := range srcs {
 		names = append(names, n)
 	}

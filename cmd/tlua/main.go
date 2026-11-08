@@ -42,6 +42,8 @@ func run(args []string) error {
 		return cmdMod(args[1:])
 	case "check":
 		return cmdCheck(args[1:])
+	case "test":
+		return cmdTest(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
 	case "run":
@@ -70,6 +72,7 @@ Usage:
   tlua mod vendor                      copy locked sources into tlua_modules/
   tlua mod list [--indirect]           list locked modules (direct by default)
   tlua mod graph                       print the locked dependency graph
+  tlua test [files...] [--filter text] [--format text|json] [--lua BIN] [--target 5.4]
   tlua check [files...] [--format text|json] [--watch] [-w] [--pollInterval ms] [--debounce ms]
    tlua build [files...] [--outDir dist] [--target 5.4] [--treeShake] [--format text|json] [--watch] [-w]
    tlua run <entry.tl> [-- args...] [--check] [--format text|json] [--lua BIN] [--target 5.4]
