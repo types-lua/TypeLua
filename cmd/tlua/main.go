@@ -48,6 +48,8 @@ func run(args []string) error {
 		return cmdBuild(args[1:])
 	case "run":
 		return cmdRun(args[1:])
+	case "example":
+		return cmdExample(args[1:])
 	case "watch":
 		return cmdWatch(args[1:])
 	case "bindgen":
@@ -76,6 +78,7 @@ Usage:
   tlua check [files...] [--format text|json] [--watch] [-w] [--pollInterval ms] [--debounce ms]
    tlua build [files...] [--outDir dist] [--target 5.4] [--treeShake] [--format text|json] [--watch] [-w]
    tlua run <entry.tl> [-- args...] [--check] [--format text|json] [--lua BIN] [--target 5.4]
+  tlua example [name] [-- args...] [--check] [--lua BIN] [--target 5.4]
   tlua watch [files...] [--outDir dist] [--target 5.4] [--treeShake]
   tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so]
   tlua lsp                          language server over stdio

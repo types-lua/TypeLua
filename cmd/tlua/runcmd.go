@@ -29,6 +29,101 @@ import (
 //     (lua5.4, luajit, ...). The emitted bootstrap prelude sets
 //     package.path/cpath from the script directory, so this works the same
 //     as `lua dist/main.lua`. Use this for ffi/C extensions.
+//
+// runOptions carries the flags shared by `tlua run` and `tlua example`.
+type runOptions struct {
+	check  bool
+	luaBin string
+	target string
+	format string
+}
+
+// runEntry emits and executes one entry file. Both commands share it so
+// example runs behave exactly like script runs.
+func runEntry(entryArg string, scriptArgs []string, opt runOptions, virtual map[string]string) error {
+	entryAbs, err := filepath.Abs(entryArg)
+	if err != nil {
+		return err
+	}
+	if strings.HasSuffix(entryAbs, ".d.tl") {
+		return fmt.Errorf("cannot run declaration file %s", entryArg)
+	}
+
+	tmp, err := os.MkdirTemp("", "tlua-run-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+
+	// Load the full project (like build with no file args) so sibling
+	// requires emit alongside the entry and resolve at runtime. Standalone
+	// files outside any project fall back to a single-file program.
+	cfg, cfgPath, err := loadCfgFor(nil, tmp, opt.target, false, false)
+	if err != nil {
+		return err
+	}
+	p := compiler.NewProgram(cfg)
+	if err := p.Load(); err != nil {
+		return err
+	}
+	for path, content := range virtual {
+		p.AddVirtual(path, content)
+	}
+	if cfgPath == "" || !hasSource(p, entryAbs) {
+		cfg, _, err = loadCfgFor([]string{entryAbs}, tmp, opt.target, false, false)
+		if err != nil {
+			return err
+		}
+		p = compiler.NewProgram(cfg)
+		if err := p.Load(); err != nil {
+			return err
+		}
+	}
+	if len(p.Files) == 0 {
+		return fmt.Errorf("no .tl files found")
+	}
+	if !hasSource(p, entryAbs) {
+		return fmt.Errorf("entry %s not found (not covered by tlua.json include)", entryArg)
+	}
+	if opt.check {
+		p.Check()
+		if len(p.Diags) > 0 {
+			if opt.format == "json" {
+				fmt.Print(p.FormatDiagsJSON())
+			} else {
+				fmt.Print(p.FormatDiags())
+			}
+		}
+		if p.HasErrors() {
+			return fmt.Errorf("found %d error(s)", len(p.Diags))
+		}
+	} else if p.HasErrors() {
+		// Parse errors alone block even --no-check runs: broken code
+		// cannot be emitted, let alone executed.
+		if opt.format == "json" {
+			fmt.Print(p.FormatDiagsJSON())
+		} else {
+			fmt.Print(p.FormatDiags())
+		}
+		return fmt.Errorf("found %d error(s)", len(p.Diags))
+	}
+	if _, err := p.Emit(); err != nil {
+		return err
+	}
+	entryLua, ok := compiler.OutputForFile(cfg, entryAbs)
+	if !ok {
+		return fmt.Errorf("cannot map entry %s to an output", entryArg)
+	}
+	src, err := os.ReadFile(entryLua)
+	if err != nil {
+		return fmt.Errorf("cannot read emitted entry: %v", err)
+	}
+	if opt.luaBin != "" {
+		return runExternal(opt.luaBin, entryLua, scriptArgs)
+	}
+	return runEmbedded(entryLua, src, tmp, scriptArgs)
+}
+
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	check := fs.Bool("check", false, "type-check before running (default: parse only)")
@@ -45,85 +140,12 @@ func cmdRun(args []string) error {
 	if len(rest) == 0 {
 		return fmt.Errorf("usage: tlua run <entry.tl> [-- args...] [--check] [--lua BIN] [--target 5.4|5.1]")
 	}
-	entryAbs, err := filepath.Abs(rest[0])
-	if err != nil {
-		return err
-	}
-	if strings.HasSuffix(entryAbs, ".d.tl") {
-		return fmt.Errorf("cannot run declaration file %s", rest[0])
-	}
-	scriptArgs := rest[1:]
-
-	tmp, err := os.MkdirTemp("", "tlua-run-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmp)
-
-	// Load the full project (like build with no file args) so sibling
-	// requires emit alongside the entry and resolve at runtime. Standalone
-	// files outside any project fall back to a single-file program.
-	cfg, cfgPath, err := loadCfgFor(nil, tmp, *target, false, false)
-	if err != nil {
-		return err
-	}
-	p := compiler.NewProgram(cfg)
-	if err := p.Load(); err != nil {
-		return err
-	}
-	if cfgPath == "" || !hasSource(p, entryAbs) {
-		cfg, _, err = loadCfgFor([]string{entryAbs}, tmp, *target, false, false)
-		if err != nil {
-			return err
-		}
-		p = compiler.NewProgram(cfg)
-		if err := p.Load(); err != nil {
-			return err
-		}
-	}
-	if len(p.Files) == 0 {
-		return fmt.Errorf("no .tl files found")
-	}
-	if !hasSource(p, entryAbs) {
-		return fmt.Errorf("entry %s not found (not covered by tlua.json include)", rest[0])
-	}
-	if *check {
-		p.Check()
-		if len(p.Diags) > 0 {
-			if *format == "json" {
-				fmt.Print(p.FormatDiagsJSON())
-			} else {
-				fmt.Print(p.FormatDiags())
-			}
-		}
-		if p.HasErrors() {
-			return fmt.Errorf("found %d error(s)", len(p.Diags))
-		}
-	} else if p.HasErrors() {
-		// Parse errors alone block even --no-check runs: broken code
-		// cannot be emitted, let alone executed.
-		if *format == "json" {
-			fmt.Print(p.FormatDiagsJSON())
-		} else {
-			fmt.Print(p.FormatDiags())
-		}
-		return fmt.Errorf("found %d error(s)", len(p.Diags))
-	}
-	if _, err := p.Emit(); err != nil {
-		return err
-	}
-	entryLua, ok := compiler.OutputForFile(cfg, entryAbs)
-	if !ok {
-		return fmt.Errorf("cannot map entry %s to an output", rest[0])
-	}
-	src, err := os.ReadFile(entryLua)
-	if err != nil {
-		return fmt.Errorf("cannot read emitted entry: %v", err)
-	}
-	if *luaBin != "" {
-		return runExternal(*luaBin, entryLua, scriptArgs)
-	}
-	return runEmbedded(entryLua, src, tmp, scriptArgs)
+	return runEntry(rest[0], rest[1:], runOptions{
+		check:  *check,
+		luaBin: *luaBin,
+		target: *target,
+		format: *format,
+	}, nil)
 }
 
 func hasSource(p *compiler.Program, abs string) bool {

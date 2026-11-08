@@ -12,6 +12,8 @@ go build -o tlua ./cmd/tlua
 ./tlua build   # -> dist/*.lua
 ./tlua build --watch   # 或 ./tlua watch：监听改动持续增量编译（对标 tsc --watch）
 ./tlua run main.tl [args...]  # 直接运行：默认只解析不卡类型，内嵌 golua，无需安装 lua
+./tlua example                # 列出 examples/（cargo 风格），首次行注释即说明
+./tlua example basic          # 运行 examples/basic.tl 或 examples/basic/main.tl
 ```
 
 示例见 `examples/*/`（39 个文件，`tlua check` 全过），规范见 `SPEC.md`（v0.8：§15 FFI/§16 跨语言）。
@@ -67,6 +69,19 @@ go build -o tlua ./cmd/tlua
 
 - 默认内嵌 `golua`（纯 Go 实现，零外部依赖）：转译结果写入临时目录后在进程内执行，退出自动清理；多文件 `require`、包自举（`package.path` 前缀 + 点式 vendor searcher）、`concurrent` 调度器照常工作；工程外的单文件自动退化为单文件程序。
 - 限制：内嵌模式跑不了 `require("ffi")` 与 `.so/.dll/.a` C 模块（golua 无 C 模块加载器）——这类工程用 `--lua luajit`（配 `--target 5.1`）。
+
+## tlua example（cargo 风格的示例）
+
+```bash
+./tlua example                 # 列出 examples/*.tl 与 examples/*/main.tl
+./tlua example basic           # 运行；子目录示例也能直接 import 工程根模块
+./tlua example basic -- arg1   # 透传脚本参数
+./tlua example basic --check   # 先完整类型检查
+./tlua example basic --lua lua5.4
+```
+
+示例文件首行 `--- 说明` 会成为列表里的描述。命令通过工程根部的包装入口执行，
+因此 `examples/`、`tests/` 里的文件都能按普通模块导入根目录的库。
 
 ## tlua test（零配置测试）
 

@@ -20,6 +20,8 @@ go build -o tlua ./cmd/tlua
 ./tlua run main.tl -- args...    # parse-only by default, embedded golua
 ./tlua run --check main.tl       # full check before run
 ./tlua run --lua luajit main.tl  # FFI / .so modules need external Lua
+./tlua example                   # list examples/ (cargo-style)
+./tlua example NAME -- args      # run examples/NAME.tl or examples/NAME/main.tl
 ./tlua test --filter NAME        # run matching cases only
 ./tlua test --format=json        # one JSON object per line
 ./tlua lsp                       # stdio language server

@@ -107,6 +107,11 @@ func resolveRequireIn(files []*SourceFile, shorts map[string]string, cfgDir stri
 		bases := []string{
 			filepath.Join(filepath.Dir(from.Path), rel),
 			filepath.Join(cfgDir, mod.VendorDir, rel),
+			// Project-root fallback: lets files in subdirectories (tests/,
+			// examples/) import project-level modules by dotted name without
+			// duplicating them under every directory. Tried last, so file
+			// siblings and vendored dependencies keep precedence.
+			filepath.Join(cfgDir, rel),
 		}
 		for _, base := range bases {
 			if sf := fileByPathIn(files, base+".tl"); sf != nil {
