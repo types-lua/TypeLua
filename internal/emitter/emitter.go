@@ -19,6 +19,13 @@ type Options struct {
 	// shaking runs before concurrency detection, so files whose only
 	// `await` lived in removed code emit no scheduler prelude.
 	TreeShake bool
+	// FileName is the AST file name of the file being emitted (set by the
+	// compiler); RelativeModules keys entries by (FileName, spec).
+	FileName string
+	// RelativeModules maps "<file>\x00<spec>" to the runtime module name for
+	// package-local imports (`import x from "./x"`). Empty when the file has
+	// none, in which case emission keeps the literal path.
+	RelativeModules map[string]string
 }
 
 func DefaultOptions() Options { return Options{Target: "5.4"} }

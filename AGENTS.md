@@ -74,6 +74,12 @@ hides `coroutine.close/isyieldable`.
 - Generics: `<T>`, `<T extends C>`, `<T = Default>`; calls infer or take
   explicit `f<T>()` (`obj:m<T>()`, `C.new<T>()`). `chan<T>` must spell `T`:
   `makeChan<integer>(4)` (`TL3803` otherwise).
+- `import N from "./x"` is a **package-local** import: resolved against the
+  requiring file (`x.tl`, then `x/init.tl`) and emitted as a stable module name
+  relative to the project or `tlua_modules/` root (`lib.codec`,
+  `example.com.pkg.codec`). `pkg/init.tl` canonicalizes to `pkg`. Missing,
+  escaping, `.d.tl` targets and name collisions are `TL4002`; `require("./x")`
+  is rejected (no runtime relative semantics).
 - `import N from "p"` / `import N: T from "p"` is `require` sugar with module
   type inference (`TL3010` on boundary mismatch). `require("ffi")` is typed
   only when the `require` identifier is not shadowed, else falls back to `any`.

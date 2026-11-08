@@ -94,6 +94,17 @@ func (p *Program) resolveRequire(from *SourceFile, dotted string) *SourceFile {
 }
 
 func resolveRequireIn(files []*SourceFile, shorts map[string]string, cfgDir string, from *SourceFile, dotted string) *SourceFile {
+	// Package-local form: "./x" / "../x" is resolved against the requiring
+	// file, never against vendors or the project root.
+	if isRelativeSpec(dotted) {
+		base := filepath.Join(filepath.Dir(from.Path), filepath.FromSlash(dotted))
+		for _, candidate := range []string{base + ".tl", filepath.Join(base, "init.tl")} {
+			if sf := fileByPathIn(files, candidate); sf != nil {
+				return sf
+			}
+		}
+		return nil
+	}
 	if full, ok := shorts[dotted]; ok {
 		dotted = full
 	}

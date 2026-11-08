@@ -2,6 +2,7 @@ package emitter
 
 import (
 	"github.com/typelua/typelua/internal/ast"
+	"strconv"
 )
 
 // Statement emission (locals, control flow, enums, functions).
@@ -76,12 +77,23 @@ func (e *emitter) emitStmt(st ast.Stmt) {
 		e.nl()
 	case *ast.ImportStmt:
 		// Desugar: `local Name = require("path")` (bare require form).
+		// Package-local paths ("./x") are rewritten to the runtime module
+		// name resolved by the compiler; otherwise the literal is kept.
 		e.pad()
 		if n.Name != nil {
 			e.write("local " + n.Name.Name + " = ")
 		}
 		e.write("require(")
-		e.emitExpr(n.Path)
+		if spec, ok := importSpec(n.Path); ok {
+			key := e.opt.FileName + "\x00" + spec
+			if module, ok := e.opt.RelativeModules[key]; ok {
+				e.write(strconv.Quote(module))
+			} else {
+				e.emitExpr(n.Path)
+			}
+		} else {
+			e.emitExpr(n.Path)
+		}
 		e.write(")")
 		e.nl()
 	case *ast.LocalFuncDef:
@@ -346,4 +358,17 @@ func (e *emitter) emitEnum(n *ast.EnumDecl) {
 	}
 	e.write("}")
 	e.nl()
+}
+
+// importSpec decodes a quoted import path for the relative-module lookup.
+// Long-bracket strings are left alone (they are not valid module paths).
+func importSpec(lit *ast.StringLit) (string, bool) {
+	if lit == nil || len(lit.Literal) < 2 {
+		return "", false
+	}
+	q := lit.Literal[0]
+	if (q != '"' && q != '\'') || lit.Literal[len(lit.Literal)-1] != q {
+		return "", false
+	}
+	return lit.Literal[1 : len(lit.Literal)-1], true
 }

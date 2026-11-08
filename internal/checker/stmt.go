@@ -241,6 +241,13 @@ func isPureList(lit *ast.TableLit) bool {
 // driver-resolved module type applies (any when unresolved); with one,
 // the resolved type must satisfy it.
 func (c *Checker) checkImport(n *ast.ImportStmt) {
+	if spec, ok := unquoteModulePath(n.Path); ok && isRelativeSpec(spec) {
+		if c.opt.RelativeImport != nil {
+			if _, msg := c.opt.RelativeImport(c.file, spec); msg != "" {
+				c.errorf(diag.RelativeImportInvalid, n.Path.Span(), "%s", msg)
+			}
+		}
+	}
 	if n.Name == nil {
 		return
 	}

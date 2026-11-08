@@ -70,6 +70,23 @@ go build -o tlua ./cmd/tlua
 - 默认内嵌 `golua`（纯 Go 实现，零外部依赖）：转译结果写入临时目录后在进程内执行，退出自动清理；多文件 `require`、包自举（`package.path` 前缀 + 点式 vendor searcher）、`concurrent` 调度器照常工作；工程外的单文件自动退化为单文件程序。
 - 限制：内嵌模式跑不了 `require("ffi")` 与 `.so/.dll/.a` C 模块（golua 无 C 模块加载器）——这类工程用 `--lua luajit`（配 `--target 5.1`）。
 
+## 包内相对导入
+
+多文件库不再需要手写 `package.path` 补丁：`import` 支持相对路径，编译器会解析成稳定的运行期模块名。
+
+```lua
+-- lib/init.tl
+import codec from "./codec"     -- 编译为 require("lib.codec")
+return { add = codec.add }
+```
+
+```lua
+-- 消费者
+import L from "example.com.lib" -- 无论包被 vendor 到哪个依赖键
+```
+
+`./x` 先找 `x.tl`、再找 `x/init.tl`；目标是工程根内的普通 `.tl`，发射名相对工程根（vendored 包相对 `tlua_modules/`）。缺失、越界、指向 `.d.tl`、或与另一文件重名（`a.b.tl` vs `a/b.tl`）都报 `TL4002`。`require("./x")` 没有相对语义，会被拒绝并提示改用 `import`。
+
 ## tlua example（cargo 风格的示例）
 
 ```bash

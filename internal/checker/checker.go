@@ -21,6 +21,11 @@ type Options struct {
 	// RequireTypes maps dotted require paths ("a.b.c") to module types
 	// resolved by the driver (nil = every require is any, classic mode).
 	RequireTypes map[string]types.Type
+	// RelativeImport validates an `import ... from "./path"` against the
+	// project layout and returns the runtime module name the emitter should
+	// require. A non-empty message reports the spec (compiler fills this in;
+	// nil means single-file mode, where relative imports are left unchecked).
+	RelativeImport func(file, spec string) (string, string)
 	// Ambient is an optional parent scope holding builtins + global .d.tl
 	// declarations (like tsconfig types/typeRoots). When nil, the checker
 	// defines builtins in a fresh top scope (classic single-file mode).

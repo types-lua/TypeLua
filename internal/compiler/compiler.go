@@ -98,7 +98,8 @@ func (p *Program) AddVirtual(path, content string) {
 }
 
 // LoadSources is for tests / in-memory use.
-func (p *Program) LoadSources(srcs map[string]string) {	var names []string
+func (p *Program) LoadSources(srcs map[string]string) {
+	var names []string
 	for n := range srcs {
 		names = append(names, n)
 	}
@@ -121,6 +122,8 @@ func (p *Program) Check() {
 		Target:          p.Cfg.Target(),
 	}
 	p.shorts = p.shortModules()
+	rel := newRelativeResolver(p.Files, p.Cfg.Dir)
+	opt.RelativeImport = rel.target
 	p.checkAll(opt)
 }
 
@@ -147,7 +150,11 @@ func (p *Program) HasErrors() bool {
 // rebuild loops); skipped paths still count as emitted.
 func (p *Program) Emit() ([]string, error) {
 	withPrelude := NeedsModPath(p)
-	opt := emitter.Options{Target: p.Cfg.Target(), TreeShake: p.Cfg.CompilerOptions.TreeShake}
+	opt := emitter.Options{
+		Target:          p.Cfg.Target(),
+		TreeShake:       p.Cfg.CompilerOptions.TreeShake,
+		RelativeModules: newRelativeResolver(p.Files, p.Cfg.Dir).moduleMap(),
+	}
 	jobs := collectEmitJobs(p.Cfg, p.Files)
 	computeEmitJobs(jobs, opt, withPrelude)
 	emittedSet := map[string]bool{}
@@ -210,7 +217,11 @@ func collectEmitJobs(cfg *config.Config, files []*SourceFile) []emitJob {
 func computeEmitJobs(jobs []emitJob, opt emitter.Options, withPrelude bool) {
 	parallelDo(len(jobs), func(i int) {
 		jb := &jobs[i]
-		out, mappings := emitter.EmitFileWithMap(jb.sf.File, opt)
+		fileOpt := opt
+		if jb.sf.File != nil {
+			fileOpt.FileName = jb.sf.File.Name
+		}
+		out, mappings := emitter.EmitFileWithMap(jb.sf.File, fileOpt)
 		if withPrelude {
 			out, mappings = PrependPrelude(out, mappings)
 		}
@@ -275,13 +286,21 @@ func writeFileIfChanged(path string, data []byte) (bool, error) {
 
 // EmitToString is for tests.
 func (p *Program) EmitToString() map[string]string {
-	opt := emitter.Options{Target: p.Cfg.Target(), TreeShake: p.Cfg.CompilerOptions.TreeShake}
+	opt := emitter.Options{
+		Target:          p.Cfg.Target(),
+		TreeShake:       p.Cfg.CompilerOptions.TreeShake,
+		RelativeModules: newRelativeResolver(p.Files, p.Cfg.Dir).moduleMap(),
+	}
 	out := map[string]string{}
 	for _, sf := range p.Files {
 		if sf.IsDecl {
 			continue
 		}
-		out[sf.Path] = emitter.EmitFile(sf.File, opt)
+		fileOpt := opt
+		if sf.File != nil {
+			fileOpt.FileName = sf.File.Name
+		}
+		out[sf.Path] = emitter.EmitFile(sf.File, fileOpt)
 	}
 	return out
 }

@@ -50,6 +50,12 @@ func (c *Checker) checkExprMulti(e ast.Expr) []types.Type {
 		// types (any when unresolved or shadowed by a local).
 		if id, ok := n.Func.(*ast.Ident); ok && id.Name == "require" && len(n.Args) == 1 {
 			if lit, ok := n.Args[0].(*ast.StringLit); ok && !isShadowedRequire(c) {
+				if spec, ok := unquoteModulePath(lit); ok && isRelativeSpec(spec) {
+					c.checkExpr(n.Func) // record the builtin use
+					c.errorf(diag.RelativeImportInvalid, lit.Span(),
+						"relative path %q is only supported by `import Name from %q`", spec, spec)
+					return []types.Type{types.Any}
+				}
 				c.checkExpr(n.Func) // record the builtin use
 				return []types.Type{c.requirePathType(lit)}
 			}

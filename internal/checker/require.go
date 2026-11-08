@@ -3,6 +3,7 @@ package checker
 import (
 	"github.com/typelua/typelua/internal/ast"
 	"github.com/typelua/typelua/internal/types"
+	"strings"
 )
 
 // Cross-file require support: the driver (compiler.Program) resolves
@@ -34,6 +35,11 @@ func unquoteModulePath(sl *ast.StringLit) (string, bool) {
 	}
 	name, _ := parseStringLiteral(lit)
 	return name, true
+}
+
+// isRelativeSpec reports the package-local import form ("./x", "../x").
+func isRelativeSpec(spec string) bool {
+	return strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../")
 }
 
 // requirePathType resolves a require path literal through RequireTypes

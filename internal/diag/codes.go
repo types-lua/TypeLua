@@ -225,7 +225,8 @@ const (
 // ---- Project / I-O (TL4xxx) ----
 
 const (
-	CannotReadFile Code = "TL4001"
+	CannotReadFile        Code = "TL4001"
+	RelativeImportInvalid Code = "TL4002"
 )
 
 // codeDef is one registry row. Name must match the constant declared
@@ -374,6 +375,7 @@ var codeTable = []codeDef{
 	{AsyncCallOutsideAsync, "AsyncCallOutsideAsync", CatConcurrency, "async callee invoked outside an async task"},
 
 	{CannotReadFile, "CannotReadFile", CatProject, "cannot read a source file"},
+	{RelativeImportInvalid, "RelativeImportInvalid", CatProject, "relative import cannot be resolved to a module"},
 }
 
 // codeIndex maps every registered code to its row.

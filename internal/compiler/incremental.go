@@ -316,11 +316,13 @@ func (s *Session) rebuildAmbientFresh() {
 }
 
 func (s *Session) checkerOpt() checker.Options {
+	rel := newRelativeResolver(s.fileList(), s.cfg.Dir)
 	return checker.Options{
 		Strict:          s.cfg.Strict(),
 		StrictNilChecks: s.cfg.StrictNilChecks(),
 		NoImplicitAny:   s.cfg.NoImplicitAny(),
 		Target:          s.cfg.Target(),
+		RelativeImport:  rel.target,
 	}
 }
 
@@ -764,7 +766,11 @@ func (s *Session) emitChanged() ([]string, error) {
 			}
 		}
 	}
-	opt := emitter.Options{Target: s.cfg.Target(), TreeShake: s.cfg.CompilerOptions.TreeShake}
+	opt := emitter.Options{
+		Target:          s.cfg.Target(),
+		TreeShake:       s.cfg.CompilerOptions.TreeShake,
+		RelativeModules: newRelativeResolver(files, s.cfg.Dir).moduleMap(),
+	}
 	jobs := collectEmitJobs(s.cfg, files)
 	emittedSet := map[string]bool{}
 	for _, jb := range jobs {
