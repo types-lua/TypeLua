@@ -172,6 +172,12 @@ func (s *Session) FormatDiags() string {
 	return sb.String()
 }
 
+// FormatDiagsJSON renders the current session diagnostics as a sorted
+// JSON array (same shape as Program.FormatDiagsJSON).
+func (s *Session) FormatDiagsJSON() string {
+	return FormatDiagsJSON(s.diags)
+}
+
 // LastChecked returns the sorted paths rechecked in the last Sync (subset
 // proof for tests and watch logging).
 func (s *Session) LastChecked() []string {

@@ -34,8 +34,12 @@ func cmdRun(args []string) error {
 	check := fs.Bool("check", false, "type-check before running (default: parse only)")
 	luaBin := fs.String("lua", "", "external lua interpreter (e.g. lua5.4, luajit); default: embedded golua")
 	target := fs.String("target", "", "lua target: 5.4 or 5.1 (default: tlua.json or 5.4, like build)")
+	format := fs.String("format", "text", "diagnostic output: text or json")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *format != "text" && *format != "json" {
+		return fmt.Errorf("invalid --format %q (want text or json)", *format)
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
@@ -86,7 +90,11 @@ func cmdRun(args []string) error {
 	if *check {
 		p.Check()
 		if len(p.Diags) > 0 {
-			fmt.Print(p.FormatDiags())
+			if *format == "json" {
+				fmt.Print(p.FormatDiagsJSON())
+			} else {
+				fmt.Print(p.FormatDiags())
+			}
 		}
 		if p.HasErrors() {
 			return fmt.Errorf("found %d error(s)", len(p.Diags))
@@ -94,7 +102,11 @@ func cmdRun(args []string) error {
 	} else if p.HasErrors() {
 		// Parse errors alone block even --no-check runs: broken code
 		// cannot be emitted, let alone executed.
-		fmt.Print(p.FormatDiags())
+		if *format == "json" {
+			fmt.Print(p.FormatDiagsJSON())
+		} else {
+			fmt.Print(p.FormatDiags())
+		}
 		return fmt.Errorf("found %d error(s)", len(p.Diags))
 	}
 	if _, err := p.Emit(); err != nil {

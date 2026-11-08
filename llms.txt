@@ -1,0 +1,54 @@
+# TypeLua
+
+> TypeLua is a typed superset of Lua (TypeScript-for-Lua). Types erase to idiomatic Lua (5.4 default, 5.1/LuaJIT compatible). Only `class`/`enum` emit runtime values.
+
+- [TypeLua docs (EN/ZH + full llms.txt)](https://github.com/types-lua/docs): user documentation, quickstart, language reference, CLI, FFI, concurrency, examples
+- [SPEC (v0.8, contract)](https://github.com/types-lua/TypeLua/blob/main/SPEC.md): §§1-16, the normative language definition
+- [AGENTS.md (agent bootstrap)](https://github.com/types-lua/TypeLua/blob/main/AGENTS.md): build/test commands, pitfalls, change discipline
+- [Examples (25 runnable programs)](https://github.com/types-lua/TypeLua/tree/main/examples): every directory is `tlua check`-clean; copy idioms from here
+- [Diagnostics registry](https://github.com/types-lua/TypeLua/blob/main/internal/diag/codes.go): stable `TLxxxx` codes consumed via `--format=json`
+
+## Quickstart for agents
+
+```bash
+go build -o tlua ./cmd/tlua
+./tlua init
+./tlua check --format=json   # machine-readable diags, exit 1 on error
+./tlua build                 # -> dist/*.lua
+./tlua run --check main.tl   # full check then run (embedded golua)
+./tlua run --lua luajit main.tl  # FFI / .so needs external Lua
+```
+
+```lua
+type Point = { x: number, y: number }
+local function dist(a: Point, b: Point): number
+  local dx: number = a.x - b.x
+  local dy: number = a.y - b.y
+  return dx * dx + dy * dy
+end
+local p: Point = { x = 1, y = 2 }
+print(dist(p, { x = 4, y = 6 }))
+```
+
+## Rules that save round-trips
+
+- Valid Lua 5.4 is valid TypeLua; `type`/`class`/`import`/`defer`/`await`/`spawn`/`select`/`async`/`macro` are contextual: `local import = 1`, `await(x)`, `spawn(x)` stay plain calls.
+- `strictNilChecks` is on: narrow with `==nil`/`~=nil`, `type(x)=="string"`, `=="lit"`, truthiness, member paths.
+- `interface` is structural, `class` instances are nominal; `class` is block-scoped `local`; `super(...)` only in derived constructors before `self`.
+- `import N from "p"` is `require` sugar with inferred module types; `require("ffi")` is typed only when `require` is not shadowed.
+- `defer f()`/`errdefer f()` take a call, run LIFO at function exit (lazy closure); `errdefer` only on explicit `error()` in the same function.
+- Concurrency is single-threaded CSP: `async`/`await` markers, `await`/`select` outside `async` is an error (`TL3801`/`TL3802`), sync callers cannot call blocking primitives (`TL3805`).
+- FFI/`*.so` needs `--target 5.1` + `--lua luajit`; `ffi.cdef` is opaque, hand-write `as CLib`; `.d.tl` checks but never emits.
+- JSON diags: `{file,line,column,endLine,endColumn,severity,code,category,message}`; `code` is stable (`TL1xxx`-`TL4xxx`).
+
+## tlua.json essentials
+
+```json
+{
+  "compilerOptions": { "target": "5.4", "strict": true, "outDir": "dist", "rootDir": "." },
+  "include": ["**/*.tl"],
+  "exclude": ["dist"]
+}
+```
+
+Full guide + ZH version: https://github.com/types-lua/docs (`llms.txt`, `llms-full.txt`, `llms-zh.txt`, `llms-full-zh.txt`).

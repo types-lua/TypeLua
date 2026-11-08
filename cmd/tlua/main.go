@@ -66,9 +66,9 @@ Usage:
   tlua mod vendor                      copy locked sources into tlua_modules/
   tlua mod list [--indirect]           list locked modules (direct by default)
   tlua mod graph                       print the locked dependency graph
-  tlua check [files...] [--watch] [-w] [--pollInterval ms] [--debounce ms]
-   tlua build [files...] [--outDir dist] [--target 5.4] [--treeShake] [--watch] [-w]
-   tlua run <entry.tl> [-- args...] [--check] [--lua BIN] [--target 5.4]
+  tlua check [files...] [--format text|json] [--watch] [-w] [--pollInterval ms] [--debounce ms]
+   tlua build [files...] [--outDir dist] [--target 5.4] [--treeShake] [--format text|json] [--watch] [-w]
+   tlua run <entry.tl> [-- args...] [--check] [--format text|json] [--lua BIN] [--target 5.4]
   tlua watch [files...] [--outDir dist] [--target 5.4] [--treeShake]
   tlua bindgen --header foo.h --out types/foo.d.tl [--shim foo.tl] [--lib CLib] [--so libfoo.so]
   tlua lsp                          language server over stdio
@@ -162,8 +162,12 @@ func cmdCheck(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	var wf watchFlags
 	bindWatchFlags(fs, &wf)
+	format := fs.String("format", "text", "diagnostic output: text or json")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *format != "text" && *format != "json" {
+		return fmt.Errorf("invalid --format %q (want text or json)", *format)
 	}
 	resolveWatchFlags(&wf)
 	cfg, cfgPath, err := loadCfgFor(fs.Args(), "", "", false, false)
@@ -179,7 +183,11 @@ func cmdCheck(args []string) error {
 	}
 	p.Check()
 	if len(p.Diags) > 0 {
-		fmt.Print(p.FormatDiags())
+		if *format == "json" {
+			fmt.Print(p.FormatDiagsJSON())
+		} else {
+			fmt.Print(p.FormatDiags())
+		}
 	}
 	if p.HasErrors() {
 		return fmt.Errorf("found %d error(s)", len(p.Diags))
@@ -194,10 +202,14 @@ func cmdBuild(args []string) error {
 	target := fs.String("target", "", "lua target: 5.4 or 5.1")
 	sourceMap := fs.Bool("sourceMap", false, "emit .lua.map source maps")
 	treeShake := fs.Bool("treeShake", false, "drop zero-reference pure local functions")
+	format := fs.String("format", "text", "diagnostic output: text or json")
 	var wf watchFlags
 	bindWatchFlags(fs, &wf)
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *format != "text" && *format != "json" {
+		return fmt.Errorf("invalid --format %q (want text or json)", *format)
 	}
 	resolveWatchFlags(&wf)
 	cfg, cfgPath, err := loadCfgFor(fs.Args(), *outDir, *target, *sourceMap, *treeShake)
@@ -230,7 +242,11 @@ func cmdBuild(args []string) error {
 		return err
 	}
 	if len(p.Diags) > 0 {
-		fmt.Print(p.FormatDiags())
+		if *format == "json" {
+			fmt.Print(p.FormatDiagsJSON())
+		} else {
+			fmt.Print(p.FormatDiags())
+		}
 	}
 	for _, f := range emitted {
 		fmt.Printf("emitted %s\n", f)

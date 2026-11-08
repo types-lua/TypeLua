@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -289,4 +290,56 @@ func (p *Program) FormatDiags() string {
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+// FormatDiagsJSON renders the same set as a JSON array for LLM agents
+// and editor integrations (stable keys, sorted order, exit code unchanged).
+func (p *Program) FormatDiagsJSON() string {
+	return FormatDiagsJSON(p.Diags)
+}
+
+// DiagJSON is the machine-readable form of one diagnostic.
+type DiagJSON struct {
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	EndLine  int    `json:"endLine"`
+	EndCol   int    `json:"endColumn"`
+	Severity string `json:"severity"`
+	Code     string `json:"code"`
+	Category string `json:"category"`
+	Message  string `json:"message"`
+}
+
+// FormatDiagsJSON renders any diagnostic slice as a sorted JSON array.
+func FormatDiagsJSON(diags []diag.Diagnostic) string {
+	ds := append([]diag.Diagnostic{}, diags...)
+	sort.Slice(ds, func(i, j int) bool {
+		if ds[i].Span.File != ds[j].Span.File {
+			return ds[i].Span.File < ds[j].Span.File
+		}
+		if ds[i].Span.Start.Line != ds[j].Span.Start.Line {
+			return ds[i].Span.Start.Line < ds[j].Span.Start.Line
+		}
+		return ds[i].Span.Start.Column < ds[j].Span.Start.Column
+	})
+	out := make([]DiagJSON, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, DiagJSON{
+			File:     d.Span.File,
+			Line:     d.Span.Start.Line,
+			Column:   d.Span.Start.Column,
+			EndLine:  d.Span.End.Line,
+			EndCol:   d.Span.End.Column,
+			Severity: d.Severity.String(),
+			Code:     string(d.Code),
+			Category: d.Code.Category().String(),
+			Message:  d.Message,
+		})
+	}
+	raw, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return "[]\n"
+	}
+	return string(raw) + "\n"
 }
