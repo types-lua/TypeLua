@@ -25,7 +25,14 @@ jobs:
       - name: Install Lua (DAP tests)
         run: sudo apt-get update && sudo apt-get install -y lua5.4
       - name: Test
-        run: go test ./...
+        run: |
+          set +e
+          go test ./... 2>&1 | tee /tmp/test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=go test failed::$(grep -E '^(--- FAIL|FAIL|panic:|    --- FAIL)' /tmp/test.log | tail -n 10 | tr '\n' '|')"
+          fi
+          exit "$status"
       - name: Build tlua
         run: go build -o /tmp/tlua ./cmd/tlua
       - name: Self check (examples must type-check)
