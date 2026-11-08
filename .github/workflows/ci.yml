@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Build tlua
+        run: go build -o /tmp/tlua ./cmd/tlua
+      - name: Self check (examples must type-check)
+        run: /tmp/tlua check
+      - name: Smoke test the test runner
+        run: |
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/tests"
+          printf '%s\n' '{"compilerOptions":{"target":"5.4","strict":true,"strictNilChecks":true,"noImplicitAny":false,"rootDir":".","outDir":"dist"},"include":["**/*.tl"],"exclude":["dist"]}' > "$tmp/tlua.json"
+          printf '%s\n' 'import T from "tlua_test"' 'return {' '  ["adds"] = function(): void' '    T.eq(1 + 1, 2)' '  end,' '}' > "$tmp/tests/smoke_test.tl"
+          cd "$tmp"
+          /tmp/tlua test
