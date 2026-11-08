@@ -45,3 +45,19 @@ func TestCmdExampleListRunAndUnknown(t *testing.T) {
 		t.Fatal("unknown example should fail")
 	}
 }
+
+func TestCmdExampleOutsideInclude(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "tlua.json"), `{
+  "compilerOptions": {"target": "5.4", "strict": true, "strictNilChecks": true, "noImplicitAny": true, "rootDir": ".", "outDir": "dist"},
+  "include": ["src/**/*.tl"],
+  "exclude": ["dist"]
+}`)
+	writeFile(t, filepath.Join(dir, "src", "lib.tl"), "return { answer = 42 }\n")
+	writeFile(t, filepath.Join(dir, "examples", "show.tl"),
+		"--- Uses a library outside the examples directory.\nimport lib from \"src.lib\"\nprint(lib.answer)\n")
+	t.Chdir(dir)
+	if err := cmdExample([]string{"show"}); err != nil {
+		t.Fatalf("example outside include should still run: %v", err)
+	}
+}

@@ -66,12 +66,18 @@ func cmdExample(args []string) error {
 	module := strings.ReplaceAll(strings.TrimSuffix(filepath.ToSlash(rel), ".tl"), "/", ".")
 	wrapper := filepath.Join(root, "__tlua_example_main.tl")
 	source := fmt.Sprintf("require(%q)\n", module)
+	virtual := map[string]string{wrapper: source}
+	// An example may live outside tlua.json's include patterns; add it so the
+	// checker and emitter see it exactly like an included file.
+	if data, err := os.ReadFile(entry.Path); err == nil {
+		virtual[entry.Path] = string(data)
+	}
 	return runEntry(wrapper, rest[1:], runOptions{
 		check:  *check,
 		luaBin: *luaBin,
 		target: *target,
 		format: *format,
-	}, map[string]string{wrapper: source})
+	}, virtual)
 }
 
 // projectRoot locates the nearest tlua.json directory (or the cwd) so
