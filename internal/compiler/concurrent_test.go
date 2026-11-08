@@ -32,13 +32,20 @@ func runConcProjectFilesTarget(t *testing.T, target string, files map[string]str
 		t.Skip("no lua interpreter on PATH")
 	}
 	if target == "5.1" {
-		// Prefer a real 5.1 when checking the 5.1 runtime paths.
+		// 5.1 runtime paths need a real 5.1 VM (PUC 5.1 or LuaJIT). Running
+		// 5.1-targeted output on Lua 5.4 is not a supported combination and
+		// exercises different coroutine semantics, so skip instead.
+		real51 := ""
 		for _, c := range []string{"lua5.1", "luajit"} {
 			if p, err := exec.LookPath(c); err == nil {
-				lua = p
+				real51 = p
 				break
 			}
 		}
+		if real51 == "" {
+			t.Skip("no Lua 5.1/LuaJIT interpreter for target 5.1")
+		}
+		lua = real51
 	}
 	dir := t.TempDir()
 	write := func(name, content string) {

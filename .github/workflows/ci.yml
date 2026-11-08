@@ -22,8 +22,8 @@ jobs:
           cache: true
       - name: Vet
         run: go vet ./...
-      - name: Install Lua (DAP tests)
-        run: sudo apt-get update && sudo apt-get install -y lua5.4
+      - name: Install Lua (DAP and 5.1 tests)
+        run: sudo apt-get update && sudo apt-get install -y lua5.4 luajit
       - name: Test
         run: |
           set +e
