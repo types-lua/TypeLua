@@ -435,12 +435,21 @@ func (s *dapSession) addTestRunner(p *compiler.Program, testPath string, testCas
 	}
 	module := strings.ReplaceAll(strings.TrimSuffix(filepath.ToSlash(rel), ".tl"), "/", ".")
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "local suite = require(%q)\n", module)
+	// `require`'s module type is a structural object; indexing it under strict
+	// mode needs an explicit any (the runner is generated, not user code).
+	fmt.Fprintf(&sb, "local suite: any = require(%q)\n", module)
 	if testCase != "" {
-		fmt.Fprintf(&sb, "suite[%q]()\n", testCase)
+		fmt.Fprintf(&sb, "local fn = suite[%q]\nif type(fn) == \"function\" then fn() end\n", testCase)
 	} else {
-		sb.WriteString("local names = {}\nfor name, value in pairs(suite) do if type(value) == \"function\" then names[#names + 1] = name end end\n")
-		sb.WriteString("table.sort(names)\nfor i = 1, #names do suite[names[i]]() end\n")
+		sb.WriteString("local names: string[] = {}\n")
+		sb.WriteString("for name, value in pairs(suite) do\n")
+		sb.WriteString("  if type(value) == \"function\" then names[#names + 1] = name as string end\n")
+		sb.WriteString("end\n")
+		sb.WriteString("table.sort(names)\n")
+		sb.WriteString("for i = 1, #names do\n")
+		sb.WriteString("  local fn = suite[names[i]]\n")
+		sb.WriteString("  if type(fn) == \"function\" then fn() end\n")
+		sb.WriteString("end\n")
 	}
 	runner := filepath.Join(s.cfg.Dir, "__tlua_test_debug_main.tl")
 	p.AddVirtual(runner, sb.String())

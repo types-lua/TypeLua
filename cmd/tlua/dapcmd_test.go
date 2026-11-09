@@ -372,6 +372,55 @@ print("sum", sum)
 	c.wait(t, "disconnect response", responseFor(seq), 5*time.Second)
 }
 
+func TestDAPTestModeAllCases(t *testing.T) {
+	if _, err := exec.LookPath("lua5.4"); err != nil {
+		t.Skip("lua5.4 not installed")
+	}
+	dir := t.TempDir()
+	writeProject(t, dir)
+	testFile := filepath.Join(dir, "tests", "math_test.tl")
+	writeFile(t, testFile, `import T from "tlua_test"
+
+return {
+  ["adds"] = function(): void
+    T.eq(1 + 1, 2)
+  end,
+  ["compares"] = function(): void
+    T.eq(2 + 2, 4)
+  end,
+}
+`)
+	t.Chdir(dir)
+
+	c := newDAPTestClient(t)
+	seq := c.request(t, "initialize", map[string]any{"adapterID": "typelua"})
+	c.wait(t, "initialize response", responseFor(seq), 5*time.Second)
+	c.wait(t, "initialized event", eventNamed("initialized"), 5*time.Second)
+	seq = c.request(t, "launch", map[string]any{
+		"program": testFile,
+		"test":    testFile,
+	})
+	resp := c.wait(t, "launch response", responseFor(seq), 10*time.Second)
+	var launchOK bool
+	_ = json.Unmarshal(resp["success"], &launchOK)
+	if !launchOK {
+		t.Fatalf("launch failed: %s", string(resp["message"]))
+	}
+	seq = c.request(t, "configurationDone", nil)
+	c.wait(t, "configurationDone response", responseFor(seq), 5*time.Second)
+	c.wait(t, "terminated event", eventNamed("terminated"), 10*time.Second)
+	result := c.wait(t, "test result event", eventNamed("typelua/testResult"), 5*time.Second)
+	var ok bool
+	if err := json.Unmarshal(cbody(result, "ok"), &ok); err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatalf("test result = %s", string(result["body"]))
+	}
+	seq = c.request(t, "disconnect", nil)
+	c.wait(t, "disconnect response", responseFor(seq), 5*time.Second)
+}
+
 func TestDAPTestModeReportsResult(t *testing.T) {
 	if _, err := exec.LookPath("lua5.4"); err != nil {
 		t.Skip("lua5.4 not installed")
