@@ -246,7 +246,10 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 	if root == nil {
 		root = u.Sym
 	}
-	if root.File != "" && (doc.file == nil || root.File != doc.file.Name) {
+	if root.File == "" {
+		return nil, ErrInvalidParams, "no source location for this symbol"
+	}
+	if doc.file == nil || root.File != doc.file.Name {
 		return nil, ErrInvalidParams,
 			"cannot rename across files (single-file LSP): open " + root.File
 	}
@@ -292,7 +295,10 @@ func (s *Server) renameType(doc *document, entry *checker.TypeEntry, newName str
 	if entry == nil {
 		return nil, ErrInvalidParams, "no renameable symbol here"
 	}
-	if entry.File != "" && (doc.file == nil || entry.File != doc.file.Name) {
+	if entry.File == "" {
+		return nil, ErrInvalidParams, "no source location for this type"
+	}
+	if doc.file == nil || entry.File != doc.file.Name {
 		return nil, ErrInvalidParams,
 			"cannot rename across files (single-file LSP): open " + entry.File
 	}

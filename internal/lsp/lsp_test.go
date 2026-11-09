@@ -340,6 +340,10 @@ func TestTypeRename(t *testing.T) {
 		"textDocument": doc, "position": map[string]any{"line": 4, "character": 6},
 		"newName": "Hue",
 	})
+	// Enum definitions must carry their declaration file too.
+	h.send("textDocument/definition", 74, map[string]any{
+		"textDocument": doc, "position": map[string]any{"line": 13, "character": 9},
+	})
 	h.send("shutdown", 73, nil)
 	h.send("exit", nil, nil)
 	<-h.done
@@ -376,6 +380,24 @@ func TestTypeRename(t *testing.T) {
 	checkEdits("70", []int{0, 10})
 	checkEdits("71", []int{5, 14})
 	checkEdits("72", []int{4, 13, 13})
+
+	def := findMsg(msgs, "74")
+	if def == nil {
+		t.Fatal("no enum definition response")
+	}
+	var locs []struct {
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(def.Result, &locs); err != nil {
+		t.Fatal(err)
+	}
+	if len(locs) != 1 || locs[0].Range.Start.Line != 4 {
+		t.Fatalf("enum definition should point at line 4: %+v", locs)
+	}
 }
 
 func TestMemberRenameReferences(t *testing.T) {

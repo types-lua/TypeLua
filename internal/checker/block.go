@@ -43,7 +43,7 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 			}
 		case *ast.EnumDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				e := &typeEntry{name: n.Name.Name, enumDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				e := &typeEntry{name: n.Name.Name, File: c.file, enumDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
 				sc.types[n.Name.Name] = e
 				c.recordTypeDef(n.Name.Span(), e)
 			} else {
