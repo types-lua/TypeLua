@@ -17,7 +17,7 @@ import (
 //	go build -ldflags "-X main.Version=<tag without leading v>" ./cmd/tlua
 //
 // Local builds keep the fallback below.
-var Version = "0.9.6"
+var Version = "0.9.7"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {

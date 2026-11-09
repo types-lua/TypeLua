@@ -417,6 +417,10 @@ func (s *dapSession) onLaunch(seq int, args json.RawMessage) {
 		s.fail(seq, "launch", "no Lua interpreter found; install lua5.4 or luajit, or set 'lua' in launch.json")
 		return
 	}
+	if err := probeLua(s.luaBin); err != nil {
+		s.fail(seq, "launch", err.Error())
+		return
+	}
 
 	s.respond(seq, "launch", nil)
 }
@@ -464,6 +468,28 @@ func (s *dapSession) buildMappings(rendered []compiler.RenderedFile) {
 		}
 		s.genToSrc[luaPath] = byGen
 	}
+}
+
+// probeLua rejects the common misconfiguration where typelua.lua.path points
+// at the tlua compiler instead of a Lua interpreter. The compiler would see
+// the agent script as an unknown subcommand and print its usage, while the
+// debug session would silently never start.
+func probeLua(bin string) error {
+	out, err := exec.Command(bin, "-e", "io.write(_VERSION)").CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		text = text[:i]
+	}
+	if len(text) > 200 {
+		text = text[:200] + "..."
+	}
+	if err != nil {
+		return fmt.Errorf("%s is not a usable Lua interpreter: %v: %s (set typelua.lua.path to lua5.4 or luajit)", bin, err, text)
+	}
+	if !strings.HasPrefix(text, "Lua") {
+		return fmt.Errorf("%s is not a Lua interpreter (got %q); set typelua.lua.path to lua5.4 or luajit", bin, text)
+	}
+	return nil
 }
 
 func detectLua(target string) string {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -349,6 +350,25 @@ return {
 	}
 	seq = c.request(t, "disconnect", nil)
 	c.wait(t, "disconnect response", responseFor(seq), 5*time.Second)
+}
+
+func TestProbeLuaRejectsNonInterpreter(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/true")
+	}
+	if err := probeLua("/bin/true"); err == nil {
+		t.Fatal("probeLua accepted a non-Lua executable")
+	}
+}
+
+func TestProbeLuaAcceptsLua54(t *testing.T) {
+	path, err := exec.LookPath("lua5.4")
+	if err != nil {
+		t.Skip("lua5.4 not installed")
+	}
+	if err := probeLua(path); err != nil {
+		t.Fatalf("probeLua rejected lua5.4: %v", err)
+	}
 }
 
 func TestBuildTestRunnerListMode(t *testing.T) {
