@@ -136,7 +136,7 @@ local d = Dog.new("rex")   -- 或 Dog("rex")（__call）
 - 嵌套上限 256 层（表达式/类型/块分别计数），超限报 `TL2015` 并截断恢复；`?` 与条件分支的歧义由推测性前瞻消解（`? True :` 归条件，否则归可选）。
 - 恢复兜底：残缺 AST 绝不击垮后级——checker/emitter 对空节点宽容（报错已由 parser 记录）。
 - 诊断中超深类型截断显示（8 层括号/`...`，浅消息逐字节不变）。
-- `.d.tl` 只检查不发射；全部参检的 `.d.tl`（`types` 过滤后）一次建成共享父作用域（内置 + 全局），程序文件以子作用域参检：局部遮蔽 ambient 不报 `TL3001`，改名不连带（与内建一致）；`.d.tl` 自身互见（有序共享），`require` 边仍回退 `any`（`.d.tl` 无运行时值）。LSP 单文件模式暂无 ambient（`ffi` 为内建不受影响）。
+- `.d.tl` 只检查不发射；全部参检的 `.d.tl`（`types` 过滤后）一次建成共享父作用域（内置 + 全局），程序文件以子作用域参检：局部遮蔽 ambient 不报 `TL3001`，改名不连带（与内建一致）；`.d.tl` 自身互见（有序共享），`require` 边仍回退 `any`（`.d.tl` 无运行时值）。LSP 会从最近的 `tlua.json` 加载 `typeRoots` 中的 ambient `.d.tl`（单文件诊断可用）；跨文件 `import` 的模块类型仍按单文件回退 `any`，工程级推断以 `tlua check` 为准。
 - `treeShake`（默认关；`tlua build/watch --treeShake` 或配置）：删除零引用的纯本地函数（`local function f` / 单 `local x = function`，含传递闭包）。永不删除：全局/方法/表赋值、`require`/`import`（副作用）、`return` 可达、多值或带属性（`<const>`/`<close>`）的 locals、类/枚举/宏/类型声明；赋值目标与 `select` 非 `local` 绑定按引用计（宁可漏删）；标签/字段/方法名/类型注解属他命名空间，不计数；未知 AST 节点直接停摇（fail-safe，新语法默认回退到不删）。摇后重算并发 prelude（仅剩死代码 `await` 的文件不带调度器）。陈旧默认 `dist/` 不计入 native 资产（换 `outDir` 不把旧产物吸回新构建；自定义 outDir 请同步加入 `exclude`）。见 `examples/treeshake`（死代码/传递链/递归被删，表方法与回调保留，双构建运行输出一致）。
 
 ## 8. 宏（卫生 AST 宏）
@@ -324,4 +324,4 @@ print(M.native_add(20, 22))
 - 构建集成：`build` 按布局拷贝静态资产到 `dist`（`.tl` 发射优先，同名 `.lua` 跳过；删源的 native 残留需 `clean`，`watch`  stale 清理仅管 `.tl` 产物）；运行时 prelude 置 `package.path` 与 `package.cpath`（脚本目录优先，用户项保留；`.a` 永不进 `cpath`，见下）+ 点式 vendor searcher（仅 `.lua`，点式 `.so` 无 shim 不支持——按约必须配 `init.lua`）。
 - 静态库形态（`*.a`）：与 `.so` 走同一透传/vendor/监听通道，但**运行时语义不同**——动态加载器打不开 `.a`，故无 `ffi.load` 形态。用法是构建宿主时把 `.a` 链进 LuaJIT 可执行文件（`luajit myapp.c libfoo.a`），运行时符号已在进程内，shim 内以 `ffi.C`（同 `cdef`、无 `load`）直调。`bindgen --so` 缺省仍为 `.so`（shim 加载态）；静态形态手写 shim 时把 `ffi.load(...)` 换成 `ffi.C` 即可，`.d.tl` 契约不变。
 - 监听集 = `ListFiles`（含 `typeRoots` 的 `.d.tl`）+ `ListNativeAssets`（`.lua/.so/.a` 改动亦重编）+ `tlua.json/toml/lock`；`outDir` 恒不监听。
-- 限制：LSP 暂无 ambient（多文件工程以 `tlua check` 为准）；`.d.tl` 的 `require` 边恒 `any`（声明文件无运行时值）；`select/pcall` 穿 `yield` 等 §14 限制对 FFI 回调同样适用。
+- 限制：LSP 的跨文件 `import` 类型仍回退 `any`（多文件工程以 `tlua check` 为准；ambient `.d.tl` 会从最近的 `tlua.json` 加载）；`.d.tl` 的 `require` 边恒 `any`（声明文件无运行时值）；`select/pcall` 穿 `yield` 等 §14 限制对 FFI 回调同样适用。

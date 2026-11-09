@@ -251,7 +251,9 @@ tlua example basic --check
 ## 编辑器支持
 
 `tlua lsp` 通过 stdio 提供 LSP：诊断、悬停、跳转定义、补全（含 `.`/`:` 成员）、
-引用、重命名、文档符号，增量同步。
+引用、重命名、文档符号，增量同步。诊断会从最近的 `tlua.json`（`typeRoots`）
+加载 ambient `.d.tl`；跨文件 `import` 类型仍按单文件处理，工程级推断以
+`tlua check` 为准。
 
 VS Code：[`types-lua/vscode-typelua`](https://github.com/types-lua/vscode-typelua)
 提供语法高亮、代码片段、语言客户端、测试浏览器，以及经 `tlua dap` 的断点调试。

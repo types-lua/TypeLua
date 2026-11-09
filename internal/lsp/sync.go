@@ -42,7 +42,7 @@ func (s *Server) didOpen(raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return
 	}
-	s.docs[p.TextDocument.URI] = analyze(p.TextDocument.URI, p.TextDocument.Text, p.TextDocument.Version)
+	s.docs[p.TextDocument.URI] = s.analyze(p.TextDocument.URI, p.TextDocument.Text, p.TextDocument.Version)
 	s.publishDiagnostics(p.TextDocument.URI)
 }
 
@@ -79,7 +79,7 @@ func (s *Server) didChange(raw json.RawMessage) {
 		}
 		lines = splitLines(content)
 	}
-	s.docs[p.TextDocument.URI] = analyze(p.TextDocument.URI, content, version)
+	s.docs[p.TextDocument.URI] = s.analyze(p.TextDocument.URI, content, version)
 	s.publishDiagnostics(p.TextDocument.URI)
 }
 

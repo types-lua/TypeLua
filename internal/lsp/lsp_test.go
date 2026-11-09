@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1229,5 +1231,73 @@ local z = p["x"]
 	rn := findMsg(msgs, "152")
 	if rn == nil || rn.Error == nil {
 		t.Fatalf("structural rename must be refused, got %+v", rn)
+	}
+}
+
+func writeLSPFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Ambient .d.tl declarations live in a project parent scope. The LSP is
+// single-file for imports, but ignoring tlua.json's typeRoots made every
+// annotation from types/*.d.tl report TL3103 in the editor while `tlua check`
+// was clean.
+func TestAmbientDeclarationsFromProject(t *testing.T) {
+	dir := t.TempDir()
+	writeLSPFile(t, filepath.Join(dir, "tlua.json"), `{
+  "compilerOptions": {
+    "target": "5.4",
+    "strict": true,
+    "strictNilChecks": true,
+    "typeRoots": ["types"]
+  },
+  "include": ["**/*.tl"],
+  "exclude": ["dist"]
+}`)
+	writeLSPFile(t, filepath.Join(dir, "types", "raft.d.tl"),
+		"declare type ClusterApi = { nodeIds(): string[] }\n")
+	mainPath := filepath.Join(dir, "main.tl")
+	src := `local c: ClusterApi = { nodeIds = function(): string[] return {} end }
+print(#c:nodeIds())
+`
+	uri := "file://" + filepath.ToSlash(mainPath)
+
+	h := newHarness("test")
+	h.send("initialize", 1, map[string]any{"capabilities": map[string]any{}})
+	h.send("initialized", nil, map[string]any{})
+	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
+		"uri": uri, "version": 1, "text": src,
+	}})
+	h.send("shutdown", 2, nil)
+	h.send("exit", nil, nil)
+	if code := <-h.done; code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	msgs := h.readAll()
+	var lastDiag *rawMsg
+	for i := range msgs {
+		if msgs[i].Method == "textDocument/publishDiagnostics" {
+			lastDiag = &msgs[i]
+		}
+	}
+	if lastDiag == nil {
+		t.Fatal("no diagnostics published")
+	}
+	var dp struct {
+		Diagnostics []struct {
+			Message string `json:"message"`
+		} `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(lastDiag.Params, &dp); err != nil {
+		t.Fatal(err)
+	}
+	if len(dp.Diagnostics) != 0 {
+		t.Fatalf("ambient types not visible to LSP: %+v", dp.Diagnostics)
 	}
 }

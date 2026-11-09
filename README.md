@@ -266,7 +266,9 @@ import project modules normally. The repository ships 25 examples, from
 
 `tlua lsp` speaks LSP over stdio: diagnostics, hover, go to definition,
 completion (including `.`/`:` members), references, rename and document
-symbols, with incremental sync.
+symbols, with incremental sync. Diagnostics load ambient `.d.tl` declarations
+from the nearest `tlua.json` (`typeRoots`); cross-file import types are still
+single-file, so use `tlua check` for project-wide inference.
 
 VS Code: [`types-lua/vscode-typelua`](https://github.com/types-lua/vscode-typelua)
 provides syntax highlighting, snippets, the language client, a Test Explorer

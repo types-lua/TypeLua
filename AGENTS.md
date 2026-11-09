@@ -107,8 +107,10 @@ hides `coroutine.close/isyieldable`.
 ## LSP (stdio, for editor agents)
 
 `textDocumentSync: 2` (incremental), hover, definition, completion (`.`/`:`),
-references, rename, document symbols. Single-file mode has no ambient
-(`tlua check` is authoritative for multi-file projects).
+references, rename, document symbols. The server loads ambient `.d.tl`
+declarations from the nearest `tlua.json` (`typeRoots`) for diagnostics;
+cross-file import types remain single-file (`any`), so `tlua check` is
+authoritative for project-wide inference.
 
 ## Change discipline
 

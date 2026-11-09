@@ -26,8 +26,8 @@ type message struct {
 	// Result is always serialized (possibly null): JSON-RPC requires every
 	// response to carry either result or error, and strict clients reject
 	// a response with neither.
-	Result  any             `json:"result"`
-	Error   *respError      `json:"error,omitempty"`
+	Result any        `json:"result"`
+	Error  *respError `json:"error,omitempty"`
 }
 
 type respError struct {
@@ -37,10 +37,11 @@ type respError struct {
 
 // Server is a single-threaded LSP session over framed stdio.
 type Server struct {
-	in      *bufio.Reader
-	out     io.Writer
-	docs    map[string]*document
-	version string
+	in       *bufio.Reader
+	out      io.Writer
+	docs     map[string]*document
+	ambients map[string]*ambientEntry
+	version  string
 	// shutdown tracks the LSP shutdown handshake for the exit code.
 	shutdown bool
 	exited   bool
@@ -48,7 +49,12 @@ type Server struct {
 }
 
 func New(in io.Reader, version string) *Server {
-	return &Server{in: bufio.NewReader(in), docs: map[string]*document{}, version: version}
+	return &Server{
+		in:       bufio.NewReader(in),
+		docs:     map[string]*document{},
+		ambients: map[string]*ambientEntry{},
+		version:  version,
+	}
 }
 
 // Run serves until EOF or `exit`. Returns the process exit code.
