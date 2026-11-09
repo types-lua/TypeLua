@@ -68,7 +68,7 @@ func (c *Checker) applyNarrowing(cond ast.Expr, truthy bool) {
 			continue
 		}
 		// Shadow in current scope.
-		c.cur().vars[op.root] = &Symbol{Name: op.root, Kind: sym.Kind, Type: newT, Span: sym.Span, IsConst: sym.IsConst, IsBuiltin: sym.IsBuiltin, SameAs: symRoot(sym)}
+		c.cur().vars[op.root] = &Symbol{Name: op.root, File: sym.File, Kind: sym.Kind, Type: newT, Span: sym.Span, IsConst: sym.IsConst, IsBuiltin: sym.IsBuiltin, SameAs: symRoot(sym)}
 	}
 }
 

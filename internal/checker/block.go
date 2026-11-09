@@ -27,7 +27,7 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 		switch n := st.(type) {
 		case *ast.TypeAliasDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				e := &typeEntry{name: n.Name.Name, params: n.Generics, alias: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				e := &typeEntry{name: n.Name.Name, File: c.file, params: n.Generics, alias: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
 				sc.types[n.Name.Name] = e
 				c.recordTypeDef(n.Name.Span(), e)
 			} else {
@@ -35,7 +35,7 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 			}
 		case *ast.InterfaceDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				e := &typeEntry{name: n.Name.Name, params: n.Generics, iface: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				e := &typeEntry{name: n.Name.Name, File: c.file, params: n.Generics, iface: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
 				sc.types[n.Name.Name] = e
 				c.recordTypeDef(n.Name.Span(), e)
 			} else {
@@ -51,7 +51,7 @@ func (c *Checker) collectTypes(b *ast.Block, sc *Scope) {
 			}
 		case *ast.ClassDecl:
 			if _, ok := sc.types[n.Name.Name]; !ok {
-				e := &typeEntry{name: n.Name.Name, params: n.Generics, classDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
+				e := &typeEntry{name: n.Name.Name, File: c.file, params: n.Generics, classDecl: n, span: n.Name.Span(), cacheInst: map[string]types.Type{}}
 				sc.types[n.Name.Name] = e
 				c.recordTypeDef(n.Name.Span(), e)
 			} else {

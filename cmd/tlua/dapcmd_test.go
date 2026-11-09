@@ -109,9 +109,62 @@ func (c *dapTestClient) wait(t *testing.T, what string, pred func(map[string]jso
 			c.backlog = append(c.backlog, m)
 			c.mu.Unlock()
 		case <-deadline:
-			t.Fatalf("timeout waiting for %s", what)
+			t.Fatalf("timeout waiting for %s; recent messages: %s", what, c.recentSummary())
 		}
 	}
+}
+
+// recentSummary drains buffered messages and formats their kinds so a timeout
+// shows whether the adapter stopped again, rejected a command, or went silent.
+func (c *dapTestClient) recentSummary() string {
+	c.mu.Lock()
+	msgs := append([]map[string]json.RawMessage{}, c.backlog...)
+	c.mu.Unlock()
+	for {
+		select {
+		case m, ok := <-c.msgs:
+			if !ok {
+				return summarizeDAP(msgs)
+			}
+			msgs = append(msgs, m)
+		default:
+			return summarizeDAP(msgs)
+		}
+	}
+}
+
+func summarizeDAP(msgs []map[string]json.RawMessage) string {
+	start := 0
+	if len(msgs) > 20 {
+		start = len(msgs) - 20
+	}
+	parts := make([]string, 0, len(msgs)-start)
+	for _, m := range msgs[start:] {
+		switch cstr(m, "type") {
+		case "event":
+			name := cstr(m, "event")
+			if name == "output" {
+				var body struct {
+					Output string `json:"output"`
+				}
+				_ = json.Unmarshal(m["body"], &body)
+				if len(body.Output) > 60 {
+					body.Output = body.Output[:60] + "..."
+				}
+				parts = append(parts, "output("+body.Output+")")
+			} else {
+				parts = append(parts, "event:"+name)
+			}
+		case "response":
+			parts = append(parts, "response:"+cstr(m, "command"))
+		default:
+			parts = append(parts, cstr(m, "type"))
+		}
+	}
+	if len(parts) == 0 {
+		return "(none)"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func cstr(m map[string]json.RawMessage, key string) string {

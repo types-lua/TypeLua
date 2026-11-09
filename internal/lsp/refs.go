@@ -127,7 +127,11 @@ func (s *Server) references(raw json.RawMessage) any {
 	} else if u.Entry != nil {
 		decl := u.Entry.DeclSpan()
 		if p.Context.IncludeDeclaration {
-			locs = append(locs, location{URI: doc.uri, Range: doc.toRange(decl)})
+			if doc.file != nil && u.Entry.File == doc.file.Name {
+				locs = append(locs, location{URI: doc.uri, Range: doc.toRange(decl)})
+			} else {
+				locs = append(locs, s.locationsFor(doc, u.Entry.File, decl)...)
+			}
 		}
 		for _, o := range doc.typeOccurrences(u.Entry) {
 			if !p.Context.IncludeDeclaration && o.IsDef {
@@ -140,7 +144,17 @@ func (s *Server) references(raw json.RawMessage) any {
 			locs = append(locs, location{URI: doc.uri, Range: doc.toRange(o.Span)})
 		}
 	} else if u.Sym != nil {
-		for _, o := range doc.occurrencesOf(u.Root) {
+		root := u.Root
+		if root == nil {
+			root = u.Sym
+		}
+		// An ambient definition is not in this file's index; add its real
+		// location instead of pretending it lives in the open document.
+		if p.Context.IncludeDeclaration && root.File != "" &&
+			(doc.file == nil || root.File != doc.file.Name) {
+			locs = append(locs, s.locationsFor(doc, root.File, root.Span)...)
+		}
+		for _, o := range doc.occurrencesOf(root) {
 			if !p.Context.IncludeDeclaration && o.IsDef {
 				continue
 			}
@@ -189,6 +203,11 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 	if u == nil {
 		return nil, ErrInvalidParams, "no renameable symbol here"
 	}
+	if u.Entry != nil && u.Entry.File != "" &&
+		(doc.file == nil || u.Entry.File != doc.file.Name) {
+		return nil, ErrInvalidParams,
+			"cannot rename across files (single-file LSP): open " + u.Entry.File
+	}
 	// Member path: class/interface/enum members rename within the owner.
 	// Structural members (anonymous literals) list for references but
 	// refuse rename: aliases would silently miss occurrences.
@@ -222,6 +241,14 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 	}
 	if u.Sym.IsBuiltin {
 		return nil, ErrInvalidParams, "cannot rename a builtin"
+	}
+	root := u.Root
+	if root == nil {
+		root = u.Sym
+	}
+	if root.File != "" && (doc.file == nil || root.File != doc.file.Name) {
+		return nil, ErrInvalidParams,
+			"cannot rename across files (single-file LSP): open " + root.File
 	}
 	// A class/enum value renames through its twin type declaration.
 	if doc.index != nil {
@@ -264,6 +291,10 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 func (s *Server) renameType(doc *document, entry *checker.TypeEntry, newName string) (any, int, string) {
 	if entry == nil {
 		return nil, ErrInvalidParams, "no renameable symbol here"
+	}
+	if entry.File != "" && (doc.file == nil || entry.File != doc.file.Name) {
+		return nil, ErrInvalidParams,
+			"cannot rename across files (single-file LSP): open " + entry.File
 	}
 	seen := map[int]bool{}
 	var edits []struct {

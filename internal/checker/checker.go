@@ -57,6 +57,7 @@ const (
 
 type Symbol struct {
 	Name      string
+	File      string // file where the symbol is defined ("" for builtins)
 	Kind      symKind
 	Type      types.Type
 	Span      token.Span
@@ -72,6 +73,7 @@ type Symbol struct {
 
 type typeEntry struct {
 	name         string
+	File         string     // file where the type is declared
 	span         token.Span // declaration name span (for goto-definition)
 	params       []*ast.GenericParam
 	alias        *ast.TypeAliasDecl
@@ -254,6 +256,9 @@ func (c *Checker) pop()        { c.scopes = c.scopes[:len(c.scopes)-1] }
 // bindVar installs a binding, linking redefinitions so reference queries
 // (references/rename) unify the whole chain. Builtin shadows stay detached.
 func (c *Checker) bindVar(name string, sym *Symbol) *Symbol {
+	if sym.File == "" {
+		sym.File = c.file
+	}
 	if old, ok := c.cur().vars[name]; ok && !old.IsBuiltin {
 		sym.SameAs = old
 	}

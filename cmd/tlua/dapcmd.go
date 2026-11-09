@@ -182,6 +182,7 @@ type dapSession struct {
 	childErr io.ReadCloser
 
 	mu         sync.Mutex
+	stateMu    sync.Mutex
 	nextID     int
 	pending    map[int]chan bridgeMsg
 	stopped    bool
@@ -545,7 +546,7 @@ func (s *dapSession) onStackTrace(seq int, args json.RawMessage) {
 	}
 	_ = json.Unmarshal(args, &payload)
 	frames := []map[string]any{}
-	if s.stopped {
+	if s.isStopped() {
 		if msg, err := s.bridgeCall("stack", 0); err == nil {
 			for _, f := range msg.Frames {
 				frameID = f.ID
@@ -603,7 +604,7 @@ func (s *dapSession) onVariables(seq int, args json.RawMessage) {
 }
 
 func (s *dapSession) onResume(seq int, command string) {
-	if !s.stopped {
+	if !s.isStopped() {
 		s.fail(seq, command, "program is not stopped")
 		return
 	}
@@ -617,8 +618,11 @@ func (s *dapSession) onResume(seq int, command string) {
 		s.fail(seq, command, "unsupported resume command")
 		return
 	}
+	// Clear the flag before releasing the debuggee: a fast child can emit the
+	// next stopped event immediately, and clearing it afterwards would lose
+	// that event (the next resume would be rejected as "not stopped").
+	s.setStopped(false)
 	_, _ = fmt.Fprintf(s.childIn, "%s\n", cmd)
-	s.stopped = false
 	body := map[string]any{}
 	if command == "continue" {
 		body["allThreadsContinued"] = true
@@ -699,8 +703,7 @@ func (s *dapSession) startDebuggee() error {
 				code = ee.ExitCode()
 			}
 		}
-		if !s.terminated {
-			s.terminated = true
+		if s.markTerminated() {
 			s.emitTestResult()
 			s.event("exited", map[string]any{"exitCode": code})
 			s.event("terminated", map[string]any{})
@@ -733,7 +736,7 @@ func (s *dapSession) readStderr(r io.Reader) {
 		}
 		switch msg.Type {
 		case "stopped":
-			s.stopped = true
+			s.setStopped(true)
 			s.event("stopped", map[string]any{
 				"reason":            msg.Reason,
 				"threadId":          1,
@@ -751,18 +754,17 @@ func (s *dapSession) readStderr(r io.Reader) {
 				}
 			}
 		case "exited":
-			if !s.terminated {
-				s.terminated = true
+			if s.markTerminated() {
 				s.emitTestResult()
 				s.event("exited", map[string]any{"exitCode": msg.Code})
 				s.event("terminated", map[string]any{})
 			}
 		case "error":
 			if s.testMode {
-				s.testFailed = msg.Message
+				s.setTestFailed(msg.Message)
 			}
 			s.event("output", map[string]any{"category": "stderr", "output": msg.Message + "\n"})
-			s.stopped = false
+			s.setStopped(false)
 		}
 	}
 }
@@ -773,8 +775,45 @@ func (s *dapSession) emitTestResult() {
 	if !s.testMode {
 		return
 	}
-	ok := s.testFailed == ""
-	s.event("typelua/testResult", map[string]any{"ok": ok, "message": s.testFailed})
+	message := s.testFailure()
+	ok := message == ""
+	s.event("typelua/testResult", map[string]any{"ok": ok, "message": message})
+}
+
+func (s *dapSession) setStopped(value bool) {
+	s.stateMu.Lock()
+	s.stopped = value
+	s.stateMu.Unlock()
+}
+
+func (s *dapSession) isStopped() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.stopped
+}
+
+// markTerminated returns true exactly once, so exited/terminated events are
+// emitted once even though both the agent's stderr and cmd.Wait observe exit.
+func (s *dapSession) markTerminated() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.terminated {
+		return false
+	}
+	s.terminated = true
+	return true
+}
+
+func (s *dapSession) setTestFailed(message string) {
+	s.stateMu.Lock()
+	s.testFailed = message
+	s.stateMu.Unlock()
+}
+
+func (s *dapSession) testFailure() string {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.testFailed
 }
 
 func (s *dapSession) agentConfig() string {

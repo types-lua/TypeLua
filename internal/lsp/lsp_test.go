@@ -200,6 +200,11 @@ func TestHoverDefinitionReferencesRename(t *testing.T) {
 	h.send("textDocument/rename", 13, map[string]any{
 		"textDocument": doc, "position": pos, "newName": "plus",
 	})
+	// Builtins have no source location; returning one jumps to line -1/1.
+	h.send("textDocument/definition", 15, map[string]any{
+		"textDocument": doc,
+		"position":     map[string]any{"line": 6, "character": 1},
+	})
 	h.send("shutdown", 14, nil)
 	h.send("exit", nil, nil)
 	<-h.done
@@ -237,6 +242,14 @@ func TestHoverDefinitionReferencesRename(t *testing.T) {
 	}
 	if len(locs) != 1 || locs[0].Range.Start.Line != 1 {
 		t.Fatalf("definition should jump to line 1: %+v", locs)
+	}
+
+	builtin := findMsg(msgs, "15")
+	if builtin == nil {
+		t.Fatal("no builtin definition response")
+	}
+	if string(builtin.Result) != "null" {
+		t.Fatalf("builtin definition should be null, got %s", string(builtin.Result))
 	}
 
 	refs := findMsg(msgs, "12")
@@ -1274,6 +1287,21 @@ print(#c:nodeIds())
 	h.send("textDocument/didOpen", nil, map[string]any{"textDocument": map[string]any{
 		"uri": uri, "version": 1, "text": src,
 	}})
+	// The annotation sits at `local c: ` (0-based character 9).
+	h.send("textDocument/definition", 3, map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     map[string]any{"line": 0, "character": 9},
+	})
+	h.send("textDocument/references", 4, map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     map[string]any{"line": 0, "character": 9},
+		"context":      map[string]any{"includeDeclaration": true},
+	})
+	h.send("textDocument/rename", 5, map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     map[string]any{"line": 0, "character": 9},
+		"newName":      "Renamed",
+	})
 	h.send("shutdown", 2, nil)
 	h.send("exit", nil, nil)
 	if code := <-h.done; code != 0 {
@@ -1299,5 +1327,59 @@ print(#c:nodeIds())
 	}
 	if len(dp.Diagnostics) != 0 {
 		t.Fatalf("ambient types not visible to LSP: %+v", dp.Diagnostics)
+	}
+
+	def := findMsg(msgs, "3")
+	if def == nil {
+		t.Fatal("no definition response for ambient type")
+	}
+	var locs []struct {
+		URI   string `json:"uri"`
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(def.Result, &locs); err != nil {
+		t.Fatal(err)
+	}
+	wantURI := pathToURI(filepath.Join(dir, "types", "raft.d.tl"))
+	if len(locs) != 1 || locs[0].URI != wantURI || locs[0].Range.Start.Line != 0 {
+		t.Fatalf("ambient definition should point at %s:0, got %+v", wantURI, locs)
+	}
+
+	refs := findMsg(msgs, "4")
+	if refs == nil {
+		t.Fatal("no references response")
+	}
+	var refLocs []struct {
+		URI   string `json:"uri"`
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(refs.Result, &refLocs); err != nil {
+		t.Fatal(err)
+	}
+	foundAmbient := false
+	foundLocal := false
+	for _, loc := range refLocs {
+		switch loc.URI {
+		case wantURI:
+			foundAmbient = loc.Range.Start.Line == 0
+		case uri:
+			foundLocal = true
+		}
+	}
+	if !foundAmbient || !foundLocal {
+		t.Fatalf("references should span both files, got %+v", refLocs)
+	}
+
+	rn := findMsg(msgs, "5")
+	if rn == nil || rn.Error == nil || !strings.Contains(rn.Error.Message, "across files") {
+		t.Fatalf("cross-file rename should be refused, got %+v", rn)
 	}
 }
