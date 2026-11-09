@@ -59,6 +59,11 @@ func (s *Server) definition(raw json.RawMessage) any {
 		if sp, ok := doc.memberDefSpan(u.Member); ok {
 			return doc.location(doc.uri, sp)
 		}
+		if u.Member.Owner != nil {
+			if sp, ok := u.Member.Owner.MemberSpan(u.Member.Name); ok {
+				return s.locationFor(doc, u.Member.Owner.File, sp)
+			}
+		}
 		return nil
 	}
 	if u.Entry != nil {

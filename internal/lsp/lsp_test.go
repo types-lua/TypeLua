@@ -1296,9 +1296,10 @@ func TestAmbientDeclarationsFromProject(t *testing.T) {
   "exclude": ["dist"]
 }`)
 	writeLSPFile(t, filepath.Join(dir, "types", "raft.d.tl"),
-		"declare type ClusterApi = { nodeIds(): string[] }\n")
+		"declare interface ClusterApi {\n  nodeIds(): string[]\n}\n"+
+			"declare function makeCluster(): ClusterApi\n")
 	mainPath := filepath.Join(dir, "main.tl")
-	src := `local c: ClusterApi = { nodeIds = function(): string[] return {} end }
+	src := `local c: ClusterApi = makeCluster()
 print(#c:nodeIds())
 `
 	uri := "file://" + filepath.ToSlash(mainPath)
@@ -1323,6 +1324,11 @@ print(#c:nodeIds())
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": 0, "character": 9},
 		"newName":      "Renamed",
+	})
+	// Ambient interface method: `c:nodeIds()` on line 1, character 9.
+	h.send("textDocument/definition", 6, map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     map[string]any{"line": 1, "character": 9},
 	})
 	h.send("shutdown", 2, nil)
 	h.send("exit", nil, nil)
@@ -1403,5 +1409,24 @@ print(#c:nodeIds())
 	rn := findMsg(msgs, "5")
 	if rn == nil || rn.Error == nil || !strings.Contains(rn.Error.Message, "across files") {
 		t.Fatalf("cross-file rename should be refused, got %+v", rn)
+	}
+
+	method := findMsg(msgs, "6")
+	if method == nil {
+		t.Fatal("no ambient method definition response")
+	}
+	var mlocs []struct {
+		URI   string `json:"uri"`
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(method.Result, &mlocs); err != nil {
+		t.Fatal(err)
+	}
+	if len(mlocs) != 1 || mlocs[0].URI != wantURI || mlocs[0].Range.Start.Line != 1 {
+		t.Fatalf("ambient method should point at %s:1, got %+v", wantURI, mlocs)
 	}
 }

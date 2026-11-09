@@ -135,6 +135,37 @@ func (e *typeEntry) DeclSpan() token.Span {
 	return e.span
 }
 
+// MemberSpan returns the declaration span of a field/method/enum member.
+// It covers ambient declarations whose definition occurrences live in a
+// different file's index (the LSP only records the open file's index).
+func (e *typeEntry) MemberSpan(name string) (token.Span, bool) {
+	if e == nil {
+		return token.Span{}, false
+	}
+	if e.iface != nil {
+		for _, f := range e.iface.Fields {
+			if f.Name != nil && f.Name.Name == name {
+				return f.Name.Span(), true
+			}
+		}
+	}
+	if e.classDecl != nil {
+		for _, m := range e.classDecl.Members {
+			if m.Name != nil && m.Name.Name == name {
+				return m.Name.Span(), true
+			}
+		}
+	}
+	if e.enumDecl != nil {
+		for _, m := range e.enumDecl.Members {
+			if m.Name != nil && m.Name.Name == name {
+				return m.Name.Span(), true
+			}
+		}
+	}
+	return token.Span{}, false
+}
+
 // DeclRange returns the full declaration span (for visibility checks:
 // private members complete only inside it).
 func (e *typeEntry) DeclRange() token.Span {

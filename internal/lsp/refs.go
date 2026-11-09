@@ -118,6 +118,13 @@ func (s *Server) references(raw json.RawMessage) any {
 	}
 	var locs []location
 	if u.Member != nil {
+		if p.Context.IncludeDeclaration {
+			if _, local := doc.memberDefSpan(u.Member); !local && u.Member.Owner != nil {
+				if sp, ok := u.Member.Owner.MemberSpan(u.Member.Name); ok {
+					locs = append(locs, s.locationsFor(doc, u.Member.Owner.File, sp)...)
+				}
+			}
+		}
 		for _, o := range doc.memberOccurrences(u.Member) {
 			if !p.Context.IncludeDeclaration && o.IsDef {
 				continue
@@ -214,6 +221,10 @@ func (s *Server) rename(raw json.RawMessage) (any, int, string) {
 	if u.Member != nil {
 		if u.Member.Owner == nil {
 			return nil, ErrInvalidParams, "cannot rename structural members (aliases untracked)"
+		}
+		if u.Member.Owner.File != "" && (doc.file == nil || u.Member.Owner.File != doc.file.Name) {
+			return nil, ErrInvalidParams,
+				"cannot rename across files (single-file LSP): open " + u.Member.Owner.File
 		}
 		def, ok := doc.memberDefSpan(u.Member)
 		if !ok {
