@@ -309,6 +309,69 @@ print("sum", r)
 	c.wait(t, "disconnect response", responseFor(seq), 5*time.Second)
 }
 
+func TestDAPSubdirectoryEntryResolvesProjectModules(t *testing.T) {
+	if _, err := exec.LookPath("lua5.4"); err != nil {
+		t.Skip("lua5.4 not installed")
+	}
+	dir := t.TempDir()
+	writeProject(t, dir)
+	lib := filepath.Join(dir, "lib", "util.tl")
+	writeFile(t, lib, `local function add(a: number, b: number): number
+  return a + b
+end
+
+return { add = add }
+`)
+	app := filepath.Join(dir, "examples", "app.tl")
+	writeFile(t, app, `import util from "../lib/util"
+
+local sum: number = util.add(1, 2)
+print("sum", sum)
+`)
+	t.Chdir(dir)
+
+	c := newDAPTestClient(t)
+	seq := c.request(t, "initialize", map[string]any{"adapterID": "typelua"})
+	c.wait(t, "initialize response", responseFor(seq), 5*time.Second)
+	c.wait(t, "initialized event", eventNamed("initialized"), 5*time.Second)
+	seq = c.request(t, "launch", map[string]any{"program": app})
+	resp := c.wait(t, "launch response", responseFor(seq), 10*time.Second)
+	var launchOK bool
+	_ = json.Unmarshal(resp["success"], &launchOK)
+	if !launchOK {
+		t.Fatalf("launch failed: %s", string(resp["message"]))
+	}
+	seq = c.request(t, "setBreakpoints", map[string]any{
+		"source":      map[string]any{"path": lib},
+		"breakpoints": []map[string]any{{"line": 2}},
+	})
+	c.wait(t, "setBreakpoints response", responseFor(seq), 5*time.Second)
+	seq = c.request(t, "configurationDone", nil)
+	c.wait(t, "configurationDone response", responseFor(seq), 5*time.Second)
+	stop := c.wait(t, "stopped event", eventNamed("stopped"), 10*time.Second)
+	if cbodyString(stop, "reason") != "breakpoint" {
+		t.Fatalf("stop reason = %q", cbodyString(stop, "reason"))
+	}
+	seq = c.request(t, "stackTrace", map[string]any{"threadId": 1})
+	resp = c.wait(t, "stackTrace response", responseFor(seq), 5*time.Second)
+	var stack struct {
+		StackFrames []struct {
+			Line int `json:"line"`
+		} `json:"stackFrames"`
+	}
+	if err := json.Unmarshal(resp["body"], &stack); err != nil {
+		t.Fatal(err)
+	}
+	if len(stack.StackFrames) == 0 || stack.StackFrames[0].Line != 2 {
+		t.Fatalf("top frame = %+v, want lib/util.tl:2", stack.StackFrames)
+	}
+	seq = c.request(t, "continue", map[string]any{"threadId": 1})
+	c.wait(t, "continue response", responseFor(seq), 5*time.Second)
+	c.wait(t, "terminated event", eventNamed("terminated"), 10*time.Second)
+	seq = c.request(t, "disconnect", nil)
+	c.wait(t, "disconnect response", responseFor(seq), 5*time.Second)
+}
+
 func TestDAPTestModeReportsResult(t *testing.T) {
 	if _, err := exec.LookPath("lua5.4"); err != nil {
 		t.Skip("lua5.4 not installed")

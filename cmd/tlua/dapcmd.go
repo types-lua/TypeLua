@@ -846,6 +846,7 @@ func (s *dapSession) agentConfig() string {
 	var sb strings.Builder
 	sb.WriteString("return {\n")
 	sb.WriteString("  entry = " + luaQuote(s.entry) + ",\n")
+	sb.WriteString("  outDir = " + luaQuote(s.tmp) + ",\n")
 	if s.stopOnEntry {
 		sb.WriteString("  stopOnEntry = true,\n")
 	}

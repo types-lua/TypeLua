@@ -16,6 +16,13 @@
 
 local cfg = dofile(arg[1])
 
+-- The emitted entry can live in a subdirectory (examples/foo.lua) while
+-- project modules live at the emission root (lib/bar.lua). The emitter's
+-- own prelude only adds the entry's directory, so add the outDir root here.
+if cfg.outDir ~= nil and cfg.outDir ~= "" then
+  package.path = cfg.outDir .. "/?.lua;" .. cfg.outDir .. "/?/init.lua;" .. package.path
+end
+
 local maps = cfg.maps or {}
 local bp = {}
 
